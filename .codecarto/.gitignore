@@ -1,0 +1,22 @@
+# Analysis outputs (generated per-project, can be large)
+findings/architecture/architecture-map.md
+findings/defect-scan/defect-report.md
+findings/contracts/behavioral-contracts.md
+findings/protocols/protocols-and-state.md
+findings/porting/reverse-engineering-bundle.md
+findings/reimplementation-spec/reimplementation-spec.md
+
+# Secondary / optional outputs
+findings/public-surfaces/public-surfaces.md
+findings/runtime-lifecycle/runtime-lifecycle.md
+findings/state-and-storage/state-and-storage.md
+findings/build-and-deploy/build-and-deploy.md
+findings/config-model/config-model.md
+
+# Scratch working notes
+scratch/*
+!scratch/.gitkeep
+
+# OS artifacts
+.DS_Store
+Thumbs.db

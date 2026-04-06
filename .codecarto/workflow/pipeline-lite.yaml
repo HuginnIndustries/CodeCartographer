@@ -1,0 +1,100 @@
+workflow_name: codebase-analysis-lite
+workflow_version: 3
+workflow_goal: Produce an architecture map, behavioral contracts, and protocol notes for an unfamiliar source repository.
+source_location: ../
+validation_protocol: workflow/VALIDATE.md
+phase_order:
+  - architecture
+  - contracts
+  - protocols
+phases:
+  - id: architecture
+    purpose: Build the layer map, dependency direction, public surfaces, and high-level system structure.
+    skill_path: findings/architecture/SKILL.md
+    output_template: templates/architecture-map.md
+    depends_on: []
+    primary_output: findings/architecture/architecture-map.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/build-and-deploy/build-and-deploy.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+    completion_criteria:
+      - The system intent is documented.
+      - The layer map and dependency direction are documented.
+      - Public surfaces are identified.
+      - Runtime lifecycle, concurrency model, and porting priorities are summarized.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.
+  - id: contracts
+    purpose: Recover user-visible behavior, defaults, side effects, error behavior, and black-box acceptance checks.
+    skill_path: findings/contracts/SKILL.md
+    output_template: templates/behavioral-contracts.md
+    depends_on:
+      - architecture
+    primary_output: findings/contracts/behavioral-contracts.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/architecture/architecture-map.md
+    completion_criteria:
+      - User-facing surfaces are split by surface type.
+      - Feature contracts record trigger, defaults, outputs, side effects, persisted state, error behavior, and recovery behavior.
+      - Contract ownership is mapped back to a layer or package.
+      - A black-box acceptance list is included.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.
+  - id: protocols
+    purpose: Capture event catalogs, state machines, persistence formats, and compatibility hazards.
+    skill_path: findings/protocols/SKILL.md
+    output_template: templates/protocols-and-state.md
+    depends_on:
+      - architecture
+    primary_output: findings/protocols/protocols-and-state.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/architecture/architecture-map.md
+    completion_criteria:
+      - An event catalog is documented.
+      - A state machine is documented.
+      - Persistent schema notes are documented.
+      - Compatibility hazards are documented.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.

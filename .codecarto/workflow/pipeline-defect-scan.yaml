@@ -1,0 +1,61 @@
+workflow_name: codebase-defect-scan
+workflow_version: 3
+workflow_goal: Produce an architecture map and a multi-pass defect report for a codebase under active maintenance.
+source_location: ../
+validation_protocol: workflow/VALIDATE.md
+phase_order:
+  - architecture
+  - defect-scan
+phases:
+  - id: architecture
+    purpose: Build the layer map, dependency direction, public surfaces, and high-level system structure.
+    skill_path: findings/architecture/SKILL.md
+    output_template: templates/architecture-map.md
+    depends_on: []
+    primary_output: findings/architecture/architecture-map.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/build-and-deploy/build-and-deploy.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+    completion_criteria:
+      - The system intent is documented.
+      - The layer map and dependency direction are documented.
+      - Public surfaces are identified.
+      - Runtime lifecycle, concurrency model, and porting priorities are summarized.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.
+  - id: defect-scan
+    purpose: Run a multi-pass defect scan to identify bugs, security issues, and code quality problems for maintenance prioritization.
+    skill_path: findings/defect-scan/SKILL.md
+    output_template: templates/defect-report.md
+    depends_on:
+      - architecture
+    primary_output: findings/defect-scan/defect-report.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/architecture/architecture-map.md
+    completion_criteria:
+      - At least three analysis passes produced findings or documented "no defects found."
+      - Each finding has location, severity, evidence level, and recommended action.
+      - Findings are organized by pass and sorted by severity.
+      - Summary tables are complete and counts match the detailed findings.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.

@@ -1,0 +1,188 @@
+workflow_name: codebase-reverse-engineering-with-audit
+workflow_version: 3
+workflow_goal: Produce a reusable reverse-engineering bundle with a defect scan, so legacy bugs can be identified before porting.
+source_location: ../
+validation_protocol: workflow/VALIDATE.md
+phase_order:
+  - architecture
+  - defect-scan
+  - contracts
+  - protocols
+  - porting
+  - reimplementation-spec
+phases:
+  - id: architecture
+    purpose: Build the layer map, dependency direction, public surfaces, and high-level system structure.
+    skill_path: findings/architecture/SKILL.md
+    output_template: templates/architecture-map.md
+    depends_on: []
+    primary_output: findings/architecture/architecture-map.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/build-and-deploy/build-and-deploy.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+    completion_criteria:
+      - The system intent is documented.
+      - The layer map and dependency direction are documented.
+      - Public surfaces are identified.
+      - Runtime lifecycle, concurrency model, and porting priorities are summarized.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.
+  - id: defect-scan
+    purpose: Run a multi-pass defect scan to identify legacy bugs, security issues, and code quality problems before porting.
+    skill_path: findings/defect-scan/SKILL.md
+    output_template: templates/defect-report.md
+    depends_on:
+      - architecture
+    primary_output: findings/defect-scan/defect-report.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/architecture/architecture-map.md
+    completion_criteria:
+      - At least three analysis passes produced findings or documented "no defects found."
+      - Each finding has location, severity, evidence level, and recommended action.
+      - Findings are organized by pass and sorted by severity.
+      - Summary tables are complete and counts match the detailed findings.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.
+  - id: contracts
+    purpose: Recover user-visible behavior, defaults, side effects, error behavior, and black-box acceptance checks.
+    skill_path: findings/contracts/SKILL.md
+    output_template: templates/behavioral-contracts.md
+    depends_on:
+      - architecture
+    primary_output: findings/contracts/behavioral-contracts.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/architecture/architecture-map.md
+    completion_criteria:
+      - User-facing surfaces are split by surface type.
+      - Feature contracts record trigger, defaults, outputs, side effects, persisted state, error behavior, and recovery behavior.
+      - Security and authorization model is documented (if applicable).
+      - Contract ownership is mapped back to a layer or package.
+      - A black-box acceptance list is included.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.
+  - id: protocols
+    purpose: Capture event catalogs, state machines, persistence formats, and compatibility hazards.
+    skill_path: findings/protocols/SKILL.md
+    output_template: templates/protocols-and-state.md
+    depends_on:
+      - architecture
+    primary_output: findings/protocols/protocols-and-state.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/architecture/architecture-map.md
+    completion_criteria:
+      - An event catalog is documented.
+      - A state machine is documented.
+      - Persistent schema notes are documented.
+      - Compatibility hazards are documented.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.
+  - id: porting
+    purpose: Synthesize architecture, contracts, protocols, and defect findings into a reverse-engineering bundle oriented toward porting.
+    skill_path: findings/porting/SKILL.md
+    output_template: templates/reverse-engineering-bundle.md
+    depends_on:
+      - architecture
+      - contracts
+      - protocols
+    primary_output: findings/porting/reverse-engineering-bundle.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/build-and-deploy/build-and-deploy.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/architecture/architecture-map.md
+      - findings/contracts/behavioral-contracts.md
+      - findings/protocols/protocols-and-state.md
+      - findings/defect-scan/defect-report.md
+    completion_criteria:
+      - The system summary, layer map, contract table, protocol notes, and porting findings are synthesized.
+      - Portability hazards and open questions are separated from facts.
+      - Feature importance is sorted for porting.
+      - Known defects are referenced with porting recommendations (fix before porting / port differently / leave behind).
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.
+  - id: reimplementation-spec
+    purpose: Produce the final language-agnostic reimplementation plan and acceptance spec.
+    skill_path: findings/reimplementation-spec/SKILL.md
+    output_template: templates/reimplementation-spec.md
+    depends_on:
+      - porting
+    primary_output: findings/reimplementation-spec/reimplementation-spec.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/architecture/architecture-map.md
+      - findings/contracts/behavioral-contracts.md
+      - findings/protocols/protocols-and-state.md
+      - findings/porting/reverse-engineering-bundle.md
+    completion_criteria:
+      - Concept-level modules are defined.
+      - Required behaviors are stated.
+      - Protocol and persisted state expectations are stated.
+      - Acceptance scenarios and known unknowns are included.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.

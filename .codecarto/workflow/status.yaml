@@ -1,0 +1,43 @@
+project_name: ""
+# source_location is defined in the active pipeline YAML. Do not duplicate it here.
+pipeline: workflow/pipeline.yaml
+current_phase: architecture  # Set to "complete" when all phases are done.
+last_updated: ""
+# NOTE: The phases below must match the active pipeline variant.
+# If using pipeline-full-with-audit.yaml, uncomment the defect-scan block.
+# If using pipeline-lite.yaml, remove porting and reimplementation-spec.
+# If using pipeline-architecture-only.yaml, keep only architecture.
+phases:
+  architecture:
+    status: pending
+    owner_notes: []
+    outputs_present: []
+    open_questions: []
+  # Uncomment for pipeline-full-with-audit.yaml or pipeline-defect-scan.yaml:
+  # defect-scan:
+  #   status: pending
+  #   owner_notes: []
+  #   outputs_present: []
+  #   open_questions: []
+  contracts:
+    status: pending
+    owner_notes: []
+    outputs_present: []
+    open_questions: []
+  protocols:
+    status: pending
+    owner_notes: []
+    outputs_present: []
+    open_questions: []
+  porting:
+    status: pending
+    owner_notes: []
+    outputs_present: []
+    open_questions: []
+  reimplementation-spec:
+    status: pending
+    owner_notes: []
+    outputs_present: []
+    open_questions: []
+next_actions:
+  - Begin architecture phase by reading the repository and producing findings/architecture/architecture-map.md

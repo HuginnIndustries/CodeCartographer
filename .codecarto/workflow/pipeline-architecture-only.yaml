@@ -1,0 +1,38 @@
+workflow_name: codebase-architecture-scan
+workflow_version: 3
+workflow_goal: Produce an architecture map for an unfamiliar source repository.
+source_location: ../
+validation_protocol: workflow/VALIDATE.md
+phase_order:
+  - architecture
+phases:
+  - id: architecture
+    purpose: Build the layer map, dependency direction, public surfaces, and high-level system structure.
+    skill_path: findings/architecture/SKILL.md
+    output_template: templates/architecture-map.md
+    depends_on: []
+    primary_output: findings/architecture/architecture-map.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/build-and-deploy/build-and-deploy.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+    completion_criteria:
+      - The system intent is documented.
+      - The layer map and dependency direction are documented.
+      - Public surfaces are identified.
+      - Runtime lifecycle, concurrency model, and porting priorities are summarized.
+      - Findings are marked with evidence levels.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Update workflow/status.yaml.
+      - Append a summary entry to THREAD_LOG.md.
