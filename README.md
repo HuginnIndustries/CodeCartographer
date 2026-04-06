@@ -16,15 +16,15 @@ Each phase builds on the last. The architecture map feeds into behavioral contra
 cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
 ```
 
-**2. Choose a pipeline** (optional — defaults to the full 5-phase):
+**2. Choose a pipeline** (optional — defaults to the full 6-phase with defect scan):
 
-```bash
+```yaml
 # Edit .codecarto/workflow/status.yaml and set the pipeline field:
-pipeline: workflow/pipeline.yaml                    # Full 5-phase (default)
-pipeline: workflow/pipeline-full-with-audit.yaml    # 6-phase with defect scan
-pipeline: workflow/pipeline-defect-scan.yaml        # 2-phase defect audit only
-pipeline: workflow/pipeline-lite.yaml               # 3-phase understanding only
-pipeline: workflow/pipeline-architecture-only.yaml  # 1-phase quick overview
+pipeline: workflow/pipeline-full-with-audit.yaml    # 6-phase with defect scan (default)
+pipeline: workflow/pipeline.yaml                    # 5-phase without defect scan — remove defect-scan from phases
+pipeline: workflow/pipeline-defect-scan.yaml        # 2-phase defect audit — remove contracts through reimplementation-spec from phases
+pipeline: workflow/pipeline-lite.yaml               # 3-phase understanding — remove defect-scan, porting, and reimplementation-spec from phases
+pipeline: workflow/pipeline-architecture-only.yaml  # 1-phase quick overview — keep only architecture in phases
 ```
 
 **3. Point an LLM at the guide:**
@@ -50,12 +50,12 @@ Every finding is tagged with an evidence level: **observed fact**, **strong infe
 
 ## Pipeline Variants
 
-Not every project needs the full analysis. Pick the scope that fits:
+Not every project needs the full analysis. The default is the 6-phase full-with-audit pipeline. Scale back if you want less:
 
 | Variant | Phases | Use when |
 |---|---|---|
-| **Full** | 5 | You plan to port or reimplement the codebase |
-| **Full with audit** | 6 | Porting with defect triage to avoid carrying legacy bugs |
+| **Full with audit** (default) | 6 | Complete analysis with defect triage before porting |
+| **Full** | 5 | Porting or reimplementation without defect scan |
 | **Defect scan** | 2 | Maintenance audit to surface latent problems |
 | **Lite** | 3 | You need to understand behavior without porting plans |
 | **Architecture only** | 1 | Quick structural overview |

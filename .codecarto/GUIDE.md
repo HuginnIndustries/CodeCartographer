@@ -51,8 +51,8 @@ Five pipeline variants are available. Check the `pipeline` field in `workflow/st
 
 | Variant | File | Phases | When to use |
 |---|---|---|---|
-| Full (default) | `workflow/pipeline.yaml` | architecture → contracts → protocols → porting → reimplementation-spec | Complete reverse-engineering bundle for porting |
-| Full with audit | `workflow/pipeline-full-with-audit.yaml` | architecture → defect-scan → contracts → protocols → porting → reimplementation-spec | Porting bundle with defect triage to avoid carrying legacy bugs |
+| Full with audit (default) | `workflow/pipeline-full-with-audit.yaml` | architecture → defect-scan → contracts → protocols → porting → reimplementation-spec | Complete analysis with defect triage before porting |
+| Full | `workflow/pipeline.yaml` | architecture → contracts → protocols → porting → reimplementation-spec | Porting bundle without defect scan |
 | Defect scan | `workflow/pipeline-defect-scan.yaml` | architecture → defect-scan | Maintenance audit to surface latent problems |
 | Lite | `workflow/pipeline-lite.yaml` | architecture → contracts → protocols | Understanding behavior without porting plans |
 | Architecture only | `workflow/pipeline-architecture-only.yaml` | architecture | Quick structural overview |
@@ -169,11 +169,11 @@ your-repo/
     scratch/                   # Disposable analysis notes.
     templates/                 # Output templates and log entry templates.
     workflow/
-      pipeline.yaml            # Full 5-phase pipeline definition.
-      pipeline-full-with-audit.yaml    # 6-phase variant (adds defect scan before porting).
-      pipeline-defect-scan.yaml        # 2-phase variant (architecture + defect scan).
-      pipeline-lite.yaml       # 3-phase variant (no porting or reimpl).
-      pipeline-architecture-only.yaml  # 1-phase variant (architecture only).
+      pipeline-full-with-audit.yaml    # 6-phase pipeline (default).
+      pipeline.yaml            # 5-phase (no defect scan).
+      pipeline-defect-scan.yaml        # 2-phase (architecture + defect scan).
+      pipeline-lite.yaml       # 3-phase (no porting or reimpl).
+      pipeline-architecture-only.yaml  # 1-phase (architecture only).
       status.yaml              # Per-project progress. Single source of truth.
       VALIDATE.md              # Validation protocol. Run after every phase.
     THREAD_LOG.md              # Cross-session summary log.

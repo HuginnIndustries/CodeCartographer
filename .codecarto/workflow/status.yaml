@@ -1,24 +1,25 @@
 project_name: ""
 # source_location is defined in the active pipeline YAML. Do not duplicate it here.
-pipeline: workflow/pipeline.yaml
+pipeline: workflow/pipeline-full-with-audit.yaml
+# ^^^ To switch pipelines, change the line above AND adjust the phases below to match:
+#   pipeline-full-with-audit.yaml (default) → keep phases as-is
+#   pipeline.yaml                           → remove defect-scan
+#   pipeline-defect-scan.yaml               → remove contracts through reimplementation-spec
+#   pipeline-lite.yaml                      → remove defect-scan, porting, and reimplementation-spec
+#   pipeline-architecture-only.yaml         → keep only architecture
 current_phase: architecture  # Set to "complete" when all phases are done.
 last_updated: ""
-# NOTE: The phases below must match the active pipeline variant.
-# If using pipeline-full-with-audit.yaml, uncomment the defect-scan block.
-# If using pipeline-lite.yaml, remove porting and reimplementation-spec.
-# If using pipeline-architecture-only.yaml, keep only architecture.
 phases:
   architecture:
     status: pending
     owner_notes: []
     outputs_present: []
     open_questions: []
-  # Uncomment for pipeline-full-with-audit.yaml or pipeline-defect-scan.yaml:
-  # defect-scan:
-  #   status: pending
-  #   owner_notes: []
-  #   outputs_present: []
-  #   open_questions: []
+  defect-scan:
+    status: pending
+    owner_notes: []
+    outputs_present: []
+    open_questions: []
   contracts:
     status: pending
     owner_notes: []

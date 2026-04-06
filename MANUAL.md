@@ -55,30 +55,26 @@ The LLM reads your source code directly from the repository root. No symlinking 
 
 ## Step 2: Choose a Pipeline
 
-Open `.codecarto/workflow/status.yaml` and set the `pipeline` field to match your goal:
+The default is `workflow/pipeline-full-with-audit.yaml` — the full 6-phase pipeline with defect scan. If that's what you want, skip to Step 3.
 
-```yaml
-pipeline: workflow/pipeline.yaml  # Change this line
-```
+To use a different pipeline, open `.codecarto/workflow/status.yaml` and change the `pipeline` field. The comments in the file tell you which phases to add or remove to match.
 
 Here's how to decide:
 
-**"I want to port or rewrite this codebase in another language."**
-Use `workflow/pipeline.yaml` (full, 5 phases). This produces architecture, behavioral contracts, protocol notes, a porting synthesis, and a reimplementation spec.
+**"I want the full analysis with defect triage."** (default)
+Keep `workflow/pipeline-full-with-audit.yaml` (6 phases). Produces architecture, defect report, behavioral contracts, protocol notes, a porting synthesis, and a reimplementation spec. The defect findings feed into the porting phase so you can decide what to fix, port differently, or leave behind.
 
-**"I want to port it, but I also want to find bugs first so I don't carry them over."**
-Use `workflow/pipeline-full-with-audit.yaml` (full with audit, 6 phases). Same as above but adds a multi-pass defect scan. The defect findings feed into the porting phase so you can decide what to fix, port differently, or leave behind.
+**"I want to port or rewrite but don't need a defect scan."**
+Use `workflow/pipeline.yaml` (5 phases). Same as above minus the defect scan. Remove the `defect-scan` block from `phases` in status.yaml.
 
 **"I just want to find problems in code I'm maintaining."**
-Use `workflow/pipeline-defect-scan.yaml` (defect scan, 2 phases). Produces an architecture map and a defect report. No porting or reimplementation artifacts.
+Use `workflow/pipeline-defect-scan.yaml` (2 phases). Produces an architecture map and a defect report. Remove `contracts` through `reimplementation-spec` from `phases` in status.yaml.
 
 **"I need to understand behavior but I'm not porting."**
-Use `workflow/pipeline-lite.yaml` (lite, 3 phases). Produces architecture, contracts, and protocols. Stops before the porting and reimplementation phases.
+Use `workflow/pipeline-lite.yaml` (3 phases). Produces architecture, contracts, and protocols. Remove `defect-scan`, `porting`, and `reimplementation-spec` from `phases` in status.yaml.
 
 **"I just need a quick structural overview."**
-Use `workflow/pipeline-architecture-only.yaml` (architecture only, 1 phase). Produces an architecture map and stops.
-
-The `status.yaml` file comes pre-configured with `workflow/pipeline.yaml` (full). If that's what you want, you don't need to change anything.
+Use `workflow/pipeline-architecture-only.yaml` (1 phase). Produces an architecture map and stops. Keep only `architecture` in `phases` in status.yaml.
 
 
 ## Step 3: Point the LLM at the Guide
