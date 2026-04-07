@@ -174,6 +174,10 @@ Each finding is tagged with a **severity** (critical / high / medium / low) and 
 - Pre-porting pipelines: *fix before porting* / *port differently* / *leave behind*
 - Maintenance pipelines: *fix now* / *track* / *accept* / *investigate*
 
+### Fixing Defects
+
+After the defect scan completes, use the tracker template at `.codecarto/templates/defect-fix-tracker.md` to log remediation progress. The tracker uses the same defect IDs from the report (e.g., D1.1, D3.2), so every fix, deferral, or acceptance maps directly back to the finding. Point the LLM at the defect report and the tracker template, and it will populate the tracker as it works through fixes.
+
 
 ## Multi-Session Workflows
 

@@ -41,6 +41,7 @@ That's it. The LLM reads the guide, checks `workflow/status.yaml` for progress, 
 |---|---|
 | Architecture map | Layers, dependency direction, public surfaces, runtime lifecycle, concurrency model |
 | Defect report | Multi-pass scan for logic errors, security issues, concurrency bugs, API violations |
+| Defect fix tracker | Remediation log mapping each fix, deferral, or acceptance back to the defect report |
 | Behavioral contracts | Feature-by-feature behavior with defaults, error handling, and acceptance tests |
 | Protocols and state | Event flows, state machines, persistence formats, compatibility hazards |
 | Porting bundle | Everything synthesized into a porting-oriented view with priority rankings |

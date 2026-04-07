@@ -81,3 +81,7 @@ Organize findings by pass (one section per pass), then by severity within each s
 End with a summary table counting findings by severity and category, and a prioritized list of the top findings across all passes.
 
 Use the output template at `templates/defect-report.md`.
+
+## Fix Tracking
+
+After the defect report is complete, a fix tracker template is available at `templates/defect-fix-tracker.md`. Use it to track remediation progress when fixing the defects found in this scan. The tracker uses the same defect IDs from the report (D{pass}.{number}) so fixes map directly back to findings.

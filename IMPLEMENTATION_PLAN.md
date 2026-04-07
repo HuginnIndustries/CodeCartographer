@@ -25,11 +25,11 @@ The tool should work as a wrapper around LLM coding agents, not replace them. Th
 A standalone CLI that orchestrates the pipeline and delegates analysis to an LLM backend. Language: Python or TypeScript.
 
 ```
-codecarto init --source ./my-repo --pipeline full-with-audit
-codecarto run                    # runs next phase
-codecarto run --parallel         # runs eligible parallel phases concurrently
-codecarto status                 # shows pipeline progress
-codecarto validate architecture  # re-validates a phase output
+codecarto init --source ./my-repo     # defaults to full-with-audit (6-phase)
+codecarto run                         # runs next phase
+codecarto run --parallel              # runs eligible parallel phases concurrently
+codecarto status                      # shows pipeline progress
+codecarto validate architecture       # re-validates a phase output
 ```
 
 The CLI handles state management, validation gating, file locking, and crash recovery. The LLM does the actual analysis. This works with any LLM provider via an adapter.
@@ -116,7 +116,7 @@ Build the core engine with one LLM provider (Anthropic Claude API).
 - Locking: `fcntl.flock()` on Unix, `msvcrt.locking()` on Windows (or use `filelock` library for cross-platform).
 - Crash recovery: On startup, scan for outputs that exist but don't have a corresponding `complete` status. Offer to reconcile.
 
-**Acceptance test:** Run the full 5-phase pipeline against a known codebase. Outputs match the quality and structure of the template-based workflow.
+**Acceptance test:** Run the full 6-phase pipeline (full-with-audit, the default) against a known codebase. Outputs match the quality and structure of the template-based workflow.
 
 ### Phase 2: Parallel Execution + Multi-Provider (solves defect 5)
 
@@ -142,6 +142,7 @@ Build the core engine with one LLM provider (Anthropic Claude API).
 ### Phase 4: Advanced Features
 
 **Deliverables:**
+- `codecarto fix` — guided defect remediation using `templates/defect-fix-tracker.md`, auto-populated from the defect report
 - Phase re-run with automatic downstream cascade invalidation
 - Incremental analysis for large codebases (analyze subsystems independently, merge)
 - Web dashboard for viewing pipeline progress and outputs
@@ -152,7 +153,7 @@ Build the core engine with one LLM provider (Anthropic Claude API).
 
 These need decisions before or during implementation:
 
-1. **Defect-scan placement.** Currently runs before contracts/protocols, which limits passes 4 and 5. Options: move it after (delays feedback), run it twice (expensive), or accept the weaker mode. Recommendation: run it twice in the full-with-audit pipeline — a quick pass early, a deep pass late.
+1. **Defect-scan placement.** ~~Currently runs before contracts/protocols, which limits passes 4 and 5.~~ **Resolved:** The full-with-audit pipeline (now the default) places the defect scan after architecture and before contracts/protocols. Passes 4 and 5 can optionally leverage contracts/protocols if they exist, but work without them. A two-pass approach (quick scan early, deep scan late) remains a Phase 4 option.
 
 2. **Cascade invalidation.** When re-running a phase, should downstream phases auto-invalidate? Recommendation: yes, with a `--no-cascade` flag for users who know what they're doing.
 

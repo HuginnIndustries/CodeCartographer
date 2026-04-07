@@ -48,3 +48,5 @@ Bias toward evidence over cleverness:
 - Prefer tests over assumptions.
 - Prefer behavior over implementation detail.
 - Mark uncertainty explicitly instead of flattening it away.
+
+When fixing defects before or during porting, use the tracker template at `templates/defect-fix-tracker.md` to log each fix, deferral, or acceptance decision. The tracker uses defect IDs from the report (D{pass}.{number}) so progress maps directly back to findings.
