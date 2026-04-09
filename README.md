@@ -136,6 +136,61 @@ At current API pricing (~$3/M input, ~$15/M output for Claude Sonnet), a full 5-
 - **For very large codebases** (500k+ tokens of source), the LLM can't read everything anyway. It will use the architecture map to prioritize and produce partial results. Check `open_questions` in status.yaml to see what it skipped.
 - **The lite pipeline (3 phases) gives 80% of the value** for understanding a codebase without the porting-specific phases.
 
+## Model Compatibility
+
+CodeCartographer is LLM-agnostic by design, but model choice affects both what you can analyze and how good the results are. There are two independent constraints: context window size and model capability.
+
+### Context Window
+
+Each phase runs in its own session, so the context window limits how much source code can be read per phase — not across the whole pipeline. After subtracting template overhead, prior-phase findings, and output generation, here's how much room remains for reading source code:
+
+| Phase | Available for Source Code (128k model) | Available (200k model) |
+|---|---|---|
+| Architecture | ~121k | ~193k |
+| Defect scan | ~115k | ~187k |
+| Contracts | ~114k | ~186k |
+| Protocols | ~115k | ~187k |
+| Porting | ~104k | ~176k |
+| Reimplementation spec | ~103k | ~175k |
+
+Since each phase reads 1–3x the codebase, practical limits by context window:
+
+| Codebase Size | 128k Context | 200k Context |
+|---|---|---|
+| <30k tokens | All phases comfortable | All phases comfortable |
+| 30–60k tokens | Feasible, some PARTIAL results | Comfortable |
+| 60–100k tokens | Marginal — heavy PARTIAL use | Feasible with prioritization |
+| >100k tokens | Not viable | Feasible, later phases may PARTIAL |
+
+The pipeline handles context exhaustion gracefully: phases can write `PARTIAL` validation and log remaining work in `open_questions` in status.yaml.
+
+### Model Capability
+
+Context window is the easier problem. The harder constraint is whether the model can handle the cognitive demands of each phase. The tasks that degrade fastest on weaker models:
+
+1. **Evidence classification** (high risk) — distinguishing `observed fact` from `strong inference` from `open question` requires calibrated self-awareness about certainty. Weaker models tend to over-classify inferences as facts and skip `open question` tagging.
+2. **Defect scan** (high risk) — the 6-pass scan demands domain-specific reasoning (concurrency, security, API contracts). Weaker models produce more false positives, miss subtle bugs, and over-report style issues as defects.
+3. **Architecture synthesis** (medium-high risk) — abstracting a coherent layer map from many files is high-order reasoning. Weaker models produce flatter, shallower descriptions with poor dependency direction analysis.
+4. **Structured output adherence** (medium risk) — filling templates correctly with all required sections and consistent formatting.
+5. **Cross-phase coherence** (medium risk) — later phases build on earlier findings. Weak architecture output compounds errors downstream.
+
+### Recommended Model Tiers
+
+| Model Tier | Examples | Recommended Pipeline | Notes |
+|---|---|---|---|
+| Frontier | Claude Opus 4.6, Claude Sonnet 4.6 | Full or full-with-audit | Full quality on codebases up to ~100k tokens |
+| Strong mid-tier | Claude Haiku 4.5, GPT-4o | Lite (3-phase) | Architecture and contracts are solid. Skip defect scan — false positive rate too high. Evidence classification less reliable. |
+| Smaller / faster | GPT-4o-mini, Gemini Flash, small open-weight models | Architecture only | Fair structural overview. Multi-phase pipelines produce significant quality loss. Defect scan not recommended. |
+
+### What to Expect Below Sonnet 4.6
+
+- **Architecture phase**: Usually passable. The layer map and public surfaces will be present but may lack nuance in dependency direction and porting priorities.
+- **Contracts and protocols**: Quality depends heavily on how well architecture was captured. Expect missing edge cases and less precise error-behavior documentation.
+- **Defect scan**: Not recommended. The six specialized passes require strong domain reasoning. Weaker models produce noisy reports that cost more time to triage than they save.
+- **Porting and reimplementation**: These synthesis phases amplify upstream quality. If earlier phases are weak, these will be too.
+
+If you're testing a new model, start with `pipeline-architecture-only.yaml` on a codebase you already understand, and compare the output against your own knowledge. That gives you a fast signal on whether to trust the model with deeper phases.
+
 ## How It Works
 
 CodeCartographer is a pure template — no CLI, no runtime, no dependencies. The "code" is structured Markdown and YAML files that tell an LLM what to analyze, in what order, and how to format the results.
