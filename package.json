@@ -1,0 +1,29 @@
+{
+  "name": "codecartographer-pi",
+  "version": "0.1.0",
+  "description": "CodeCartographer packaged for Pi as an extension-driven workflow wrapper.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "codecartographer",
+    "reverse-engineering",
+    "llm"
+  ],
+  "license": "MIT",
+  "files": [
+    ".codecarto/**/*",
+    "extensions/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
