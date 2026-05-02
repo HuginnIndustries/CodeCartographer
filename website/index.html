@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodeCartographer | Reverse-engineering for unfamiliar codebases</title>
+    <meta
+      name="description"
+      content="CodeCartographer gives LLMs a phased reverse-engineering workflow for architecture maps, defect scans, behavioral contracts, protocol notes, and reimplementation specs."
+    />
+    <meta name="theme-color" content="#141413" />
+    <meta property="og:title" content="CodeCartographer" />
+    <meta
+      property="og:description"
+      content="A structured reverse-engineering toolkit for understanding unfamiliar codebases with phased, evidence-tagged LLM analysis."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://codecarto.dev/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="canonical" href="https://codecarto.dev/" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Lora:wght@500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="script.js"></script>
+  </head>
+  <body>
+    <div class="site-frame">
+      <header class="site-header">
+        <nav class="nav shell" aria-label="Primary">
+          <a class="brand" href="#top" aria-label="CodeCartographer home">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span class="brand-copy">
+              <strong>CodeCartographer</strong>
+              <span>codecarto.dev</span>
+            </span>
+          </a>
+          <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-menu">
+            Menu
+          </button>
+          <div class="nav-links" id="site-menu">
+            <a href="#why">Why it works</a>
+            <a href="#pipeline">Pipelines</a>
+            <a href="#outputs">Outputs</a>
+            <a href="#install">Install</a>
+            <a href="#deploy">Deploy</a>
+          </div>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero" id="top">
+          <div class="hero-noise" aria-hidden="true"></div>
+          <div class="hero-rings" aria-hidden="true"></div>
+          <div class="hero-grid shell">
+            <div class="hero-copy" data-reveal>
+              <p class="eyebrow">Structured reverse-engineering for LLM workflows</p>
+              <h1>Understand unfamiliar codebases with a process instead of a lucky prompt.</h1>
+              <p class="hero-lead">
+                CodeCartographer turns "explain this repo" into a staged investigation: architecture,
+                defect scan, behavioral contracts, protocols, porting synthesis, and a
+                reimplementation spec.
+              </p>
+              <div class="hero-actions">
+                <a
+                  class="button button-primary"
+                  href="https://github.com/HuginnIndustries/CodeCartographer/archive/refs/heads/Dev.zip"
+                >
+                  Download ZIP
+                </a>
+                <a class="button button-secondary" href="https://github.com/HuginnIndustries/CodeCartographer">
+                  View on GitHub
+                </a>
+              </div>
+              <ul class="signal-list" aria-label="Product highlights">
+                <li>Evidence-tagged findings instead of hand-wavy summaries</li>
+                <li>Pipeline variants from architecture-only to full audit</li>
+                <li>Works in Claude Code, OpenCode, Cursor, Aider, and Pi</li>
+              </ul>
+            </div>
+
+            <aside class="hero-panel" data-reveal>
+              <div class="terminal">
+                <div class="terminal-top">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+                <p class="terminal-label">Fastest path into a real repository</p>
+                <pre><code>cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
+Read .codecarto/GUIDE.md and begin the analysis.</code></pre>
+                <button
+                  class="copy-button"
+                  type="button"
+                  data-copy="cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
+Read .codecarto/GUIDE.md and begin the analysis."
+                >
+                  Copy quick start
+                </button>
+              </div>
+              <div class="hero-metrics" aria-label="Outcome summary">
+                <div>
+                  <span>6-phase default</span>
+                  <strong>Architecture to reimplementation</strong>
+                </div>
+                <div>
+                  <span>Outputs</span>
+                  <strong>Maps, audits, contracts, specs</strong>
+                </div>
+                <div>
+                  <span>Distribution</span>
+                  <strong>Pi-mono extension or drop-in workspace</strong>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="section section-light" id="why">
+          <div class="shell">
+            <div class="section-head" data-reveal>
+              <p class="eyebrow">Why it works</p>
+              <h2>A workflow, not a vibe.</h2>
+              <p>
+                Every phase has a defined output, explicit completion criteria, and a handoff into the
+                next step. That structure makes the analysis reusable instead of disposable.
+              </p>
+            </div>
+            <div class="feature-columns">
+              <article class="feature-block" data-reveal>
+                <h3>Phase-gated analysis</h3>
+                <p>
+                  Start with the system map. Then move into defects, contracts, and protocols with the
+                  architecture already pinned down.
+                </p>
+              </article>
+              <article class="feature-block" data-reveal>
+                <h3>Evidence levels</h3>
+                <p>
+                  Findings are marked as observed fact, strong inference, portability hazard, or open
+                  question so confidence stays visible.
+                </p>
+              </article>
+              <article class="feature-block" data-reveal>
+                <h3>Cross-session continuity</h3>
+                <p>
+                  <code>status.yaml</code> and the thread log let a fresh LLM session pick up exactly
+                  where the last one stopped.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section section-dark" id="pipeline">
+          <div class="shell pipeline-layout">
+            <div class="section-head" data-reveal>
+              <p class="eyebrow">Pipelines</p>
+              <h2>Scale the depth to the job.</h2>
+              <p>
+                The default run is a 6-phase full audit, but CodeCartographer also supports lighter
+                passes when you only need orientation, behavior recovery, or defect hunting.
+              </p>
+            </div>
+
+            <div class="pipeline-panel" data-reveal>
+              <div class="pipeline-switcher" role="tablist" aria-label="Pipeline variants">
+                <button class="pipeline-tab is-active" type="button" role="tab" data-pipeline="full-with-audit">
+                  Full with audit
+                </button>
+                <button class="pipeline-tab" type="button" role="tab" data-pipeline="full">
+                  Full
+                </button>
+                <button class="pipeline-tab" type="button" role="tab" data-pipeline="defect-scan">
+                  Defect scan
+                </button>
+                <button class="pipeline-tab" type="button" role="tab" data-pipeline="lite">
+                  Lite
+                </button>
+                <button class="pipeline-tab" type="button" role="tab" data-pipeline="architecture-only">
+                  Architecture only
+                </button>
+              </div>
+
+              <div class="pipeline-detail" aria-live="polite">
+                <p class="pipeline-kicker" id="pipeline-kicker">6 phases</p>
+                <h3 id="pipeline-title">Full with audit</h3>
+                <p id="pipeline-description">
+                  Complete reverse-engineering with a defect triage phase before porting and
+                  reimplementation planning.
+                </p>
+                <ol class="phase-list" id="pipeline-phases">
+                  <li>Architecture</li>
+                  <li>Defect scan</li>
+                  <li>Contracts</li>
+                  <li>Protocols</li>
+                  <li>Porting</li>
+                  <li>Reimplementation spec</li>
+                </ol>
+                <p class="pipeline-note" id="pipeline-note">
+                  Best when you need a reusable understanding bundle before maintaining, porting, or
+                  rebuilding a system.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section section-light" id="outputs">
+          <div class="shell outputs-layout">
+            <div class="section-head" data-reveal>
+              <p class="eyebrow">Outputs</p>
+              <h2>The bundle you end up with.</h2>
+              <p>
+                Instead of one summary blob, the workflow leaves behind artifacts that different people
+                can actually use: engineers, reviewers, maintainers, and the next model session.
+              </p>
+            </div>
+
+            <div class="artifact-grid">
+              <article class="artifact" data-reveal>
+                <h3>Architecture map</h3>
+                <p>Layers, public surfaces, runtime lifecycle, dependency direction, and porting priorities.</p>
+              </article>
+              <article class="artifact" data-reveal>
+                <h3>Defect report</h3>
+                <p>Multi-pass scan covering logic, error handling, concurrency, security, API drift, and config risks.</p>
+              </article>
+              <article class="artifact" data-reveal>
+                <h3>Behavioral contracts</h3>
+                <p>User-visible behavior, defaults, side effects, error modes, and black-box acceptance checks.</p>
+              </article>
+              <article class="artifact" data-reveal>
+                <h3>Protocols and state</h3>
+                <p>Events, state machines, persistence notes, compatibility hazards, and internal message flow.</p>
+              </article>
+              <article class="artifact" data-reveal>
+                <h3>Porting bundle</h3>
+                <p>A synthesis layer that ranks what matters, what is risky, and what needs special treatment in a rewrite.</p>
+              </article>
+              <article class="artifact" data-reveal>
+                <h3>Reimplementation spec</h3>
+                <p>A language-agnostic build plan with modules, acceptance scenarios, and known unknowns.</p>
+              </article>
+            </div>
+
+            <div class="compatibility-band" data-reveal>
+              <p>Compatible with Pi-mono, Codex, Claude Code, OpenCode, Cursor, Windsurf, Aider, and other agents with file access.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section section-dark" id="install">
+          <div class="shell">
+            <div class="section-head" data-reveal>
+              <p class="eyebrow">Install and distribute</p>
+              <h2>Start with the Pi-mono extension, or use the drop-in workspace anywhere else.</h2>
+              <p>
+                CodeCartographer was packaged first as a Pi-mono extension. The core toolkit still stays
+                dependency-free, so you can also drop <code>.codecarto/</code> into Codex and other
+                file-aware coding agents.
+              </p>
+            </div>
+
+            <div class="install-grid">
+              <article class="install-block" data-reveal>
+                <h3>Install in Pi-mono</h3>
+                <p>Use the repository itself as a package and expose the extension commands directly inside Pi.</p>
+                <pre><code>pi install /absolute/path/to/CodeCartographer
+pi -e /absolute/path/to/CodeCartographer/extensions/codecarto/index.ts</code></pre>
+                <button
+                  class="copy-button"
+                  type="button"
+                  data-copy="pi install /absolute/path/to/CodeCartographer
+pi -e /absolute/path/to/CodeCartographer/extensions/codecarto/index.ts"
+                >
+                  Copy Pi install
+                </button>
+              </article>
+
+              <article class="install-block" data-reveal>
+                <h3>Pi command workflow</h3>
+                <p>Initialize a repo, queue the next phase, validate output, and mark the current phase complete.</p>
+                <pre><code>/codecarto-init full-with-audit
+/codecarto-next
+/codecarto-validate
+/codecarto-complete</code></pre>
+                <button
+                  class="copy-button"
+                  type="button"
+                  data-copy="/codecarto-init full-with-audit
+/codecarto-next
+/codecarto-validate
+/codecarto-complete"
+                >
+                  Copy command set
+                </button>
+              </article>
+
+              <article class="install-block" data-reveal>
+                <h3>Drop-in <code>.codecarto/</code></h3>
+                <p>For Codex, Claude Code, Cursor, OpenCode, Windsurf, Aider, and other agents that can read and write workspace files.</p>
+                <pre><code>cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
+Read .codecarto/GUIDE.md and begin the analysis.</code></pre>
+                <button
+                  class="copy-button"
+                  type="button"
+                  data-copy="cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
+Read .codecarto/GUIDE.md and begin the analysis."
+                >
+                  Copy drop-in setup
+                </button>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section section-light final-section" id="deploy">
+          <div class="shell final-grid">
+            <div class="section-head" data-reveal>
+              <p class="eyebrow">Deploy on Namecheap cPanel</p>
+              <h2>Upload the static bundle and point the domain at it.</h2>
+              <p>
+                This website is plain HTML, CSS, and JS. Put the contents of the <code>website/</code>
+                folder into <code>public_html</code> for <code>codecarto.dev</code> and the page is live.
+              </p>
+            </div>
+
+            <div class="deploy-steps" data-reveal>
+              <ol>
+                <li>Upload everything inside <code>website/</code> to the domain's <code>public_html</code> directory.</li>
+                <li>Confirm <code>index.html</code> sits at the document root so the homepage loads immediately.</li>
+                <li>Keep the GitHub links current if the repository owner, branch, or release URL changes.</li>
+              </ol>
+              <div class="hero-actions">
+                <a
+                  class="button button-primary"
+                  href="https://github.com/HuginnIndustries/CodeCartographer/archive/refs/heads/Dev.zip"
+                >
+                  Download repo ZIP
+                </a>
+                <a class="button button-secondary" href="https://github.com/HuginnIndustries/CodeCartographer">
+                  Open repository
+                </a>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <div class="shell footer-grid">
+          <p>CodeCartographer is a structured LLM reverse-engineering toolkit for unfamiliar codebases.</p>
+          <div class="footer-links">
+            <a href="https://github.com/HuginnIndustries/CodeCartographer">GitHub</a>
+            <a href="https://github.com/HuginnIndustries/CodeCartographer/archive/refs/heads/Dev.zip">ZIP download</a>
+            <a href="#top">Back to top</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+    <div class="sr-only" id="copy-status" aria-live="polite"></div>
+  </body>
+</html>
