@@ -35,6 +35,46 @@ Read .codecarto/GUIDE.md and begin the analysis.
 
 That's it. The LLM reads the guide, checks `workflow/status.yaml` for progress, and starts the next phase automatically. Each phase produces a validated output in `.codecarto/findings/`.
 
+## Pi Package
+
+This branch also packages CodeCartographer for [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) without changing `.codecarto/` itself.
+
+Install from a local checkout or git URL:
+
+```bash
+pi install /absolute/path/to/CodeCartographer
+# or
+pi install git:github.com/your-user/CodeCartographer
+```
+
+For extension development, you can also point Pi directly at the extension entrypoint or place it in an auto-discovered extensions directory and use `/reload`:
+
+```bash
+pi -e /absolute/path/to/CodeCartographer/extensions/codecarto/index.ts
+```
+
+The extension is self-contained at runtime. It uses only Node built-ins plus Pi's peer dependencies, so direct loading and `/reload` do not require a separate `npm install`.
+
+Then in the target repository:
+
+```text
+/codecarto-init [full-with-audit|full|defect-scan|lite|architecture-only]
+/codecarto-status
+/codecarto-next
+```
+
+If you install the whole repository as a Pi package, Pi may still run package installation steps for the package itself, but the CodeCartographer extension does not depend on any third-party runtime modules.
+
+What the Pi extension adds:
+
+- `/codecarto-init` to copy `.codecarto/` into the current repository
+- `/codecarto-next` to queue the next eligible phase prompt
+- `/codecarto-status` to show current phase progress
+- `/codecarto-validate` and `/codecarto-complete` for validation-gated status updates
+- a footer/widget showing the active CodeCartographer phase
+- tool interception that blocks `edit` and `write` outside `.codecarto/`
+- direct phase prompts that tell Pi exactly which `.codecarto/findings/<phase>/SKILL.md` file to read, without registering those internal files as global Pi skills
+
 ## What It Produces
 
 | Artifact | Description |
