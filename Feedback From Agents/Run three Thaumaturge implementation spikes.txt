@@ -1,0 +1,21 @@
+A few honest observations from working in it for an hour:
+
+The trust-boundary table at the top of `GUIDE.md` is the strongest part. It's the first thing I read, and it told me unambiguously what I could touch (`scratch/`, new files under `findings/spikes/`) and what I couldn't (the spec, `status.yaml`, the pipeline YAMLs). Most of my hesitations during the session were resolved by re-reading that table rather than by asking. The `mode: append` convention on secondary outputs is also clean — phases can layer onto the same file without re-litigating earlier facts.
+
+Validation blocks pinned at the bottom of each primary output is doing real work. When I read the reimplementation-spec for the first time, I jumped to its validation block and got an instant map of what each section covers and where the load-bearing claims live. That pattern would survive a port to any docs system.
+
+Two structural gaps showed up during this session, both because spikes are post-pipeline:
+
+**No first-class home for amendments.** The framework treats the pipeline as terminal — `current_phase: complete`, primary outputs frozen. But spikes are exactly the moment when you discover the spec is wrong. I had to invent `findings/spikes/CONSOLIDATED-DELTA.md` as a "proposed edits" file because there's no convention for it. A `findings/amendments/` directory with the same `mode: append` discipline, plus a status.yaml field like `amendments_pending: [Δ-N, …]`, would make this a real artifact rather than a freelance file.
+
+**The Spike List inside the spec is forward-looking but the framework treats the spec as a closed document.** The 12 listed spikes are exactly the kind of work the framework is silent on — it has no notion of "spike" as a unit, no `findings/spikes/` template, no validation rule for spike completion. It's a phase-shaped activity that doesn't fit the phase machinery.
+
+`THREAD_LOG.md` is in tension with itself. The GUIDE says "one short summary entry"; the precedent in the file is paragraph-length entries with embedded structure. Mine ended up matching the precedent rather than the instruction. Either tighten the instruction (with a length cap) or update the GUIDE to match what entries actually look like in practice.
+
+Smaller things:
+
+- The reimpl-spec is 1100 lines in a single file. Read tool refused it whole; I had to grep-offset-limit. A spec at this size benefits from being split (one file per H2) with stable anchors, or from having a top-of-file table-of-contents that lists section line ranges so a future reader can target reads precisely.
+- `status.yaml`'s per-phase `owner_notes` and `open_questions` arrays are surprisingly durable — they were what oriented me fastest, more than the GUIDE itself. Worth keeping that pattern even when more of the framework gets code-backed.
+- The spec citations (`[contracts §X]`, `[porting Finding N]`, `[H<N>]`) are dense but make traceability cheap. When I wrote spike findings I could point `Δ-7` at "spec line 432" without inventing my own scheme. That discipline pays off the moment anyone else needs to review.
+
+Net: it's a solid framework for the linear "understand a codebase end-to-end" path it was clearly designed for. The seams show where the work becomes iterative against an already-complete bundle — spikes, amendments, proposed deltas. Adding a small amendments-shaped phase (or a generalized "post-pipeline activities" section in the GUIDE) would close most of the gap I hit.
