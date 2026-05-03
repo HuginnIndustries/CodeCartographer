@@ -4,6 +4,8 @@ Source code under evaluation: `../` (this repository — everything outside `.co
 
 All CodeCartographer files are inside `.codecarto/`. Paths below are relative to `.codecarto/`.
 
+**First-time project?** If `CONVENTIONS.md` and `DECISIONS.md` are still template skeletons and `closeouts/` is empty, see GUIDE.md §Roles and §First-Time Project Setup before reading the rest. The first LLM on a project takes a one-time role decision with the user (orchestrator vs session-by-session).
+
 Read these in order before doing work:
 
 1. `GUIDE.md` - the LLM entry point and session guide

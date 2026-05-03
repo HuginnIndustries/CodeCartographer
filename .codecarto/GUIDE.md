@@ -8,6 +8,44 @@ All CodeCartographer files live inside this `.codecarto/` folder. The source cod
 
 Work in explicit phases. Do not try to do everything at once.
 
+## Roles
+
+CodeCartographer distinguishes two roles. They are different jobs, often held by different threads, and the framework's discipline depends on both existing.
+
+**Implementing session.** One phase or one module of work, fresh thread, follows a SKILL.md and a template, validates, writes a closeout, ends. The bulk of the framework — phases, skills, templates, validation gates — is written for this role. The "You are an LLM assistant" framing in "What This Is" addresses this role.
+
+**Orchestrator.** One persistent thread (typically the first LLM the user points at the project) paired with the human user. The orchestrator holds cross-session context, drafts implementing-session prompts from prior closeouts, curates `CONVENTIONS.md` and `DECISIONS.md` (promoting patterns when they recur), and gates strategic forks the user makes. Without an orchestrator, the framework still works phase-by-phase but cross-cutting conventions and decisions don't accumulate, and each implementing session re-discovers what prior sessions established.
+
+If you are an LLM reading this guide for the first time on a project where `CONVENTIONS.md` and `DECISIONS.md` are unwritten (still showing template content) and `closeouts/` is empty, **see "First-Time Project Setup" below before starting any phase.**
+
+## First-Time Project Setup
+
+If this is the first LLM to touch this project — no closeouts in `closeouts/`, `CONVENTIONS.md` and `DECISIONS.md` still showing template skeletons, `workflow/status.yaml` at defaults — stop before starting any pipeline phase and have a one-time role conversation with the user. Combine the explanation and the ask in one structured prompt:
+
+> "I see this is a fresh CodeCartographer-equipped project. Before I start the analysis, one one-time decision: would you like me to take on the **orchestrator role** for this project, or work session-by-session?
+>
+> The orchestrator role means I'd hold cross-session context across the entire project — drafting prompts for implementation threads you'll spin up, curating two project-wide files (`CONVENTIONS.md` for patterns and `DECISIONS.md` for cross-cutting calls), and gating the strategic forks where you'd want to make a call.
+>
+> How it works in practice: this thread becomes the orchestrator; you spin up fresh threads for each implementation session using the prompts I draft, run them, and paste the closeout report back here. I update `CONVENTIONS.md`/`DECISIONS.md` and prepare the next prompt. The framework's discipline compounds across sessions instead of being reinvented each time.
+>
+> The alternative is session-by-session work with no cross-session context — the framework still works phase-by-phase, but `CONVENTIONS.md` stays empty and each session has to re-derive patterns from prior closeouts. Better for one-off audits; worse for long-running multi-module projects.
+>
+> Which would you like?"
+
+If the user accepts the orchestrator role:
+
+1. Initialize `CONVENTIONS.md` from `templates/conventions-template.md` and `DECISIONS.md` from `templates/decisions-template.md` (skeletons only — populate as patterns and decisions accumulate).
+2. Set `project_name` in `workflow/status.yaml`.
+3. Proceed with the standard "First Read For New Sessions" flow for the architecture phase, treating this thread as the orchestration thread going forward.
+
+If the user declines:
+
+1. Note in `THREAD_LOG.md` that the project runs in degraded no-orchestrator mode.
+2. Proceed phase-by-phase as a standalone implementing session.
+3. `CONVENTIONS.md` and `DECISIONS.md` stay as templates; closeouts accumulate but cross-cutting promotion doesn't happen.
+
+If the user is ambivalent, default to recommending the orchestrator path for any project expected to span more than one phase or module — the framework's compounding-discipline benefits are real and the cost is just paste-and-react work for the user.
+
 ## First Read For New Sessions
 
 Read these files in order before doing any analysis:
