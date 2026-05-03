@@ -106,7 +106,23 @@
 
 ## Open Questions
 
-<!-- Anything that needs more investigation before downstream phases can proceed. -->
+<!-- Items that are still genuinely unknown — need a runtime test, maintainer decision, or spec ruling.
+     NOT items deferred to a later phase in this pipeline (those go in Carry-Forward).
+     Each entry: { id, kind, description, deferred_reason }. See workflow/status.yaml schema. -->
+
+| ID | Kind | Description | Deferred Reason |
+|---|---|---|---|
+| | | | |
+
+## Carry-Forward
+
+<!-- Items deferred to a specific later phase whose rubric is the right place to close them.
+     Each entry: { id, kind: defer-to-phase, target_phase, description, deferred_reason }.
+     Mirror these into workflow/status.yaml under this phase's carry_forward list. -->
+
+| ID | Target Phase | Description | Deferred Reason |
+|---|---|---|---|
+| | | | |
 
 ---
 

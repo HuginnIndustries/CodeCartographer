@@ -25,8 +25,18 @@ Key things to verify:
 - Pipeline YAML files parse correctly and phase dependencies resolve.
 - SKILL.md instructions produce output that matches the corresponding template.
 - Validation protocol (VALIDATE.md) catches missing or incomplete sections.
-- Status.yaml updates correctly after each phase.
+- `status.yaml` updates correctly after each phase, with the schema-split `open_questions` / `carry_forward` lists used for what each is for (see GUIDE.md "Open Questions vs Carry-Forward").
 - All file paths referenced in pipeline YAML, GUIDE.md, and SKILL.md files exist.
+
+#### THREAD_LOG.md de-dup check
+
+`THREAD_LOG.md` is an append-only index of one-line pointers to closeout files. The framework has no programmatic dedup gate, but earlier sessions have produced duplicate entries when an append happened twice. Run this before opening a PR that touches `THREAD_LOG.md`:
+
+```bash
+grep -E '^- [0-9]{4}-[0-9]{2}-[0-9]{2}' .codecarto/THREAD_LOG.md | sort | uniq -d
+```
+
+The command should print nothing. If it prints a duplicate line, find and remove the second occurrence.
 
 ### What Makes a Good Contribution
 

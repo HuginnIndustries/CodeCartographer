@@ -31,13 +31,16 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Category | Files | Access |
 |---|---|---|
 | Orchestration (read-only) | `GUIDE.md`, `CONTRIBUTING.md`, `LICENSE` | Read only. Never modify. |
-| Skills (read-only) | `findings/*/SKILL.md`, `findings/defect-scan/passes/*.md` | Read only. Never modify. |
+| Skills (read-only) | `findings/*/SKILL.md`, `findings/defect-scan/passes/*.md`, `skills/*/SKILL.md` | Read only. Never modify. |
 | Templates (read-only) | `templates/*.md` | Read only. Never modify. |
 | Pipeline definitions (read-only) | `workflow/pipeline*.yaml`, `workflow/VALIDATE.md` | Read only. Never modify. |
 | Source code (read-only) | `../` (everything outside `.codecarto/`) | Read only. Analyze but never modify. |
 | Workflow state (read-write) | `workflow/status.yaml` | Update to track progress. |
 | Findings (read-write) | `findings/<phase>/<primary-output>.md`, secondary output files | Create and update during phases. |
-| Logs (read-write) | `THREAD_LOG.md` | Append entries at session end. |
+| Closeouts (read-write, append-only) | `closeouts/<date>-<phase-or-module>.md`, `THREAD_LOG.md` | Each session writes a new closeout file; `THREAD_LOG.md` is an INDEX pointing to closeouts. |
+| Conventions (orchestrator-maintained) | `CONVENTIONS.md` | Cross-cutting patterns promoted to project-wide invariants. Implementing sessions propose; the orchestrator writes. |
+| Decisions (orchestrator-maintained, append-only) | `DECISIONS.md` | Numbered log of decisions that diverge from spec, prompt, or obvious-default. Appended at session close. |
+| Backlog (read-write) | `BACKLOG.md` | Deferred items with rationale. |
 | Scratch (read-write) | `scratch/*` | Disposable working notes. |
 
 If you are uncertain whether a file should be modified, treat it as read-only.
@@ -89,6 +92,24 @@ Created only when a phase grows too large or a topic needs standalone treatment.
 | Build and deploy notes | `findings/build-and-deploy/build-and-deploy.md` |
 | Configuration model | `findings/config-model/config-model.md` |
 
+### Primary vs Secondary Output Relationship
+
+The two output kinds have different jobs and must not duplicate each other.
+
+- **Primary outputs own the map and the load-bearing claims.** They are the canonical reference a downstream phase cites by section anchor. Sections may *summarize* secondary content (one-paragraph synopsis with a pointer) but should not catalog every detail.
+- **Secondary outputs own the catalog-level detail.** They accumulate across phases via `mode: append`, with each phase adding a dated section. A reader who wants the full inventory of public surfaces, the full SQLite migration history, or the full env-var matrix goes here, not to the primary output.
+
+If a primary and a secondary output describe the same topic (e.g., the architecture map's `Public Surfaces` section vs. `findings/public-surfaces/public-surfaces.md`), the primary owns the *summary and the claims that downstream phases will cite*; the secondary owns the *enumerated detail*. Conflicting content is a bug — recency wins, and the primary should be updated to point to the latest secondary section.
+
+### Orchestrator-Maintained Artifacts
+
+Two cross-cutting files compound across sessions and live at the `.codecarto/` top level:
+
+- **`CONVENTIONS.md`** — cross-cutting patterns that have been promoted to project-wide invariants (e.g., a shared discriminated-union return shape, a tripwire-naming vocabulary, a verbatim-spec-quote discipline). Implementing sessions propose additions in their closeout; the orchestrator promotes them. New conventions land when a third independent session reaches for the same pattern, or when a spec/feedback corpus identifies a project-wide invariant.
+- **`DECISIONS.md`** — append-only numbered log of cross-cutting decisions that diverge from spec, prompt, or obvious-default. Each entry: `D<NNN> | <one-liner> | <source-session> | <rationale-pointer>`. Categories partition the namespace (type system, toolchain, module-internal patterns, lifted primitives, etc.).
+
+Both files are skeletons in the framework templates (`templates/conventions-template.md`, `templates/decisions-template.md`) and become project-specific artifacts when a session writes to them. They are *orchestrator-maintained*, not implementer-edited — implementing sessions propose, the orchestrator promotes.
+
 ## Context Budget
 
 Before beginning a phase, estimate how much source material you need to read. For large codebases:
@@ -96,7 +117,36 @@ Before beginning a phase, estimate how much source material you need to read. Fo
 - Read structural files first (manifests, entrypoints, READMEs) from the repository root (`../`).
 - Use the architecture map to prioritize which packages to read in detail.
 - Defer deep reads until the current phase actually needs them.
-- If you are running low on context, finish the current section, write a PARTIAL validation, and document what remains in `open_questions` in status.yaml.
+- If you are running low on context, finish the current section, write a PARTIAL validation, and document what remains in `open_questions` (truly unknown) or `carry_forward` (deferred to a specific later phase) in status.yaml. See "Open Questions vs Carry-Forward" below.
+
+### Subagent Delegation for Large Codebases
+
+For codebases over roughly 50 source files or 100K LOC, do not burn primary context on bulk extraction work. Delegate dependency mapping, file inventories, manifest enumeration, and cross-document comparisons to subagents and cite their scratch artifacts (`scratch/<topic>.md`) from the primary output. The primary session reads the synthesized scratch note, not the raw walks. Bless this pattern explicitly so primary context stays for the load-bearing reasoning that the subagent can't do — naming layers, pinning invariants, classifying findings.
+
+### Open Questions vs Carry-Forward
+
+`open_questions` does two distinct jobs that the schema separates explicitly:
+
+- **`open_questions`** — items that are *still genuinely unknown*. Need more evidence (a runtime test, a maintainer decision, a spec ruling). Not resolvable by any later phase in the current pipeline.
+- **`carry_forward`** — items that are deferred to a specific later phase because the current phase can't responsibly close them but the pipeline naturally will. Each entry has a target phase.
+
+Both lists carry structured entries. Recommended shape:
+
+```yaml
+open_questions:
+  - id: arch-OQ1
+    kind: needs-runtime-test
+    description: Does the SSE stream emit a final `done: true` event, or does the connection just close?
+    deferred_reason: cannot determine from source alone; requires live capture against the running service.
+carry_forward:
+  - id: arch-CF1
+    kind: defer-to-phase
+    target_phase: defect-scan
+    description: The `loadConfig()` callsite returns `{}` on both ENOENT and parse-error — can't tell absent from corrupt.
+    deferred_reason: framing this as a defect requires the defect-scan rubric; flagged here so defect-scan picks it up.
+```
+
+`kind` is one of: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`. The downstream phase scans `carry_forward` entries whose `target_phase` matches its own ID and either resolves them (deleting the entry) or re-defers (updating `target_phase`).
 
 ## Phase Selection Logic
 
@@ -117,17 +167,29 @@ When a session starts:
 
 1. Read this GUIDE.md.
 2. Read `workflow/status.yaml`.
-3. Read the current phase's existing output, if present.
-4. Read the current phase's `SKILL.md`.
-5. Read the output template from `templates/` for the current phase (if starting a new output).
+3. Read `CONVENTIONS.md` (if it exists) — the project's accumulated cross-cutting patterns.
+4. Read the current phase's existing output, if present.
+5. Read the current phase's `SKILL.md`.
+6. Read the output template from `templates/` for the current phase (if starting a new output).
+7. Scan `carry_forward` entries in status.yaml whose `target_phase` matches your phase — these are the items earlier phases routed to you.
 
 When a session finishes durable work:
 
 1. Run the validation step described in `workflow/VALIDATE.md`. Append a validation block to the output.
-2. Update `workflow/status.yaml` (the single source of truth for progress): mark the phase status as `complete`, advance `current_phase` to the next pending phase, and update `next_actions`. When all phases in the pipeline are complete, set `current_phase` to `complete`.
+2. Update `workflow/status.yaml` (the single source of truth for progress): mark the phase status as `complete`, advance `current_phase` to the next pending phase, and update both `open_questions` and `carry_forward`. When all phases in the pipeline are complete, set `current_phase` to `complete`.
 3. Record 2-3 key observations in `owner_notes` for the completed phase (e.g., row counts, notable decisions, scope of analysis).
-4. Append one short summary entry to `THREAD_LOG.md`.
+4. Write a per-session closeout file at `closeouts/<YYYY-MM-DD>-<phase-or-module>.md` using `templates/closeout-template.md`. Append a one-line index entry to `THREAD_LOG.md` pointing at it.
 5. Store the durable output in the declared `findings/` path.
+6. If the session made cross-cutting decisions or discovered project-wide invariants, propose additions to `CONVENTIONS.md` (in the closeout's "Proposed Conventions" section) and `DECISIONS.md` (numbered entries in the closeout's "Decisions Beyond Prompt" section). The orchestrator promotes these to the canonical files.
+
+### Strategic Alignment Hook (before synthesis)
+
+Before starting `reimplementation-spec` (or any synthesis phase), confirm with the user — explicitly, in chat — whether the spec is:
+
+- **Language-agnostic** (the default; "any port to any stack"), or
+- **Opinionated** (target stack, project identity, scope cuts, named primitives are pre-locked).
+
+This conversation produces inputs the synthesis phase actually needs (locked target stack, locked project name, locked scope cuts) and selects the right template. If the answer is "opinionated," use `templates/reimplementation-spec-opinionated.md` instead of the default. Skipping the hook produces a generic spec when the user wanted a specific one — the most informative friction the framework has produced to date. A two-question pre-flight is cheap.
 
 ## Guardrails
 
@@ -143,7 +205,9 @@ These rules cannot be enforced by the template — they rely on the LLM followin
 - Rough working notes go under `scratch/`.
 - The primary outputs are listed in the deliverables table above.
 - Secondary outputs are created only when needed, using `mode: append`.
-- Do not store durable findings only in `THREAD_LOG.md`. The log is a cross-session pointer, not the primary artifact store.
+- Per-session closeouts go under `closeouts/<YYYY-MM-DD>-<phase-or-module>.md`. `THREAD_LOG.md` is an INDEX of one-line pointers to those closeouts, not the primary store.
+- Cross-cutting patterns go in `CONVENTIONS.md`; numbered cross-cutting decisions go in `DECISIONS.md`. Both are orchestrator-maintained — implementing sessions propose in their closeout, the orchestrator promotes.
+- Do not store durable findings only in `THREAD_LOG.md`. The log is an index, not the primary artifact store.
 
 ## Folder Layout
 
@@ -168,6 +232,9 @@ your-repo/
       config-model/            # (Optional) Configuration inheritance and env behavior.
     scratch/                   # Disposable analysis notes.
     templates/                 # Output templates and log entry templates.
+    skills/
+      spec-delta-application/  # Post-pipeline skill: apply triaged spec deltas with citation discipline.
+        SKILL.md
     workflow/
       pipeline-full-with-audit.yaml    # 6-phase pipeline (default).
       pipeline.yaml            # 5-phase (no defect scan).
@@ -176,7 +243,12 @@ your-repo/
       pipeline-architecture-only.yaml  # 1-phase (architecture only).
       status.yaml              # Per-project progress. Single source of truth.
       VALIDATE.md              # Validation protocol. Run after every phase.
-    THREAD_LOG.md              # Cross-session summary log.
+    closeouts/                 # Per-session closeout files (replaces monolithic THREAD_LOG body).
+      <YYYY-MM-DD>-<phase-or-module>.md
+    CONVENTIONS.md             # (Optional, project-grown) Cross-cutting invariants. Orchestrator-maintained.
+    DECISIONS.md               # (Optional, project-grown) Numbered decisions log. Orchestrator-maintained.
+    BACKLOG.md                 # (Optional) Deferred items with rationale.
+    THREAD_LOG.md              # Cross-session INDEX of closeout files.
     CONTRIBUTING.md            # Contribution guidelines.
     LICENSE                    # MIT License.
 ```

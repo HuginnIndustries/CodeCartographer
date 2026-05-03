@@ -1,0 +1,209 @@
+Feedback from a framework-feedback-pass session — the opposite direction of all prior
+work. Instead of using CodeCartographer to analyze a codebase, this session edits
+CodeCartographer based on the 13 prior agent feedback files. The session itself runs
+as a CodeCarto-style spec-delta pass applied to the framework.
+
+Date: 2026-05-02
+Session: framework-feedback-pass — first meta-session against this corpus.
+
+
+WHAT WORKED REALLY WELL
+=======================
+
+1. The triage discipline ported cleanly from spec-delta-application to
+   framework-delta-application.
+
+   The four buckets — APPLY / CLARIFY / DEFER / REJECT — have the same shape and the
+   same "don't rubber-stamp" posture in both contexts. Six spec-blockers landed, five
+   clarifications applied, fourteen items deferred to BACKLOG.md, zero rejected. The
+   discipline is the value — without it I would have either rubber-stamped every
+   proposal (producing surface change without coherence) or argued myself into "this
+   pass should be smaller" (producing nothing).
+
+   Suggestion to the framework: lift the triage discipline into a shared sub-skill that
+   both `spec-delta-application` and a future `framework-feedback-pass` skill reference.
+   Today the discipline lives only in prompts. The triage table at the top of
+   `skills/spec-delta-application/SKILL.md` is the de facto canonical statement; a
+   small `skills/_triage-discipline.md` shared file would be a cleaner home.
+
+2. The "do not modify" list at the bottom of FEEDBACK_INDEX.md was load-bearing.
+
+   Without it I would have rewritten the validation gate in the name of "improvement" —
+   four agents flagged validation as "structural not semantic," which sounds like a
+   spec-blocker until you read it alongside "validation gate is the single most
+   disciplining feature; don't change this." The unanimous-defenders list is the
+   framework's immune system. Worth promoting to a permanent fixture in CONTRIBUTING.md
+   (currently lives only in the index).
+
+3. The cross-cutting-themes table at the bottom of FEEDBACK_INDEX.md is the actual
+   spec for this kind of pass.
+
+   Per-file feedback summaries are useful for context but the table is what drove
+   triage. The agent-count column is the load-bearing data — "raised by 4 agents" vs
+   "raised by 1 agent" is what separates "spec-blocker" from "nice-to-have." Without
+   the synthesized table, this session would have spent ~2x the time re-reading
+   per-file feedback to count.
+
+   Suggestion: future framework changes should update the cross-cutting-themes table
+   in the same edit (which this pass did, via the resolution markers — but that
+   pattern should be standard, not invented per-pass). The new resolution markers
+   (✅ APPLIED / ◑ CLARIFIED / ➜ DEFERRED-Bxx) make the table self-aware about which
+   feedback has been addressed; future passes inherit a smaller table.
+
+4. The framework's self-applied `.codecarto/` is a real sanity test.
+
+   Editing GUIDE.md broke nothing because the framework's own self-application is
+   structurally trivial (no findings populated, no closeouts before this session). For
+   a richer self-application, edits to the framework would have a sharper feedback
+   loop. Suggestion for future: maintain a synthetic example project
+   (`examples/<small-codebase>/`) with a populated `.codecarto/` so framework edits
+   can be smoke-tested against a real artifact.
+
+5. Schema-split via "add a sibling" beat "rename or restructure."
+
+   The single highest-leverage change in this pass was splitting `open_questions` into
+   `open_questions` + `carry_forward`. The temptation was to rename or restructure (a
+   nested map keyed by phase, etc.) — but `open_questions` is the framework's
+   honest-output hook, and changing its name would have broken the muscle memory of
+   every prior session. Adding `carry_forward` as a sibling preserved the friction-
+   driving job of `open_questions` (genuinely unknown) while solving the "two jobs"
+   problem.
+
+   This is a generalizable framework-design move: when feedback says "field X is doing
+   two jobs," prefer "split into A + B siblings" over "rename A to A1 and A2." Worth
+   recording as a framework-level convention.
+
+6. The closeout pattern dogfooded itself.
+
+   This very feedback file, the changelog, and the closeout file were all written
+   using the new templates and conventions introduced in this pass. The closeout
+   template's "Decisions Beyond Prompt" and "Proposed Conventions" sections gave the
+   meta-session the same structural support that prior implementing sessions had —
+   which means the meta-session output is recognizably the same shape as the work it
+   describes. That coherence is itself a sanity check.
+
+
+SOME FRICTION
+=============
+
+1. There's no skill for "framework-feedback-pass" itself.
+
+   This session ran on the discipline embedded in the prompt — apply blockers, defer
+   nice-to-haves, preserve unanimous-defenders, write a CHANGELOG with the same shape
+   as DELTAS-APPLIED.md, update the index with resolution markers. That's a reusable
+   workflow. The prompt's discipline section was load-bearing in exactly the same way
+   that the spec-delta-application prompt's discipline section was — which is the
+   evidence that it's a skill in disguise.
+
+   Suggestion: codify as `skills/framework-feedback-pass/SKILL.md` in the next
+   framework pass. Should reference the shared triage discipline (suggestion #1
+   above) and the unanimous-defenders list (suggestion #2 above). The skill's
+   distinguishing concerns vs spec-delta-application: the input is feedback files
+   (not deltas), the unit of edit is framework artifacts (not project spec sections),
+   and the mandatory output set is { CHANGELOG, BACKLOG update, INDEX resolution
+   markers, closeout, framework's own feedback file }.
+
+2. The 3-agent-AND-clean-edit triage rule had two "almost spec-blockers" that
+   deferred.
+
+   "Append-mode supersession" (3 agents) and "Validation as semantic check" (4
+   agents) both met the agent threshold but lacked clean concrete edits — both
+   imply phase-shape changes (a reconciliation pass; a quality subagent). Defer to
+   backlog, but those two are now the highest-priority backlog items by agent count.
+
+   The friction here is that the discipline's AND clause is a hard line; in practice
+   I had to think for ~10 minutes about whether to split B7 and B8 from the others
+   in BACKLOG.md (give them a "next-pass priority" marker, etc.). I decided not to —
+   the BACKLOG.md "smallest viable form" sketches give every item the same shape, and
+   future pass scoping can pick by category rather than priority. But the discipline
+   could land sharper: maybe a "high-priority-backlog" callout in CHANGELOG that
+   names the items most likely to land in the next pass.
+
+3. Two agents (1 each) raised items that turned out to be project-level concerns,
+   not framework concerns.
+
+   B6 (CI grep gate for tripwire functions) and B9 (spec file split into spec/
+   directory) and B13 (engine→leaf seam contracts table) are all Thaumaturge-specific.
+   The framework's job is to surface the convention shape (which CONVENTIONS.md
+   template now does); the project's job is to fill in the specifics. The deferral
+   rationale in BACKLOG.md is the audit trail.
+
+   The friction: the cross-cutting-themes table in FEEDBACK_INDEX.md doesn't
+   distinguish framework-level from project-level proposals. Adding a "scope" column
+   (framework / project / both) would make this triage faster on future passes.
+
+4. The strategic-alignment hook + dual-mode reimpl-spec template landed as one
+   feature, not two.
+
+   The user's prompt listed them as separate items (strategic-alignment hook in
+   "spec-clarifications," dual-mode template in "spec-blockers"). On reading both in
+   detail they're inseparable: the hook *picks between* the two templates. Splitting
+   them across two backlog items would have split the user experience. Recording as
+   D-meta-5 in the closeout. Worth noting because it's the kind of triage decision
+   the spec-delta-application skill explicitly invites ("don't apply deltas verbatim
+   without thinking").
+
+5. The codex `.codecarto/CONVENTIONS.md` and `DECISIONS.md` artifacts are 600+ lines
+   of Thaumaturge-specific content.
+
+   Useful as working examples; not the right shape for framework templates. The
+   framework's `templates/conventions-template.md` and `templates/decisions-template.md`
+   are ~150-line skeletons that projects copy and fill in. The codex artifacts stay
+   as they are — they're the project-level filled artifacts, not the framework-level
+   skeletons. The "generalize, don't copy" rule from the prompt was load-bearing.
+
+6. THREAD_LOG.md migration was trivial because the framework's own copy was empty.
+
+   Framework's THREAD_LOG.md had only the example comment block; rewriting it as an
+   index was lossless. A real project's migration (codex has 100+ KB of THREAD_LOG
+   content) is a separate, project-level operation. Documented in the THREAD_LOG.md
+   header but worth flagging here: future projects adopting the per-session-closeout
+   pattern need a one-time migration script, which the framework doesn't ship. Could
+   be a future BACKLOG item.
+
+
+WHAT MIGHT HELP THE NEXT PASS
+==============================
+
+1. A `skills/framework-feedback-pass/SKILL.md` codifying this session's discipline.
+
+2. A shared `skills/_triage-discipline.md` (or section in CONTRIBUTING.md) that both
+   spec-delta-application and framework-feedback-pass reference.
+
+3. The unanimous-defenders list promoted from FEEDBACK_INDEX.md to a permanent
+   fixture in CONTRIBUTING.md (currently lives only in the index).
+
+4. A "scope" column (framework / project / both) on the FEEDBACK_INDEX.md
+   cross-cutting-themes table.
+
+5. A "high-priority-backlog" callout in CHANGELOG that names the items most likely
+   to land in the next pass (B7, B8 today).
+
+6. An `examples/<small-codebase>/` synthetic project with a populated `.codecarto/`
+   so framework edits have a sharper feedback loop than the framework's empty
+   self-application provides.
+
+7. A one-time THREAD_LOG.md migration script (or recipe) so projects already using
+   the monolithic pattern can adopt the per-session-closeout pattern without losing
+   history.
+
+
+OVERALL
+=======
+
+The framework-feedback-pass pattern works. The triage discipline (apply / clarify /
+defer / reject) ported cleanly from spec-delta-application. The unanimous-defenders
+list prevented over-rewriting. The cross-cutting-themes table drove triage. The
+schema-split-via-add-a-sibling beat schema-restructure. The closeout pattern
+dogfooded itself.
+
+The highest-value single change in this pass: schema-splitting `open_questions` +
+`carry_forward`. It's the one improvement that has been requested since session 1
+and lands as a shape change, not just a workflow tweak. The second-highest: the
+per-session closeout pattern — six agents asked for it, and the new shape scales
+forever in a way the monolithic THREAD_LOG didn't.
+
+Next concrete step: back to project-level work (Thaumaturge `thaum-tools`) with the
+upgraded framework as the base. The codex `.codecarto/CONVENTIONS.md` and
+`DECISIONS.md` are now first-class supporting structure; the orchestrator's
+discipline maintaining them is no longer prompt-only.

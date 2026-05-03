@@ -451,20 +451,26 @@ index supersedes it — refer here for the authoritative version.
 Recurring issues raised by multiple agents, ordered by how many agents flagged
 them.
 
-| Theme | Raised by | Most actionable suggestion |
-|---|---|---|
-| THREAD_LOG.md / status.yaml scaling (file too large, next_actions doing too many jobs) | thaum-ollama, thaum-engine, thaum-state, coordinating, spikes, porting | Split THREAD_LOG into per-session closeout files; schema-split next_actions into completed_modules / next_module / pending_deltas / conformance_gates |
-| Subagent delegation not blessed for large codebases | coordinating, broad defect, contracts, protocols, deep defect | One paragraph in GUIDE.md — delegate dependency mapping, file inventories, and cross-document comparisons; cite their scratch artifacts |
-| open_questions doing two jobs (real unknown vs deferred to later phase) | coordinating, broad defect, deep defect, porting | Split into open_questions + carry_forward with explicit phase targets and a structured shape {id, kind, target_phase, reason} |
-| Append-mode secondary outputs grow without bound; no consolidation rule | protocols, porting, contracts | Add a "this section supersedes earlier sections" marker or a pre-reimpl-spec reconciliation pass |
-| Validation is structural/completeness check, not semantic/quality check | broad defect, deep defect, porting, protocols | Add programmatic validator for mechanical checks; add quality-subagent or 1–5 coverage-depth score for semantic assessment |
-| Spec file too large (single 1000+ line file); truncation issues | thaum-engine, thaum-ollama, spikes | Split into spec/ directory with INDEX.md; add bun run spec:check CI gate for required section presence |
-| File-system sync issues (bash mount vs host tools disagree) | thaum-engine, thaum-state | Warning paragraph in session prompt boilerplate: prefer full-file overwrites, verify via wc -l + md5sum |
-| Need for CONVENTIONS.md / SEAMS.md — cross-cutting patterns have no canonical home | thaum-engine, thaum-state, thaum-ollama | Create .codecarto/CONVENTIONS.md with project-wide invariant list; create SEAMS.md table for engine→leaf contracts |
-| Spec-delta-application has no skill or template | deltas | Create dedicated spec-delta-application skill + DELTAS-APPLIED.md template |
-| Spike / amendment activities not first-class concepts | spikes, deltas, protocols | Add findings/amendments/ directory; create spike template with validation rule |
-| SKILL.md and template files are redundant / drift apart | contracts, protocols, porting | Consolidate to one authoritative source per phase with the other as stub-pointer |
-| Primary vs secondary output relationship undocumented | coordinating, porting | Two-paragraph rule in GUIDE.md: primary owns the map and load-bearing claims; secondaries own catalog-level detail |
+**Resolution status legend** (added 2026-05-02 framework feedback pass):
+
+- ✅ APPLIED — landed in this pass; see `.codecarto/CHANGELOG-2026-05-02-feedback-pass.md`.
+- ◑ CLARIFIED — mechanical edit applied this pass.
+- ➜ DEFERRED-Bxx — recorded in `.codecarto/BACKLOG.md` with rationale and smallest-viable-form sketch.
+
+| Theme | Raised by | Most actionable suggestion | Resolution |
+|---|---|---|---|
+| THREAD_LOG.md / status.yaml scaling (file too large, next_actions doing too many jobs) | thaum-ollama, thaum-engine, thaum-state, coordinating, spikes, porting | Split THREAD_LOG into per-session closeout files; schema-split next_actions into completed_modules / next_module / pending_deltas / conformance_gates | ✅ APPLIED (per-session closeouts pattern; THREAD_LOG.md is now an index). Status.yaml schema-split for `next_actions` is project-shaped — left to the orchestrator at the project level. |
+| Subagent delegation not blessed for large codebases | coordinating, broad defect, contracts, protocols, deep defect | One paragraph in GUIDE.md — delegate dependency mapping, file inventories, and cross-document comparisons; cite their scratch artifacts | ✅ APPLIED (GUIDE.md "Subagent Delegation for Large Codebases"). |
+| open_questions doing two jobs (real unknown vs deferred to later phase) | coordinating, broad defect, deep defect, porting | Split into open_questions + carry_forward with explicit phase targets and a structured shape {id, kind, target_phase, reason} | ✅ APPLIED (status.yaml schema, all 5 templates, GUIDE.md "Open Questions vs Carry-Forward", VALIDATE.md routing rule). |
+| Append-mode secondary outputs grow without bound; no consolidation rule | protocols, porting, contracts | Add a "this section supersedes earlier sections" marker or a pre-reimpl-spec reconciliation pass | ➜ DEFERRED-B7 (smallest viable form: `> SUPERSEDES <date>:<reason>` marker convention). |
+| Validation is structural/completeness check, not semantic/quality check | broad defect, deep defect, porting, protocols | Add programmatic validator for mechanical checks; add quality-subagent or 1–5 coverage-depth score for semantic assessment | ➜ DEFERRED-B5 + DEFERRED-B8 (programmatic validator + semantic check both in backlog). |
+| Spec file too large (single 1000+ line file); truncation issues | thaum-engine, thaum-ollama, spikes | Split into spec/ directory with INDEX.md; add bun run spec:check CI gate for required section presence | ➜ DEFERRED-B9 (project-level concern; framework template doesn't enforce single file). |
+| File-system sync issues (bash mount vs host tools disagree) | thaum-engine, thaum-state | Warning paragraph in session prompt boilerplate: prefer full-file overwrites, verify via wc -l + md5sum | ◑ CLARIFIED (NEW_THREAD_BLURB.md "File-System Sync Warning" section). |
+| Need for CONVENTIONS.md / SEAMS.md — cross-cutting patterns have no canonical home | thaum-engine, thaum-state, thaum-ollama | Create .codecarto/CONVENTIONS.md with project-wide invariant list; create SEAMS.md table for engine→leaf contracts | ✅ APPLIED for CONVENTIONS.md and DECISIONS.md (templates + GUIDE.md trust-boundaries + closeout integration). SEAMS.md is project-level → ➜ DEFERRED-B13. |
+| Spec-delta-application has no skill or template | deltas | Create dedicated spec-delta-application skill + DELTAS-APPLIED.md template | ✅ APPLIED (`skills/spec-delta-application/SKILL.md` + `templates/deltas-applied.md`). |
+| Spike / amendment activities not first-class concepts | spikes, deltas, protocols | Add findings/amendments/ directory; create spike template with validation rule | ➜ DEFERRED-B1 (spike template) + DEFERRED-B2 (amendments). Partially obviated by `carry_forward` field which now formalizes forward-routing. |
+| SKILL.md and template files are redundant / drift apart | contracts, protocols, porting | Consolidate to one authoritative source per phase with the other as stub-pointer | ➜ DEFERRED-B10 (per-file judgment work; not a single sweep). |
+| Primary vs secondary output relationship undocumented | coordinating, porting | Two-paragraph rule in GUIDE.md: primary owns the map and load-bearing claims; secondaries own catalog-level detail | ◑ CLARIFIED (GUIDE.md "Primary vs Secondary Output Relationship" subsection). |
 
 ---
 
@@ -478,3 +484,18 @@ Features every agent says should never change:
 - **Evidence-level discipline** (observed fact / strong inference / portability hazard / open question)
 - **The closeout ritual** (THREAD_LOG → status.yaml → decisions beyond prompt)
 - The framework's core strength: **it makes honest output the default** — you can't skip the validation block or leave evidence levels blank
+
+The 2026-05-02 framework feedback pass preserved all of these. The trust-boundaries table was *extended* with new categories (closeouts, conventions, decisions, backlog), not modified in shape. The closeout ritual was *extended* to include conventions/decisions promotion and per-session closeout files; the ritual's shape (validation → status.yaml → per-session record → next pointer) is preserved.
+
+---
+
+## 15. Framework feedback pass (2026-05-02)
+
+**File:** `Framework feedback pass - 2026-05-02.txt`
+
+**What this covers:** A meta-session: instead of using CodeCartographer to analyze a codebase, the session edits CodeCartographer based on the 13 prior feedback files. Documents what the spec-delta-application discipline looks like when applied to the framework itself, and what worked / didn't / next about doing the meta-pass.
+
+**Where to find it:**
+- `.codecarto/CHANGELOG-2026-05-02-feedback-pass.md` — the audit table of applied/clarified/deferred items.
+- `.codecarto/BACKLOG.md` — the deferred items with rationale.
+- `closeouts/2026-05-02-framework-feedback-pass.md` — the session closeout itself.

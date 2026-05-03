@@ -9,36 +9,49 @@ pipeline: workflow/pipeline-full-with-audit.yaml
 #   pipeline-architecture-only.yaml         → keep only architecture
 current_phase: architecture  # Set to "complete" when all phases are done.
 last_updated: ""
+# Schema for open_questions and carry_forward entries (see GUIDE.md "Open Questions vs Carry-Forward"):
+#   open_questions: items that are still genuinely unknown (need a runtime test, maintainer decision, spec ruling).
+#   carry_forward: items deferred to a specific later phase whose rubric is the right place to close them.
+# Each entry is a mapping with keys: id, kind, description, deferred_reason
+# carry_forward entries additionally carry: target_phase
+# Allowed kinds: needs-runtime-test, needs-maintainer-decision, needs-spec-ruling,
+#                defer-to-phase, needs-fixture-capture
 phases:
   architecture:
     status: pending
     owner_notes: []
     outputs_present: []
-    open_questions: []
+    open_questions: []   # genuinely unknown items
+    carry_forward: []    # items routed to a later phase {id, kind, target_phase, description, deferred_reason}
   defect-scan:
     status: pending
     owner_notes: []
     outputs_present: []
     open_questions: []
+    carry_forward: []
   contracts:
     status: pending
     owner_notes: []
     outputs_present: []
     open_questions: []
+    carry_forward: []
   protocols:
     status: pending
     owner_notes: []
     outputs_present: []
     open_questions: []
+    carry_forward: []
   porting:
     status: pending
     owner_notes: []
     outputs_present: []
     open_questions: []
+    carry_forward: []
   reimplementation-spec:
     status: pending
     owner_notes: []
     outputs_present: []
     open_questions: []
+    carry_forward: []
 next_actions:
   - Begin architecture phase by reading the repository and producing findings/architecture/architecture-map.md

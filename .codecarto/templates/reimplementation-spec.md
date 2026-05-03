@@ -101,7 +101,25 @@
 
 ## Known Unknowns
 
-<!-- Behaviors that need a prototype or targeted test. -->
+<!-- Items that are still genuinely unknown — need a prototype, runtime test, maintainer decision, or spec ruling.
+     This is the reimplementation-spec phase's terminal "open_questions" — items the pipeline can't close
+     because they require executing code (a spike) or a decision the orchestrator owns.
+     Each entry: { id, kind, description, deferred_reason }. -->
+
+| ID | Kind | Description | Deferred Reason |
+|---|---|---|---|
+| | | | |
+
+## Carry-Forward
+
+<!-- Reimplementation-spec is the terminal phase in most pipelines, so most items belong in Known Unknowns
+     above. Use this section only when post-pipeline work (spikes, deltas, amendments) is the right place
+     to close an item. Each entry: { id, kind: defer-to-phase, target_phase, description, deferred_reason }.
+     Allowed target_phase values for post-pipeline: "spike", "delta", "amendment". -->
+
+| ID | Target Phase | Description | Deferred Reason |
+|---|---|---|---|
+| | | | |
 
 ## Spike List
 
