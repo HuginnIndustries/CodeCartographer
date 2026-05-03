@@ -143,6 +143,45 @@ of the change would look like.
 
 ---
 
+## B15. spec-delta-application SKILL canonical refinements (first-run friction)
+
+**Raised by:** `Spec-delta-3 application - 2026-05-03.txt` (1 agent — first real run of the SKILL post-2026-05-02 framework pass; high-signal because the SKILL had no field exposure before this)
+
+**Why deferred:** Six small refinements to the same SKILL.md / templates pair, all visible only after a non-spike-sourced run. Bundling makes the next pass cheap; piecemeal would churn the SKILL repeatedly.
+
+**Smallest viable form:** A surgical pass over `skills/spec-delta-application/SKILL.md` and `templates/deltas-applied.md` covering:
+- **Citation forms** — canonicalize a small family beyond the spike-sourced `[revised per <file> §<delta-id>]`. Round-3 introduced `[revised per DECISIONS.md D5XX (Δ-N), round-N]` for D-entry-sourced deltas and `[revised per closeouts/<file> §<id>, round-N]` for closeout-sourced deltas. Document both as canonical, alongside the spike form.
+- **Audit file path** — explicitly cover the non-spike case. Round-3 used `findings/deltas-applied/round-N.md` (directory convention) when the deltas weren't spike-driven; the existing "sibling-of-spec DELTAS-APPLIED.md" remains a special case for spike rounds.
+- **Closeout filename** — round-numbered (`closeouts/<YYYY-MM-DD>-spec-delta-N.md`) avoids the collision risk of the current `closeouts/<YYYY-MM-DD>-spec-deltas.md` when two passes happen on the same day.
+- **§header naming** — the spec's `## Post-Spike Revisions` header doesn't generalize for non-spike rounds. Rename to `## Post-Pipeline Revisions` (or similar) so post-pipeline non-spike rounds don't have to add explanatory paragraphs about why "Post-Spike" still applies.
+- **Step 6 prominence** — add a sentence to Step 6 ("Update the spec's front-matter citation conventions list") emphasizing this is required when the application introduces new citation forms; otherwise the audit-table marker list is unanchored.
+- **APPLY may refine the proposal** — Δ-36's literal D501 text was "map to 'error'" but the application refined to "emit error event + done(error)" mirroring the existing in-stream-error pattern. The four-bucket matrix's APPLY bucket implicitly permits refinement, but the SKILL should make it explicit: APPLY may include refinements beyond the literal proposal text, with the refinement captured as a Decision-Beyond-Triage in the closeout.
+
+---
+
+## B16. Project-level BACKLOG.md template + GUIDE.md project-vs-framework-level clarification
+
+**Raised by:** `Spec-delta-3 application - 2026-05-03.txt` (1 agent — first-run-of-SKILL friction)
+
+**Why deferred:** The SKILL says "DEFER → Add to BACKLOG.md with rationale and a back-reference," but the codex workspace had no project-level BACKLOG.md and the upstream `.codecarto/BACKLOG.md` is for framework-feedback deferrals (correctly excluded from project sync). Round-3 created `.codecarto/BACKLOG.md` from scratch with a project-scoped shape. Future projects will hit the same bootstrap gap.
+
+**Smallest viable form:**
+- Ship `templates/backlog-project.md` skeleton with header + format-per-entry note + an example entry. Format-per-entry should include: rationale, raised-by (closeout file or D-entry), preconditions (which modules / artifacts need to land before the deferral can be revisited — Δ-38 demonstrated this field's value), and "smallest viable form."
+- Add one paragraph to `GUIDE.md` clarifying the project-level vs framework-level distinction: framework `.codecarto/BACKLOG.md` is for framework-feedback deferrals (raised by agents about CodeCartographer itself); project `.codecarto/BACKLOG.md` is for project-decision deferrals (raised during the project's own work).
+- SKILL Step 7 (DEFER bucket) explicitly references the project template.
+
+---
+
+## B17. SKILL clarification — DECISIONS.md vs BACKLOG.md semantics for DEFER
+
+**Raised by:** `Spec-delta-3 application - 2026-05-03.txt` (1 agent — first-run-of-SKILL semantic ambiguity)
+
+**Why deferred:** The SKILL's DEFER guidance and its "append numbered entries to DECISIONS.md for any decisions made during triage that weren't already in the deltas" instruction left ambiguous whether DEFER-with-rationale belongs in DECISIONS.md or BACKLOG.md. Round-3 chose: DECISIONS.md is for things the project decided to **DO** (including refinements made during application — e.g., D501's refinement); BACKLOG.md is for things the project decided to **DEFER**. DEFERs do not get a D5xx number, and DECISIONS.md's "pending spec deltas" subsection only tracks proposed → applied lifecycle.
+
+**Smallest viable form:** A two-sentence clarification in SKILL Step 7's DEFER bucket: DEFER → BACKLOG.md (no D-number); refinements made during APPLY → DECISIONS.md "Decisions Beyond Triage" section in the audit file, lifted to DECISIONS.md only if cross-cutting. Existing D-entries for proposed deltas get their disposition updated in place (e.g., "APPLIED 2026-05-03 round-3"); they do not get superseded by new D-entries when applied.
+
+---
+
 ## How to use this backlog
 
 A future framework-feedback pass picks items up from here. Each item has a "Smallest viable
