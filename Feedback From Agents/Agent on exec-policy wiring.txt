@@ -1,0 +1,137 @@
+Framework feedback — thaum-exec-policy-wiring (2026-05-03)
+==========================================================
+
+Implementing thread (thin half-day session): wired ExecPolicySeam.decide()
+into thaum-engine's task.ts toolUse branch (CF-exec-policy-1 + CF-tools-1).
+This is the first "wiring session" the framework has produced — distinct
+from a module-build by scope (one helper function + a registry on the
+engine + minor protocol extension; ~700 LOC of net change vs ~3500 for
+a typical module). Some observations the corpus may want to absorb.
+
+1. The wiring-session shape itself is a useful framework primitive.
+-------------------------------------------------------------------
+The orchestrator's prompt called this out explicitly ("Smaller scope than
+a module-build but the closeout is still expected to match shape, just
+shorter — ~70-90 lines, 6-7 H2s vs the 109/9 of thaum-exec-policy"). The
+guidance held: my closeout came in at ~74 lines / 8 H2s. The shorter
+target was the right calibration. The §5 OUT list ("don't refactor
+EventMsg.requestPermissions; don't add new tool kinds; don't touch
+thaum-cli — route as carry-forward") was sharp enough that I felt zero
+scope-creep pull. Recommendation: name "wiring session" as an explicit
+session-shape category in the framework, alongside "module" and
+"spec-delta-application." Calibration target should still be a prior
+closeout — ideally the producer-side closeout the wiring routes from.
+
+2. The §4 design-question framing produced 4 D-entries from 3 questions.
+------------------------------------------------------------------------
+§4.1 (engine-side vs tool-side gating): D236 followed the recommendation
+unchanged — confirming, not refining. The implementation revealed exactly
+the inversion-of-dispatch concern §4.1 named: tool-side gating would have
+forced bash.ts to emit events back to the engine, which the engine
+already does natively for the prompt round-trip. §4.2 (Δ-39): D237 lifted
+cleanly — one rippled fixture site (fixtures.ts) + one helper site
+(seam.test.ts permReq), exactly the cost the prompt predicted. §4.3
+(cancel-mid-prompt): D238 took option C and surfaced a hidden coupling
+the prompt didn't predict — `#preemptActiveTask` AND `shutdown` both
+need to drain the pending-permissions registry, not just preempt. Caught
+at write-time during engine.ts construction. §4 questions remain the
+highest-yield part of every prompt. Keep doing this.
+
+3. D239 (PROMPT_DENY_REASON_PREFIX lift) is the kind of decision the
+   prompt couldn't have anticipated.
+-------------------------------------------------------------------
+Item 11 of §1 read-first said: "The marker — packages/thaum-exec-policy/
+src/types.ts for PROMPT_DENY_REASON_PREFIX constant. Import it; do NOT
+duplicate the literal at the call-site (D227's whole point)." But
+importing from thaum-exec-policy into thaum-engine closes a workspace
+dep cycle (thaum-exec-policy already depends on thaum-engine). Lift to
+thaum-protocol — the runtime-cycle-free shared home — preserves D227's
+intent. This is Edge-case-of-architecture territory: a decision the
+producer-side session (thaum-exec-policy) couldn't have foreseen because
+they hadn't built the consumer side yet. The "decisions beyond prompt
+required" discipline made this a documented D239 rather than a silent
+refactor. The framework's silent-refactor-is-bad discipline is doing
+real work here.
+
+4. The Edit/Write tool truncation cost ~30 minutes mid-session.
+---------------------------------------------------------------
+Multiple Edit and Write operations on workspace files appeared to
+succeed (returned success messages, the in-process Read tool showed
+correct content), but the on-disk file was truncated at consistent
+byte boundaries (~3KB-9KB depending on the file) and the bash sandbox
+saw the truncated content. Cascading "TS1005: '}' expected" / "TS1010:
+'*/' expected" errors near file ends were the symptom — JSDoc blocks
+unclosed because the closing comment was past the truncation point. The
+in-process Read tool was returning the *intended* content from a write-
+side cache, not the on-disk content the bash sandbox saw via FUSE. So
+the "verify the edit landed" instinct (read after write) didn't help.
+
+Workaround: write files via bash heredoc (`cat > file << EOF ... EOF`).
+After switching to heredocs for all 5 modified files, the truncation
+disappeared and gates went green. Worth flagging upstream — either Edit/
+Write has an undocumented byte cap that silently truncates, or there's
+a FUSE write-through gap between the editor's write API and the
+sandbox's view. The prior thaum-exec-policy closeout (framework-feedback
+section item 4) flagged "stale absolute-path imports + NUL bytes" as
+pre-existing breakage from a prior session that closed claiming green.
+Same shape as my issue — silent file corruption that survives the
+session boundary. Worth investigating whether they share a root cause.
+
+Recommendation: framework should test the Edit/Write tool's behavior on
+files >3KB and on files containing certain character patterns; if the
+truncation is reproducible, document the workaround (heredoc-via-bash)
+in the implementing-session preamble.
+
+5. Pre-flight gate run was clean at 434/6/0.
+--------------------------------------------
+No pre-existing breakage to clear, unlike the prior session. The prior
+closeout's framework-feedback-4 ("verify entry baseline before scoping")
+was honored automatically by §Discipline ("baseline at session entry
+should be 434/6/0; if you see anything else, that's pre-existing
+breakage from a prior session that closed claiming green — clear it
+before scoping"). The rule is now load-bearing in the prompt, and it
+worked: I ran the gates first, saw the expected number, moved on. This
+is exactly the pattern the framework should institutionalize for every
+implementing session.
+
+6. Wiring-session corpus: this is the first one.
+------------------------------------------------
+The framework should accumulate corpus on wiring sessions. Open
+questions to track:
+
+- Is the closeout's File-Touched section pure-Modified for wiring
+  sessions, with maybe one Added test file? (Mine was: 4 modified
+  engine files, 4 modified protocol/exec-policy files for Δ-39, 2
+  modified test fixtures, 1 added integration test file.)
+
+- Do wiring sessions tend to surface 1-2 spec-delta-candidates that
+  the producer-side session couldn't have foreseen? (Mine: yes, both
+  Δ-39 and the D239 lift. Both are wire-shape concerns visible only
+  from the consumer side.)
+
+- Do wiring sessions tend to need a workspace dep edit? (Mine: yes,
+  added thaum-exec-policy to thaum-engine devDeps for the integration
+  test that uses real loadFromDirectory. Mirrors the existing thaum-
+  state / thaum-tools devDep pattern; not a new convention but worth
+  knowing wiring sessions reach for this.)
+
+- Does the dispatcher need a new effect type per wiring session? (Mine:
+  yes, resolvePendingPermission. Generalizable: when a wiring session
+  threads a Promise from the dispatcher to an awaiting consumer, the
+  dispatcher needs a new "resolve-pending" effect.)
+
+7. The C2 tripwire vocabulary is doing what it's supposed to.
+-------------------------------------------------------------
+The default ExecPolicySeam.allowAll() in engine.ts (when no
+EngineConfig.execPolicySeam is supplied) is a tripwire-named v0 stub
+per CONVENTIONS.md C2. After this wiring session, the ENGINE'S
+production-vs-stub posture is: a real ExecPolicySeam is supplied, the
+gate enforces. With the default allowAll(), the gate runs but every
+decision is allow. The tripwire name is the warning. C2 still holds
+its weight — anyone reading "execPolicySeam: ExecPolicySeam.allowAll()"
+in engine.ts knows they're looking at a v0 default, not a production
+config. (Future framework improvement: a CI grep gate that fails if
+production-config-loading code paths reference any tripwire-named
+function.)
+
+End of feedback.
