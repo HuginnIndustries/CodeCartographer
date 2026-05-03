@@ -14,7 +14,7 @@ CodeCartographer distinguishes two roles. They are different jobs, often held by
 
 **Implementing session.** One phase or one module of work, fresh thread, follows a SKILL.md and a template, validates, writes a closeout, ends. The bulk of the framework — phases, skills, templates, validation gates — is written for this role. The "You are an LLM assistant" framing in "What This Is" addresses this role.
 
-**Orchestrator.** One persistent thread (typically the first LLM the user points at the project) paired with the human user. The orchestrator holds cross-session context, drafts implementing-session prompts from prior closeouts, curates `CONVENTIONS.md` and `DECISIONS.md` (promoting patterns when they recur), and gates strategic forks the user makes. Without an orchestrator, the framework still works phase-by-phase but cross-cutting conventions and decisions don't accumulate, and each implementing session re-discovers what prior sessions established.
+**Orchestrator.** One persistent thread (typically the first LLM the user points at the project) paired with the human user. The orchestrator holds cross-session context, drafts implementing-session prompts from prior closeouts, curates `CONVENTIONS.md` and `DECISIONS.md` (promoting patterns when they recur), and gates strategic forks the user makes. **The orchestrator does not execute pipeline phases itself** — that is the implementing-session role. The orchestrator's deliverables are *prompts and curated artifacts*, not phase outputs. When the orchestrator finds itself reading a SKILL.md or producing a `findings/<phase>/<primary-output>.md`, it has slipped into the implementing-session role and should stop, draft a prompt, and hand off instead. Without an orchestrator, the framework still works phase-by-phase but cross-cutting conventions and decisions don't accumulate, and each implementing session re-discovers what prior sessions established.
 
 If you are an LLM reading this guide for the first time on a project where `CONVENTIONS.md` and `DECISIONS.md` are unwritten (still showing template content) and `closeouts/` is empty, **see "First-Time Project Setup" below before starting any phase.**
 
@@ -28,6 +28,8 @@ If this is the first LLM to touch this project — no closeouts in `closeouts/`,
 >
 > How it works in practice: this thread becomes the orchestrator; you spin up fresh threads for each implementation session using the prompts I draft, run them, and paste the closeout report back here. I update `CONVENTIONS.md`/`DECISIONS.md` and prepare the next prompt. The framework's discipline compounds across sessions instead of being reinvented each time.
 >
+> One operational tip: if your coding agent supports renaming and pinning threads, rename this thread to "Orchestrator" and pin it. Keeps it organized and quick to find when you switch back from implementation threads.
+>
 > The alternative is session-by-session work with no cross-session context — the framework still works phase-by-phase, but `CONVENTIONS.md` stays empty and each session has to re-derive patterns from prior closeouts. Better for one-off audits; worse for long-running multi-module projects.
 >
 > Which would you like?"
@@ -36,7 +38,7 @@ If the user accepts the orchestrator role:
 
 1. Initialize `CONVENTIONS.md` from `templates/conventions-template.md` and `DECISIONS.md` from `templates/decisions-template.md` (skeletons only — populate as patterns and decisions accumulate).
 2. Set `project_name` in `workflow/status.yaml`.
-3. Proceed with the standard "First Read For New Sessions" flow for the architecture phase, treating this thread as the orchestration thread going forward.
+3. **Do not run the architecture phase yourself.** The orchestrator never executes pipeline phases — that is the implementing-session role (see §Roles). Instead, **draft an implementing-session prompt for the architecture phase** that a fresh thread will execute. Hand the prompt to the user; they spin up a new thread with it; the implementing thread runs the phase, validates, writes a closeout, and reports back; you (the orchestrator) read the returned closeout, update `CONVENTIONS.md` / `DECISIONS.md` / `workflow/status.yaml` per the closeout ritual, and draft the next phase's prompt. **Phase work always happens in fresh implementing-session threads, never in the orchestration thread.** A useful self-check: if you find yourself reading a `findings/<phase>/SKILL.md` or writing a `findings/<phase>/<primary-output>.md`, you have slipped into the implementing-session role — stop, draft the prompt, hand off.
 
 If the user declines:
 
