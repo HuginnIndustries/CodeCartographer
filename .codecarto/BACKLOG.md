@@ -113,7 +113,7 @@ of the change would look like.
 
 **Raised by:** `Agent on Deep Defect Scan - defect-scan-deep.txt`, `Agent on broad Defect Scan - defect-scan-broad.txt` (2 agents)
 
-**Why deferred:** Defect-scan today expects "one pass = one phase output." Multi-pass (broad → deep) is a real pattern that emerged in Thaumaturge. Bless it, but the shape is project-specific (which passes? what naming?). Worth designing once another project does multi-pass.
+**Why deferred:** Defect-scan today expects "one pass = one phase output." Multi-pass (broad → deep) is a real pattern that emerged in Thaumaturge. Partially blessed in 2026-05-04 by `pipeline-full-with-deep-audit.yaml`, which splits the scan into mechanical (passes 1, 2, 6 — after architecture, before contracts) and semantic (passes 3, 4, 5 — after protocols, before porting) phases. Different mechanism than the originally-proposed within-phase pass-N append, but it covers the broad→deep use case. Open question: do projects still need the within-phase append pattern?
 
 **Smallest viable form:** A `templates/defect-report-pass-N.md` template with a `findings/defect-scan/passes/<pass-id>.md` directory convention. Documented; not pre-applied.
 

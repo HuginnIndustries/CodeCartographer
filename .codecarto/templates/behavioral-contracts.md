@@ -118,7 +118,7 @@
 
 <!-- Fill in this table per workflow/VALIDATE.md.
      IMPORTANT: The rows below must match the completion_criteria in your ACTIVE pipeline YAML.
-     The default rows below match the full and full-with-audit pipelines (6 criteria).
+     The default rows below match the full, full-with-audit, and full-with-deep-audit pipelines (6 criteria).
      For pipeline-lite.yaml (5 criteria): DELETE row 3 (security) — that criterion is not in the lite pipeline. -->
 
 | # | Criterion | Result | Evidence |

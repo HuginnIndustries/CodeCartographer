@@ -59,7 +59,7 @@ Assign one severity per finding:
 
 Tag each finding with a recommended action. Use the set that matches your pipeline:
 
-**Pre-porting pipelines** (full-with-audit):
+**Pre-porting pipelines** (full-with-audit, full-with-deep-audit):
 - `fix before porting`: the defect would carry into a new implementation if not addressed first.
 - `port differently`: the new implementation should handle this case differently by design.
 - `leave behind`: the defect is specific to the source implementation and won't survive porting.

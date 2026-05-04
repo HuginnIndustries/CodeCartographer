@@ -5,7 +5,7 @@ description: Synthesize architecture, contracts, and protocol findings into a re
 
 # Reverse Engineer For Porting
 
-This phase synthesizes the outputs of architecture, contracts, and protocols. If a defect report exists (from the full-with-audit pipeline), also read and integrate `findings/defect-scan/defect-report.md`. The pipeline ensures all required phases are complete before this one runs. Read the prior phase artifacts before starting.
+This phase synthesizes the outputs of architecture, contracts, and protocols. If defect reports exist, also read and integrate them: `findings/defect-scan/defect-report.md` (full-with-audit pipeline) or both `findings/defect-scan-mechanical/mechanical-defects.md` and `findings/defect-scan-semantic/semantic-defects.md` (full-with-deep-audit pipeline). The pipeline ensures all required phases are complete before this one runs. Read the prior phase artifacts before starting.
 
 The source code to analyze is in the parent directory (`../` relative to `.codecarto/`). This is the repository root.
 
