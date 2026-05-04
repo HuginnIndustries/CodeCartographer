@@ -1,4 +1,4 @@
-import { access, appendFile, cp, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, appendFile, copyFile, cp, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { basename, dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,11 +25,33 @@ const PIPELINE_ALIASES: Record<string, string> = {
 
 type PhaseStatusValue = "pending" | "complete" | "partial" | "in-progress";
 
+const OPEN_QUESTION_KINDS = [
+	"needs-runtime-test",
+	"needs-maintainer-decision",
+	"needs-spec-ruling",
+	"defer-to-phase",
+	"needs-fixture-capture",
+] as const;
+
+type EntryKind = (typeof OPEN_QUESTION_KINDS)[number] | string;
+
+type OpenQuestionEntry = {
+	id?: string;
+	kind?: EntryKind;
+	description?: string;
+	deferred_reason?: string;
+};
+
+type CarryForwardEntry = OpenQuestionEntry & {
+	target_phase?: string;
+};
+
 type StatusPhase = {
 	status: PhaseStatusValue | string;
 	owner_notes: string[];
 	outputs_present: string[];
-	open_questions: string[];
+	open_questions: OpenQuestionEntry[];
+	carry_forward: CarryForwardEntry[];
 };
 
 type StatusFile = {
@@ -41,6 +63,11 @@ type StatusFile = {
 	next_actions?: string[];
 };
 
+type SecondaryOutput = {
+	path: string;
+	mode?: string;
+};
+
 type PipelinePhase = {
 	id: string;
 	purpose?: string;
@@ -48,11 +75,18 @@ type PipelinePhase = {
 	output_template?: string;
 	depends_on?: string[];
 	primary_output?: string;
+	secondary_outputs?: SecondaryOutput[];
+	required_reads?: string[];
 	completion_criteria?: string[];
+	handoff_requirements?: string[];
 };
 
 type PipelineFile = {
 	workflow_name?: string;
+	workflow_version?: number;
+	workflow_goal?: string;
+	source_location?: string;
+	validation_protocol?: string;
 	phase_order: string[];
 	phases: PipelinePhase[];
 };
@@ -115,6 +149,33 @@ function ensureArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
+function coerceEntry(value: unknown, allowTargetPhase: boolean): OpenQuestionEntry | CarryForwardEntry | null {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (!trimmed) return null;
+		return { description: trimmed };
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const raw = value as Record<string, unknown>;
+	const entry: CarryForwardEntry = {};
+	if (typeof raw.id === "string" && raw.id.trim()) entry.id = raw.id.trim();
+	if (typeof raw.kind === "string" && raw.kind.trim()) entry.kind = raw.kind.trim();
+	if (typeof raw.description === "string" && raw.description.trim()) entry.description = raw.description.trim();
+	if (typeof raw.deferred_reason === "string" && raw.deferred_reason.trim()) entry.deferred_reason = raw.deferred_reason.trim();
+	if (allowTargetPhase && typeof raw.target_phase === "string" && raw.target_phase.trim()) entry.target_phase = raw.target_phase.trim();
+	return Object.keys(entry).length > 0 ? entry : null;
+}
+
+function ensureEntryArray<T extends OpenQuestionEntry>(value: unknown, allowTargetPhase: boolean = false): T[] {
+	if (!Array.isArray(value)) return [];
+	const result: T[] = [];
+	for (const item of value) {
+		const coerced = coerceEntry(item, allowTargetPhase);
+		if (coerced) result.push(coerced as T);
+	}
+	return result;
+}
+
 function ensurePhaseRecord(value: unknown): Record<string, StatusPhase> {
 	if (!value || typeof value !== "object") return {};
 	const record = value as Record<string, unknown>;
@@ -125,7 +186,8 @@ function ensurePhaseRecord(value: unknown): Record<string, StatusPhase> {
 			status: typeof phase.status === "string" ? phase.status : "pending",
 			owner_notes: ensureArray(phase.owner_notes),
 			outputs_present: ensureArray(phase.outputs_present),
-			open_questions: ensureArray(phase.open_questions),
+			open_questions: ensureEntryArray<OpenQuestionEntry>(phase.open_questions, false),
+			carry_forward: ensureEntryArray<CarryForwardEntry>(phase.carry_forward, true),
 		};
 	}
 	return result;
@@ -149,6 +211,7 @@ function createEmptyStatus(projectName: string, pipelinePath: string, pipeline: 
 			owner_notes: [],
 			outputs_present: [],
 			open_questions: [],
+			carry_forward: [],
 		};
 	}
 
@@ -176,6 +239,7 @@ function normalizeStatus(status: StatusFile, pipeline: PipelineFile, pipelinePat
 				owner_notes: [],
 				outputs_present: [],
 				open_questions: [],
+				carry_forward: [],
 			};
 		}
 	}
@@ -577,6 +641,7 @@ function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): str
 	const pipelineLabel = getPipelineLabel(state.status.pipeline);
 	const completedCount = state.pipeline.phase_order.filter((phaseId) => state.status.phases[phaseId]?.status === "complete").length;
 	const currentOpenQuestions = currentPhase === "complete" ? 0 : state.status.phases[currentPhase]?.open_questions.length ?? 0;
+	const totalCarryForward = Object.values(state.status.phases).reduce((sum, phase) => sum + (phase.carry_forward?.length ?? 0), 0);
 	const nextAction = state.status.next_actions[0] ?? (nextPhase ? `Next: ${nextPhase.id}` : "All phases complete.");
 
 	const lines = [
@@ -585,6 +650,7 @@ function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): str
 		`Pipeline: ${pipelineLabel}`,
 		`Progress: ${completedCount}/${state.pipeline.phase_order.length} complete`,
 		`Open questions: ${currentOpenQuestions}`,
+		`Carry-forward: ${totalCarryForward}`,
 		`Next: ${nextAction}`,
 	];
 
@@ -609,7 +675,26 @@ function setUiState(ctx: ExtensionContext | ExtensionCommandContext, state: Work
 	ctx.ui.setWidget(STATUS_WIDGET_ID, buildStatusLines(state, extraLines));
 }
 
-function buildPhasePrompt(state: WorkspaceState, phase: PipelinePhase, forced: boolean): string {
+function describeEntry(entry: OpenQuestionEntry | CarryForwardEntry): string {
+	const parts: string[] = [];
+	if (entry.id) parts.push(entry.id);
+	if (entry.kind) parts.push(`(${entry.kind})`);
+	if (entry.description) parts.push(entry.description);
+	else if (entry.deferred_reason) parts.push(entry.deferred_reason);
+	return parts.join(" ").trim() || "(unlabeled entry)";
+}
+
+function collectRoutedCarryForward(state: WorkspaceState, targetPhaseId: string): CarryForwardEntry[] {
+	const routed: CarryForwardEntry[] = [];
+	for (const phase of Object.values(state.status.phases)) {
+		for (const entry of phase.carry_forward ?? []) {
+			if (entry.target_phase === targetPhaseId) routed.push(entry);
+		}
+	}
+	return routed;
+}
+
+async function buildPhasePrompt(state: WorkspaceState, phase: PipelinePhase, forced: boolean): Promise<string> {
 	const lines = [
 		`Read .codecarto/GUIDE.md and continue the CodeCartographer workflow for the phase \`${phase.id}\`.`,
 		`Work on this phase only. The analyzed source code is the repository outside .codecarto/.`,
@@ -626,10 +711,44 @@ function buildPhasePrompt(state: WorkspaceState, phase: PipelinePhase, forced: b
 	if (phase.skill_path) lines.push(`- .codecarto/${phase.skill_path}`);
 	if (phase.output_template) lines.push(`- .codecarto/${phase.output_template}`);
 
+	const staticReads = new Set(["GUIDE.md", "workflow/status.yaml"]);
+	const phaseReads = (phase.required_reads ?? []).filter((path) => path && !staticReads.has(path));
+	for (const path of phaseReads) {
+		lines.push(`- .codecarto/${path}`);
+	}
+
+	const conventionsPath = join(state.workspaceDir, "CONVENTIONS.md");
+	if (await pathExists(conventionsPath)) {
+		lines.push("- .codecarto/CONVENTIONS.md (cross-cutting patterns the orchestrator has promoted)");
+	}
+	const decisionsPath = join(state.workspaceDir, "DECISIONS.md");
+	if (await pathExists(decisionsPath)) {
+		lines.push("- .codecarto/DECISIONS.md (numbered project decisions; new entries are appended in your closeout)");
+	}
+
+	const routed = collectRoutedCarryForward(state, phase.id);
+	if (routed.length > 0) {
+		lines.push("", `Items routed to \`${phase.id}\` for closure (carry_forward from earlier phases):`);
+		for (const entry of routed) {
+			lines.push(`- ${describeEntry(entry)}`);
+		}
+		lines.push("Close each item by editing your phase output to address it, then remove the entry from the source phase's carry_forward in workflow/status.yaml.");
+	}
+
+	if (phase.id === "reimplementation-spec") {
+		lines.push("");
+		lines.push("Strategic Alignment Hook (run BEFORE producing the spec):");
+		lines.push("- Confirm with the user whether this spec should be language-agnostic or opinionated:");
+		lines.push("    - language-agnostic → use templates/reimplementation-spec.md (default).");
+		lines.push("    - opinionated (target stack locked) → use templates/reimplementation-spec-opinionated.md.");
+		lines.push("- Record the chosen variant in the spec front-matter and in your validation block.");
+	}
+
 	lines.push("", "Rules:");
 	lines.push("- Do not modify source files outside .codecarto/.");
 	lines.push("- Follow the active pipeline and validation protocol.");
 	lines.push("- Update findings under .codecarto/findings/ for this phase.");
+	lines.push("- Distinguish open_questions (genuinely unknown) from carry_forward (routed to a specific later phase) when updating workflow/status.yaml — see GUIDE.md \"Open Questions vs Carry-Forward\".");
 
 	if (forced) {
 		lines.push("- The user explicitly requested this phase even if it is not the next eligible phase.");
@@ -639,6 +758,13 @@ function buildPhasePrompt(state: WorkspaceState, phase: PipelinePhase, forced: b
 		const unmet = phase.depends_on.filter((dependencyId) => state.status.phases[dependencyId]?.status !== "complete");
 		if (unmet.length > 0) {
 			lines.push(`- Warning: dependencies not complete yet: ${unmet.join(", ")}`);
+		}
+	}
+
+	if (phase.handoff_requirements && phase.handoff_requirements.length > 0) {
+		lines.push("", "Handoff requirements (from the active pipeline):");
+		for (const requirement of phase.handoff_requirements) {
+			lines.push(`- ${requirement}`);
 		}
 	}
 
@@ -767,8 +893,77 @@ function uniqueStrings(items: string[]): string[] {
 	return [...new Set(items.filter(Boolean))];
 }
 
-function buildThreadLogEntry(phaseId: string, validation: ValidationResult, timestamp: string): string {
-	return `\n## ${timestamp} — ${phaseId}\n- Completed via \`/codecarto-complete\`.\n- Primary output: \`.codecarto/${validation.primaryOutput}\`.\n- Validation: **${validation.overall}**.\n`;
+function dateOnly(timestamp: string): string {
+	return timestamp.slice(0, 10);
+}
+
+function closeoutFileName(date: string, phaseOrModule: string): string {
+	return `${date}-${phaseOrModule}.md`;
+}
+
+function buildThreadLogEntry(phaseOrModule: string, validation: ValidationResult, timestamp: string): string {
+	const date = dateOnly(timestamp);
+	const file = closeoutFileName(date, phaseOrModule);
+	return `- ${date} — ${phaseOrModule} — Validation: ${validation.overall} — [closeout](closeouts/${file})\n`;
+}
+
+async function ensureCloseoutStub(workspaceDir: string, phaseOrModule: string, timestamp: string): Promise<string | null> {
+	const date = dateOnly(timestamp);
+	const closeoutsDir = join(workspaceDir, "closeouts");
+	const closeoutPath = join(closeoutsDir, closeoutFileName(date, phaseOrModule));
+	if (await pathExists(closeoutPath)) return null;
+	const templatePath = join(workspaceDir, "templates", "closeout-template.md");
+	if (!(await pathExists(templatePath))) return null;
+	await mkdir(closeoutsDir, { recursive: true });
+	await copyFile(templatePath, closeoutPath);
+	return closeoutPath;
+}
+
+async function listSkillNames(workspaceDir: string): Promise<string[]> {
+	const skillsDir = join(workspaceDir, "skills");
+	if (!(await pathExists(skillsDir))) return [];
+	try {
+		const entries = await readdir(skillsDir, { withFileTypes: true });
+		const names: string[] = [];
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			const skillFile = join(skillsDir, entry.name, "SKILL.md");
+			if (await pathExists(skillFile)) names.push(entry.name);
+		}
+		return names.sort();
+	} catch {
+		return [];
+	}
+}
+
+async function buildSkillPrompt(state: WorkspaceState, skillName: string): Promise<string> {
+	const lines = [
+		`Read .codecarto/GUIDE.md and run the post-pipeline skill \`${skillName}\`.`,
+		"This is post-pipeline work. The pipeline is `complete`. Do not change `current_phase` or `phase_order` in workflow/status.yaml.",
+		"",
+		"Required reads before starting:",
+		"- .codecarto/GUIDE.md",
+		"- .codecarto/workflow/status.yaml",
+		`- .codecarto/skills/${skillName}/SKILL.md`,
+	];
+
+	const conventionsPath = join(state.workspaceDir, "CONVENTIONS.md");
+	if (await pathExists(conventionsPath)) {
+		lines.push("- .codecarto/CONVENTIONS.md (cross-cutting patterns the orchestrator has promoted)");
+	}
+	const decisionsPath = join(state.workspaceDir, "DECISIONS.md");
+	if (await pathExists(decisionsPath)) {
+		lines.push("- .codecarto/DECISIONS.md (numbered project decisions; new entries are appended in your closeout)");
+	}
+
+	lines.push("", "Rules:");
+	lines.push("- Do not modify source files outside .codecarto/.");
+	lines.push("- Follow the SKILL.md instructions exactly; the skill enforces its own discipline (see GUIDE.md).");
+	lines.push("- Update only the artifacts the skill calls for. Do NOT touch phase status entries.");
+	lines.push("- On completion, write a closeout at .codecarto/closeouts/<YYYY-MM-DD>-<skill-or-module>.md and append a one-line index entry to THREAD_LOG.md.");
+	lines.push("- If your work resolves entries in any phase's open_questions or carry_forward, remove only those resolved entries.");
+
+	return lines.join("\n");
 }
 
 export default function codeCartographerExtension(pi: ExtensionAPI) {
@@ -929,7 +1124,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const prompt = buildPhasePrompt(state, phase, false);
+			const prompt = await buildPhasePrompt(state, phase, false);
 			if (ctx.isIdle()) {
 				pi.sendUserMessage(prompt);
 			} else {
@@ -960,7 +1155,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const prompt = buildPhasePrompt(state, phase, true);
+			const prompt = await buildPhasePrompt(state, phase, true);
 			if (ctx.isIdle()) {
 				pi.sendUserMessage(prompt);
 			} else {
@@ -1002,34 +1197,50 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
+			const completionTimestamp = new Date().toISOString();
 			const updatedState = await updateStatusAtomically(ctx.cwd, (lockedState) => {
 				const phase = resolvePhase(lockedState, validation.phaseId);
 				if (!phase?.primary_output) {
 					throw new Error(`Phase ${validation.phaseId} is missing primary_output.`);
 				}
 
-				const timestamp = new Date().toISOString();
 				const nextStatus = normalizeStatus(lockedState.status, lockedState.pipeline, lockedState.status.pipeline, lockedState.cwd);
 				const existingPhase = nextStatus.phases[validation.phaseId] ?? {
 					status: "pending",
 					owner_notes: [],
 					outputs_present: [],
 					open_questions: [],
+					carry_forward: [],
 				};
+
+				const gapEntries: OpenQuestionEntry[] = validation.rows
+					.filter((row) => row.result.toUpperCase().includes("PARTIAL"))
+					.map((row) => ({
+						kind: "needs-maintainer-decision",
+						description: row.criterion || "Partial validation gap",
+						deferred_reason: row.evidence || "Marked PARTIAL by validation",
+					}));
+
+				const mergedOpenQuestions: OpenQuestionEntry[] = [...existingPhase.open_questions];
+				for (const candidate of gapEntries) {
+					const dupe = mergedOpenQuestions.some((entry) => entry.description === candidate.description && entry.deferred_reason === candidate.deferred_reason);
+					if (!dupe) mergedOpenQuestions.push(candidate);
+				}
 
 				nextStatus.phases[validation.phaseId] = {
 					status: "complete",
 					owner_notes: uniqueStrings([
 						...existingPhase.owner_notes,
-						`Completed via /codecarto-complete on ${timestamp}.`,
+						`Completed via /codecarto-complete on ${completionTimestamp}.`,
 						`Primary output: .codecarto/${validation.primaryOutput}`,
 						`Validation: ${validation.overall}`,
 					]).slice(-3),
 					outputs_present: uniqueStrings([...existingPhase.outputs_present, validation.primaryOutput]),
-					open_questions: uniqueStrings([...existingPhase.open_questions, ...validation.gaps]),
+					open_questions: mergedOpenQuestions,
+					carry_forward: existingPhase.carry_forward ?? [],
 				};
 
-				nextStatus.last_updated = timestamp;
+				nextStatus.last_updated = completionTimestamp;
 				const updatedWorkspaceState: WorkspaceState = {
 					...lockedState,
 					status: nextStatus,
@@ -1048,17 +1259,74 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						...updatedWorkspaceState,
 						status: nextStatus,
 					},
-					threadLogEntry: buildThreadLogEntry(validation.phaseId, validation, timestamp),
+					threadLogEntry: buildThreadLogEntry(validation.phaseId, validation, completionTimestamp),
 				};
 			});
+
+			let closeoutNotice: string | undefined;
+			try {
+				const created = await ensureCloseoutStub(updatedState.workspaceDir, validation.phaseId, completionTimestamp);
+				if (created) {
+					closeoutNotice = `Closeout stub: .codecarto/closeouts/${closeoutFileName(dateOnly(completionTimestamp), validation.phaseId)} (fill it in)`;
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				closeoutNotice = `Closeout stub not created: ${message}`;
+			}
 
 			lastFeedbackLines = [
 				`Completed phase: ${validation.phaseId}`,
 				`Validation: ${validation.overall}`,
 				`Next phase: ${updatedState.status.current_phase}`,
 			];
+			if (closeoutNotice) lastFeedbackLines.push(closeoutNotice);
 			setUiState(ctx, updatedState, lastFeedbackLines);
 			ctx.ui.notify(`Marked ${validation.phaseId} complete`, validation.overall === "PASS WITH GAPS" ? "warning" : "info");
+			if (closeoutNotice) ctx.ui.notify(closeoutNotice, "info");
+		},
+	});
+
+	pi.registerCommand("codecarto-skill", {
+		description: "Run a post-pipeline skill (after all phases are complete): /codecarto-skill <name>",
+		handler: async (args, ctx) => {
+			const skillName = args.trim();
+			if (!skillName) {
+				const available = await listSkillNames(join(ctx.cwd, ".codecarto"));
+				const hint = available.length > 0 ? ` (available: ${available.join(", ")})` : "";
+				ctx.ui.notify(`Usage: /codecarto-skill <name>${hint}`, "warning");
+				return;
+			}
+
+			const state = await ensureWorkspaceState(ctx);
+			if (!state) return;
+
+			const nextPhase = getNextEligiblePhase(state);
+			if (nextPhase) {
+				ctx.ui.notify(
+					`Cannot run skill: pipeline is not complete (next phase: ${nextPhase.id}). Finish the pipeline before running post-pipeline skills.`,
+					"error",
+				);
+				return;
+			}
+
+			const skillFile = join(state.workspaceDir, "skills", skillName, "SKILL.md");
+			if (!(await pathExists(skillFile))) {
+				const available = await listSkillNames(state.workspaceDir);
+				const hint = available.length > 0 ? ` (available: ${available.join(", ")})` : " (no skills installed)";
+				ctx.ui.notify(`Unknown skill: ${skillName}${hint}`, "error");
+				return;
+			}
+
+			const prompt = await buildSkillPrompt(state, skillName);
+			if (ctx.isIdle()) {
+				pi.sendUserMessage(prompt);
+			} else {
+				pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+			}
+
+			lastFeedbackLines = [`Queued post-pipeline skill: ${skillName}`];
+			setUiState(ctx, state, lastFeedbackLines);
+			ctx.ui.notify(`Queued CodeCartographer skill: ${skillName}`, "info");
 		},
 	});
 }
