@@ -13,10 +13,14 @@
   "license": "MIT",
   "files": [
     ".codecarto/**/*",
+    "core/**/*",
     "extensions/**/*",
     "README.md",
     "LICENSE"
   ],
+  "scripts": {
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.mjs"
+  },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@sinclair/typebox": "*"
