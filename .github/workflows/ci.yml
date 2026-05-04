@@ -14,5 +14,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
       - name: Run framework invariant tests
         run: npm test
