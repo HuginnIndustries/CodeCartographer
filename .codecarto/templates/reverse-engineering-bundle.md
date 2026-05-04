@@ -50,6 +50,28 @@
 |---|---|---|---|
 | | | | |
 
+## Defect Synthesis
+
+<!--
+  Consolidate the defect findings into a single porting view.
+
+  - For pipelines with a single defect-scan phase (e.g. pipeline-full-with-audit):
+    pull from `findings/defect-scan/defect-report.md`.
+  - For pipelines with the split scan (e.g. pipeline-full-with-deep-audit):
+    pull from BOTH `findings/defect-scan-mechanical/mechanical-defects.md`
+    AND `findings/defect-scan-semantic/semantic-defects.md`.
+  - For pipelines without a defect scan (e.g. pipeline.yaml or pipeline-lite):
+    write "No defect scan ran in this pipeline." and skip the table.
+
+  This section is the porting-oriented view of defects — it should answer
+  "which defects must the reimplementation design around, and how?" not
+  re-list every finding. Keep it under one screen.
+-->
+
+| Defect ID | Source Report | One-line Description | Severity | Porting Recommendation |
+|-----------|---------------|----------------------|----------|------------------------|
+| | | | | fix before porting / port differently / leave behind |
+
 ## Observed Facts vs. Inferred Structure
 
 <!--
@@ -112,7 +134,8 @@
 | 1 | The system summary, layer map, contract table, protocol notes, and porting findings are synthesized. | PASS / PARTIAL / FAIL | |
 | 2 | Portability hazards and open questions are separated from facts. | PASS / PARTIAL / FAIL | |
 | 3 | Feature importance is sorted for porting. | PASS / PARTIAL / FAIL | |
-| 4 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
+| 4 | Known defects are referenced in the Defect Synthesis with porting recommendations (fix before porting / port differently / leave behind), or the section explicitly notes that no defect scan ran. | PASS / PARTIAL / FAIL | |
+| 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

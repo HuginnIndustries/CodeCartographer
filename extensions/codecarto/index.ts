@@ -17,6 +17,7 @@ const packagedWorkspaceDir = join(packageRoot, ".codecarto");
 
 const PIPELINE_ALIASES: Record<string, string> = {
 	"full-with-audit": "workflow/pipeline-full-with-audit.yaml",
+	"full-with-deep-audit": "workflow/pipeline-full-with-deep-audit.yaml",
 	full: "workflow/pipeline.yaml",
 	"defect-scan": "workflow/pipeline-defect-scan.yaml",
 	lite: "workflow/pipeline-lite.yaml",
@@ -1077,7 +1078,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			const rawStatusPath = join(targetWorkspaceDir, "workflow", "status.yaml");
 			const rawStatus = (await loadYamlFile<StatusFile>(rawStatusPath)) ?? {};
-			const selectedPipelinePath = pipelineChoice ?? rawStatus.pipeline?.trim() ?? "workflow/pipeline-full-with-audit.yaml";
+			const selectedPipelinePath = pipelineChoice ?? rawStatus.pipeline?.trim() ?? "workflow/pipeline-full-with-deep-audit.yaml";
 			const resolvedPipelinePath = join(targetWorkspaceDir, selectedPipelinePath);
 
 			if (!(await pathExists(resolvedPipelinePath))) {

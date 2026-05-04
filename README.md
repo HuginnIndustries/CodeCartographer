@@ -16,15 +16,16 @@ Each phase builds on the last. The architecture map feeds into behavioral contra
 cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
 ```
 
-**2. Choose a pipeline** (optional — defaults to the full 6-phase with defect scan):
+**2. Choose a pipeline** (optional — defaults to the full 7-phase with split defect scan):
 
 ```yaml
 # Edit .codecarto/workflow/status.yaml and set the pipeline field:
-pipeline: workflow/pipeline-full-with-audit.yaml    # 6-phase with defect scan (default)
-pipeline: workflow/pipeline.yaml                    # 5-phase without defect scan — remove defect-scan from phases
-pipeline: workflow/pipeline-defect-scan.yaml        # 2-phase defect audit — remove contracts through reimplementation-spec from phases
-pipeline: workflow/pipeline-lite.yaml               # 3-phase understanding — remove defect-scan, porting, and reimplementation-spec from phases
-pipeline: workflow/pipeline-architecture-only.yaml  # 1-phase quick overview — keep only architecture in phases
+pipeline: workflow/pipeline-full-with-deep-audit.yaml  # 7-phase with split defect scan (default; depth-first)
+pipeline: workflow/pipeline-full-with-audit.yaml       # 6-phase with single early defect scan
+pipeline: workflow/pipeline.yaml                       # 5-phase without defect scan — remove defect-scan phases
+pipeline: workflow/pipeline-defect-scan.yaml           # 2-phase defect audit — remove contracts through reimplementation-spec
+pipeline: workflow/pipeline-lite.yaml                  # 3-phase understanding — remove defect-scan phases, porting, and reimplementation-spec
+pipeline: workflow/pipeline-architecture-only.yaml     # 1-phase quick overview — keep only architecture
 ```
 
 **3. Point an LLM at the guide:**
@@ -58,7 +59,7 @@ The extension is self-contained at runtime. It uses only Node built-ins plus Pi'
 Then in the target repository:
 
 ```text
-/codecarto-init [full-with-audit|full|defect-scan|lite|architecture-only]
+/codecarto-init [full-with-deep-audit|full-with-audit|full|defect-scan|lite|architecture-only]
 /codecarto-status
 /codecarto-next
 ```
@@ -91,12 +92,13 @@ Every finding is tagged with an evidence level: **observed fact**, **strong infe
 
 ## Pipeline Variants
 
-Not every project needs the full analysis. The default is the 6-phase full-with-audit pipeline. Scale back if you want less:
+Not every project needs the full analysis. The default is the 7-phase **full-with-deep-audit** pipeline, which splits the defect scan into an early mechanical pass and a deep semantic pass so the reimplementation can design around defects with full contracts and protocols context. Scale back if you want less, or use the legacy single-scan pipeline if you don't need the deeper context-grounded defect findings:
 
 | Variant | Phases | Use when |
 |---|---|---|
-| **Full with audit** (default) | 6 | Complete analysis with defect triage before porting |
-| **Full** | 5 | Porting or reimplementation without defect scan |
+| **Full with deep audit** (default) | 7 | Complete analysis with split defect scan; reimplementation grounded in contracts/protocols-aware defect findings |
+| **Full with audit** | 6 | Single early defect scan; cheaper than the deep variant when the defects are mostly mechanical |
+| **Full** | 5 | Porting or reimplementation without any defect scan |
 | **Defect scan** | 2 | Maintenance audit to surface latent problems |
 | **Lite** | 3 | You need to understand behavior without porting plans |
 | **Architecture only** | 1 | Quick structural overview |
@@ -218,7 +220,7 @@ Context window is the easier problem. The harder constraint is whether the model
 
 | Model Tier | Examples | Recommended Pipeline | Notes |
 |---|---|---|---|
-| Frontier | Claude Opus 4.6, Claude Sonnet 4.6 | Full or full-with-audit | Full quality on codebases up to ~100k tokens |
+| Frontier | Claude Opus 4.6, Claude Sonnet 4.6 | Full-with-deep-audit (default) or full-with-audit | Full quality on codebases up to ~100k tokens; the deep audit's semantic pass benefits most from frontier reasoning |
 | Strong mid-tier | Claude Haiku 4.5, GPT-4o | Lite (3-phase) | Architecture and contracts are solid. Skip defect scan — false positive rate too high. Evidence classification less reliable. |
 | Smaller / faster | GPT-4o-mini, Gemini Flash, small open-weight models | Architecture only | Fair structural overview. Multi-phase pipelines produce significant quality loss. Defect scan not recommended. |
 
