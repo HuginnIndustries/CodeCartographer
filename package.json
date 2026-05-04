@@ -15,11 +15,18 @@
     ".codecarto/**/*",
     "core/**/*",
     "extensions/**/*",
+    "mcp-server/**/*",
     "README.md",
     "LICENSE"
   ],
+  "bin": {
+    "codecarto-mcp": "./mcp-server/bin.mjs"
+  },
   "scripts": {
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "*"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",

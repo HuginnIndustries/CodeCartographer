@@ -76,6 +76,43 @@ What the Pi extension adds:
 - tool interception that blocks `edit` and `write` outside `.codecarto/`
 - direct phase prompts that tell Pi exactly which `.codecarto/findings/<phase>/SKILL.md` file to read, without registering those internal files as global Pi skills
 
+## MCP Server
+
+The same framework is also packaged as a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP-compatible host (Claude Code, Claude Desktop, etc.) can drive a CodeCartographer workflow without the Pi runtime. The server imports the same `core/` primitives the Pi extension uses, so phase prompts and validation are byte-identical across both surfaces.
+
+Install and wire it up:
+
+```bash
+npm install --global codecartographer-pi
+# or, in a project: npm install codecartographer-pi
+```
+
+Add it to your MCP host config (Claude Code: `~/.config/claude-code/config.json`, Claude Desktop: `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "codecartographer": {
+      "command": "codecarto-mcp"
+    }
+  }
+}
+```
+
+The server exposes seven tools, each accepting an absolute `cwd` for the target repository:
+
+| Tool | Purpose | Pi equivalent |
+|---|---|---|
+| `codecarto_init` | Copy `.codecarto/` into the target repo and select a pipeline | `/codecarto-init` |
+| `codecarto_status` | Current phase, active pipeline, progress, open questions | `/codecarto-status` |
+| `codecarto_next` | Return the next eligible phase prompt as text | `/codecarto-next` |
+| `codecarto_phase` | Return a specific phase's prompt (forced, even out of order) | `/codecarto-phase` |
+| `codecarto_validate` | Validate a phase output, returning structured criteria rows | `/codecarto-validate` |
+| `codecarto_complete` | Atomically mark a phase complete after validation passes | `/codecarto-complete` |
+| `codecarto_skill` | Return a post-pipeline skill prompt | `/codecarto-skill` |
+
+`codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation).
+
 ## What It Produces
 
 | Artifact | Description |
