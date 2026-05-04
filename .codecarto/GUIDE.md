@@ -87,14 +87,15 @@ If you are uncertain whether a file should be modified, treat it as read-only.
 
 ## Pipeline Selection
 
-Five pipeline variants are available. Check the `pipeline` field in `workflow/status.yaml` to see which is active.
+Six pipeline variants are available. Check the `pipeline` field in `workflow/status.yaml` to see which is active.
 
 - If the field is **empty**, ask the user which scope to use.
 - If the field points to a **file that does not exist**, stop and ask the user to correct it. Do not guess or fall back to the default pipeline.
 
 | Variant | File | Phases | When to use |
 |---|---|---|---|
-| Full with audit (default) | `workflow/pipeline-full-with-audit.yaml` | architecture → defect-scan → contracts → protocols → porting → reimplementation-spec | Complete analysis with defect triage before porting |
+| Full with deep audit (default) | `workflow/pipeline-full-with-deep-audit.yaml` | architecture → defect-scan-mechanical → contracts → protocols → defect-scan-semantic → porting → reimplementation-spec | Complete analysis with defect scan split into an early mechanical pass and a deep semantic pass; reimplementation designs around defects with full context |
+| Full with audit | `workflow/pipeline-full-with-audit.yaml` | architecture → defect-scan → contracts → protocols → porting → reimplementation-spec | Single early defect scan; cheaper than the deep variant when you do not need contracts/protocols-grounded defect findings |
 | Full | `workflow/pipeline.yaml` | architecture → contracts → protocols → porting → reimplementation-spec | Porting bundle without defect scan |
 | Defect scan | `workflow/pipeline-defect-scan.yaml` | architecture → defect-scan | Maintenance audit to surface latent problems |
 | Lite | `workflow/pipeline-lite.yaml` | architecture → contracts → protocols | Understanding behavior without porting plans |
@@ -259,8 +260,10 @@ your-repo/
     GUIDE.md                   # This file. LLM entry point.
     findings/
       architecture/            # System structure, layers, dependency direction.
-      defect-scan/             # Multi-pass defect report with severity and actions.
-        passes/                # Per-category analysis instructions (6 pass files).
+      defect-scan/             # Multi-pass defect report (used by the legacy single-scan pipelines).
+        passes/                # Per-category analysis instructions (6 pass files; reused by the split phases below).
+      defect-scan-mechanical/  # Early defect pass (passes 1, 2, 6); used by full-with-deep-audit.
+      defect-scan-semantic/    # Deep defect pass (passes 3, 4, 5); used by full-with-deep-audit.
       contracts/               # User-visible behavior, defaults, acceptance checks.
       protocols/               # Event streams, state machines, persistence formats.
       porting/                 # Reverse-engineering synthesis bundle.
@@ -276,11 +279,12 @@ your-repo/
       spec-delta-application/  # Post-pipeline skill: apply triaged spec deltas with citation discipline.
         SKILL.md
     workflow/
-      pipeline-full-with-audit.yaml    # 6-phase pipeline (default).
-      pipeline.yaml            # 5-phase (no defect scan).
-      pipeline-defect-scan.yaml        # 2-phase (architecture + defect scan).
-      pipeline-lite.yaml       # 3-phase (no porting or reimpl).
-      pipeline-architecture-only.yaml  # 1-phase (architecture only).
+      pipeline-full-with-deep-audit.yaml  # 7-phase pipeline with split defect scan (default).
+      pipeline-full-with-audit.yaml       # 6-phase pipeline with single early defect scan.
+      pipeline.yaml                       # 5-phase (no defect scan).
+      pipeline-defect-scan.yaml           # 2-phase (architecture + defect scan).
+      pipeline-lite.yaml                  # 3-phase (no porting or reimpl).
+      pipeline-architecture-only.yaml     # 1-phase (architecture only).
       status.yaml              # Per-project progress. Single source of truth.
       VALIDATE.md              # Validation protocol. Run after every phase.
     closeouts/                 # Per-session closeout files (replaces monolithic THREAD_LOG body).

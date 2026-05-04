@@ -1,12 +1,13 @@
 project_name: ""
 # source_location is defined in the active pipeline YAML. Do not duplicate it here.
-pipeline: workflow/pipeline-full-with-audit.yaml
+pipeline: workflow/pipeline-full-with-deep-audit.yaml
 # ^^^ To switch pipelines, change the line above AND adjust the phases below to match:
-#   pipeline-full-with-audit.yaml (default) → keep phases as-is
-#   pipeline.yaml                           → remove defect-scan
-#   pipeline-defect-scan.yaml               → remove contracts through reimplementation-spec
-#   pipeline-lite.yaml                      → remove defect-scan, porting, and reimplementation-spec
-#   pipeline-architecture-only.yaml         → keep only architecture
+#   pipeline-full-with-deep-audit.yaml (default) → keep phases as-is (split defect scan)
+#   pipeline-full-with-audit.yaml                → replace defect-scan-mechanical and defect-scan-semantic with a single defect-scan
+#   pipeline.yaml                                → remove all defect-scan phases
+#   pipeline-defect-scan.yaml                    → remove contracts through reimplementation-spec; collapse defect phases into a single defect-scan
+#   pipeline-lite.yaml                           → remove all defect-scan phases, porting, and reimplementation-spec
+#   pipeline-architecture-only.yaml              → keep only architecture
 current_phase: architecture  # Set to "complete" when all phases are done.
 last_updated: ""
 # Schema for open_questions and carry_forward entries (see GUIDE.md "Open Questions vs Carry-Forward"):
@@ -23,7 +24,7 @@ phases:
     outputs_present: []
     open_questions: []   # genuinely unknown items
     carry_forward: []    # items routed to a later phase {id, kind, target_phase, description, deferred_reason}
-  defect-scan:
+  defect-scan-mechanical:
     status: pending
     owner_notes: []
     outputs_present: []
@@ -36,6 +37,12 @@ phases:
     open_questions: []
     carry_forward: []
   protocols:
+    status: pending
+    owner_notes: []
+    outputs_present: []
+    open_questions: []
+    carry_forward: []
+  defect-scan-semantic:
     status: pending
     owner_notes: []
     outputs_present: []

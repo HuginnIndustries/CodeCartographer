@@ -1078,7 +1078,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			const rawStatusPath = join(targetWorkspaceDir, "workflow", "status.yaml");
 			const rawStatus = (await loadYamlFile<StatusFile>(rawStatusPath)) ?? {};
-			const selectedPipelinePath = pipelineChoice ?? rawStatus.pipeline?.trim() ?? "workflow/pipeline-full-with-audit.yaml";
+			const selectedPipelinePath = pipelineChoice ?? rawStatus.pipeline?.trim() ?? "workflow/pipeline-full-with-deep-audit.yaml";
 			const resolvedPipelinePath = join(targetWorkspaceDir, selectedPipelinePath);
 
 			if (!(await pathExists(resolvedPipelinePath))) {
