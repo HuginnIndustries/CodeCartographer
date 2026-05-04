@@ -17,6 +17,7 @@ const packagedWorkspaceDir = join(packageRoot, ".codecarto");
 
 const PIPELINE_ALIASES: Record<string, string> = {
 	"full-with-audit": "workflow/pipeline-full-with-audit.yaml",
+	"full-with-deep-audit": "workflow/pipeline-full-with-deep-audit.yaml",
 	full: "workflow/pipeline.yaml",
 	"defect-scan": "workflow/pipeline-defect-scan.yaml",
 	lite: "workflow/pipeline-lite.yaml",
