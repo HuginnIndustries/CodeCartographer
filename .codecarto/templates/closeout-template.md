@@ -76,8 +76,8 @@
 ## Framework Feedback (optional)
 
 <!-- If this session encountered friction with the framework itself, write a short note here.
-     Promote to a separate file under Feedback From Agents/ if the note is substantial.
-     Closing the loop on the framework is itself a CodeCarto-style activity — see GUIDE.md. -->
+     Promote to a separate file under .codecarto/feedback/ (create the directory if needed) if the note
+     is substantial. Closing the loop on the framework is itself a CodeCarto-style activity — see GUIDE.md. -->
 
 ## Next Session Pointer
 
