@@ -11,6 +11,18 @@
     "llm"
   ],
   "license": "MIT",
+  "author": "James Sesler",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HuginnIndustries/CodeCartographer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HuginnIndustries/CodeCartographer/issues"
+  },
+  "homepage": "https://github.com/HuginnIndustries/CodeCartographer#readme",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "files": [
     ".codecarto/**/*",
     "core/**/*",

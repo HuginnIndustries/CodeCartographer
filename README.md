@@ -1,5 +1,9 @@
 # CodeCartographer
 
+[![CI](https://github.com/HuginnIndustries/CodeCartographer/actions/workflows/ci.yml/badge.svg)](https://github.com/HuginnIndustries/CodeCartographer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/codecartographer-pi.svg)](https://www.npmjs.com/package/codecartographer-pi)
+
 A structured reverse-engineering toolkit for understanding unfamiliar codebases using LLMs. Drop it into any repository, point an LLM at the guide, and get a comprehensive analysis: architecture map, behavioral contracts, protocol documentation, defect report, porting synthesis, and reimplementation spec.
 
 ## What It Does
@@ -38,7 +42,7 @@ That's it. The LLM reads the guide, checks `workflow/status.yaml` for progress, 
 
 ## Pi Package
 
-This branch also packages CodeCartographer for [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) without changing `.codecarto/` itself.
+This branch also packages CodeCartographer for [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) without changing `.codecarto/` itself. Pi is an **optional peer dependency** — if you only want the template or the MCP server, you don't need Pi installed.
 
 Install from a local checkout or git URL:
 
@@ -307,7 +311,7 @@ The defect-scan phase runs six sequential analysis passes: logic and correctness
 ## Repository Structure
 
 ```
-.codecarto/
+.codecarto/                  # The drop-in template (Markdown + YAML).
   GUIDE.md                   # LLM entry point.
   findings/
     architecture/            # System structure, layers, dependency direction.
@@ -321,6 +325,14 @@ The defect-scan phase runs six sequential analysis passes: logic and correctness
   templates/                 # Output structure templates.
   workflow/                  # Pipeline definitions, status, validation.
   THREAD_LOG.md              # Cross-session summary log.
+core/                        # Pipeline state machine, validators, prompt assembly.
+extensions/codecarto/        # Pi extension surface (slash commands, widget, tool gating).
+mcp-server/                  # MCP server surface (seven tools mirroring the Pi commands).
+tests/                       # Invariant tests catching cross-wrapper drift.
+docs/                        # Roadmap, design notes.
+CONTRIBUTING.md              # How to contribute to CodeCartographer itself.
+SECURITY.md                  # Security policy and reporting.
+CHANGELOG.md                 # Version history.
 ```
 
 ## Git
@@ -334,6 +346,10 @@ The `.codecarto/.gitignore` excludes generated findings and scratch files by def
 3. Feed the phase's `skill_path` and `required_reads` to the agent.
 4. Write outputs to the declared paths. Run validation. Update status.
 5. Repeat until all phases are complete. Set `current_phase` to `complete` when done.
+
+## Contributing
+
+Bug reports, feature requests, and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, branch model, and the maintainer release process. All participants are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). For security issues, please follow [SECURITY.md](SECURITY.md) instead of filing a public issue.
 
 ## License
 
