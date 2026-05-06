@@ -1,9 +1,20 @@
-# Old version archive (delete once confirmed)
-Old version - delete after confirming repo is good/
-
 # OS artifacts
 .DS_Store
 Thumbs.db
 
 # Node
 node_modules/
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Pi / agent session exports
+pi-session-*.html
