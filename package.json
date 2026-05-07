@@ -35,8 +35,7 @@
     "codecarto-mcp": "./mcp-server/bin.mjs"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.mjs",
-    "smoke": "node scripts/smoke-mcp.mjs"
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "*"
