@@ -84,16 +84,19 @@ What the Pi extension adds:
 - tool interception that blocks `edit` and `write` outside `.codecarto/`
 - direct phase prompts that tell Pi exactly which `.codecarto/findings/<phase>/SKILL.md` file to read, without registering those internal files as global Pi skills
 
-### Orchestrator / phase sub-agent mode
+### Phase sub-agents (0.2.0+)
 
-When `/codecarto-init` runs from the Pi extension (0.1.3+), the current Pi session is recorded as the **orchestrator** for that workspace. Each subsequent `/codecarto-next`:
+`/codecarto-next` runs each phase as an isolated in-memory `AgentSession` while your TUI stays on the orchestrator session. The phase's tool calls, file reads, and reasoning live in the child's own context window — they never accumulate in the orchestrator. A persistent **Agents** widget appears above the editor while a phase is running, showing live tool count, token usage, elapsed time, and the current activity. The widget auto-clears once the phase finishes (and lingers a few seconds after for visibility).
 
-- **Run from the orchestrator** — spawns a child Pi session pre-seeded with the phase prompt. The TUI switches to the child; phase tool calls and reasoning land in the child's context window, leaving the orchestrator clean.
-- **Run from inside a phase child** — switches the TUI back to the orchestrator and chains the next phase as another child, atomically.
+```
+● CodeCartographer
+└─ ⠹ architecture phase  ⟳3 · 5 tool uses · 12.3k tokens · 1m32s
+   ⎿ reading…
+```
 
-The orchestrator pointer is stored in `.codecarto/workflow/.orchestrator.local.yaml` (gitignored — the file holds an absolute path into the user's Pi session storage, which is machine-local). Workspaces created by 0.1.0 – 0.1.2 don't have this file; the extension falls back to in-place phase prompts (the legacy behavior). Re-run `/codecarto-init` to opt in.
+Versions 0.1.3 – 0.1.4 used a different design — a session-switching pattern via `ctx.newSession()` that flipped the TUI to the child. That delivered context isolation but the switch was visually invisible during normal flow, so 0.2.0 replaced it with the parallel-widget approach. 0.1.x workspaces don't need migration; existing `.codecarto/` directories work with 0.2.0 unchanged.
 
-The MCP-server path is unaffected — it has no session concept; the host (Claude Desktop / Claude Code / etc.) is the orchestrator.
+The MCP-server path is unaffected — it has no session concept; the host (Claude Desktop / Claude Code / etc.) is always the orchestrator.
 
 ## MCP Server
 

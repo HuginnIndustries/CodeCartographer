@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-07
+
+### Changed (breaking — minor bump per pre-1.0 convention)
+
+- **`/codecarto-next` now runs phases as in-process AgentSession instances with a live "Agents" widget above the editor.** Replaces the 0.1.3/0.1.4 session-switching design (which used `ctx.newSession()` and produced a context-isolated child but flipped the user's TUI to it, which was invisible during normal flow). The new path uses the SDK's `createAgentSession()` + `SessionManager.inMemory()` to spawn an isolated child session that runs in parallel with the orchestrator's TUI; the orchestrator's transcript stays clean and visible while the phase works. Architecture and event-subscription pattern adapted from `@tintinweb/pi-subagents` (forked into our codebase, not added as a dependency).
+  - New `extensions/codecarto/agent-runner.ts` (~165 LOC): builds a `DefaultResourceLoader` + `SessionManager.inMemory()`, calls `createAgentSession`, subscribes to the session's event stream (tool start/end, turn end, message updates, message end usage), forwards events to caller-provided callbacks. The runner is fire-and-forget; `/codecarto-next` returns immediately.
+  - New `extensions/codecarto/agent-state.ts` (~70 LOC): module-scoped `Map<phaseId, PhaseActivity>` tracking running and recently-finished phases. Mutated by runner callbacks; read by the widget.
+  - New `extensions/codecarto/agent-widget.ts` (~265 LOC): persistent widget registered via `ctx.ui.setWidget(key, factory, { placement: "aboveEditor" })`. Renders a tree of running and recently-finished phases with spinner, tool-use count, token usage, elapsed time. 80ms tick for animation; `tui.requestRender()` for active updates without re-registration. Auto-unregisters when no phase is active and finished phases have lingered out (~6.4s). Widget is torn down on `session_shutdown` to avoid leaking the timer.
+- **Tier A (session-switching) code removed.** `core/orchestrator.ts` deleted; its `loadOrchestratorState` / `writeOrchestratorState` helpers are gone. `extensions/codecarto/index.ts` no longer reads or writes `.codecarto/workflow/.orchestrator.local.yaml`. `tests/orchestrator-state.test.mjs` deleted (7 round-trip tests no longer relevant). The gitignore entry for the local-state file remains in the template — existing 0.1.3 / 0.1.4 workspaces may have a leftover file on disk, and ignoring it keeps stale local state out of git.
+- **Peer dep `@earendil-works/pi-coding-agent` pinned to `~0.74.0` (was `^0.74.0`).** Tilde locks the minor lane. `0.2.0` imports several SDK exports beyond the standard `ExtensionContext` surface (`createAgentSession`, `SessionManager`, `SettingsManager`, `DefaultResourceLoader`, `getAgentDir`, `AgentSession`, `AgentSessionEvent`); these are public top-level exports of the package's `index.d.ts` but the SDK is pre-1.0 and minor-version churn in those internals is plausible. The smoke test (`npm run smoke`) plus the daily cron in `smoke.yml` remain the safety net for future Pi minor bumps; consider unpinning once a major version of the Pi SDK lands and the API surface stabilizes.
+
+### Notes
+
+- Test count drops from 64 → 57 because the 7 `orchestrator-state` tests were deleted alongside the module they covered. The 57 surviving tests cover pipeline invariants, default pipeline shape, MCP server tool definitions, and documentation cross-references.
+- The phase sub-agent inherits codecarto's tool-interception logic via `bindExtensions()` — `bash` is blocked, `edit`/`write` are confined to `.codecarto/`, same rules the orchestrator's TUI session has had since 0.1.0. The runner explicitly limits the child's tool list to `["read", "edit", "write", "grep", "find", "ls"]` as a defense-in-depth against tool drift.
+
 ## [0.1.4] — 2026-05-07
 
 ### Fixed

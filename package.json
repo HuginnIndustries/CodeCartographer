@@ -1,6 +1,6 @@
 {
   "name": "codecartographer-pi",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "CodeCartographer packaged for Pi as an extension-driven workflow wrapper.",
   "type": "module",
   "keywords": [
@@ -42,7 +42,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "~0.74.0",
     "@sinclair/typebox": "*"
   },
   "pi": {
