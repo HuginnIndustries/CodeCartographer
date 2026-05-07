@@ -1,0 +1,20 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"allowImportingTsExtensions": true,
+		"rewriteRelativeImportExtensions": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"outDir": "dist",
+		"rootDir": ".",
+		"declaration": true,
+		"isolatedModules": true,
+		"allowJs": true,
+		"strict": false,
+		"noEmitOnError": false
+	},
+	"include": ["core/**/*", "extensions/**/*", "mcp-server/**/*"],
+	"exclude": ["node_modules", "tests", "dist", "scripts", "**/*.test.mjs"]
+}
