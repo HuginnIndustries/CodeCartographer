@@ -1,6 +1,6 @@
 {
   "name": "codecartographer-pi",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "CodeCartographer packaged for Pi as an extension-driven workflow wrapper.",
   "type": "module",
   "keywords": [
@@ -39,11 +39,10 @@
     "smoke": "node scripts/smoke-mcp.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "codecartographer-pi": "^0.1.1"
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
     "@sinclair/typebox": "*"
   },
   "pi": {

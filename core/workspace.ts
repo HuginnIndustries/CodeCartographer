@@ -3,16 +3,33 @@
 // + normalizes the per-project workspace state from disk, and provides the
 // atomic status-update primitive used by /codecarto-complete.
 
+import { existsSync } from "node:fs";
 import { appendFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock, normalizeStatus } from "./status.ts";
 import type { PipelineFile, StatusFile, WorkspaceState } from "./types.ts";
 import { pathExists } from "./utils.ts";
 import { loadYamlFile, stringifySimpleYaml } from "./yaml.ts";
 
+// Walk up from the current file to find the package root. Needed because the
+// source lives at <root>/core/workspace.ts (one level below the package root)
+// but compiles to <root>/dist/core/workspace.js (two levels below). A fixed
+// `..` only works in one of those layouts, so resolve `package.json` instead.
+function findPackageRoot(start: string): string {
+	let dir = start;
+	while (true) {
+		if (existsSync(join(dir, "package.json"))) return dir;
+		const parent = dirname(dir);
+		if (parent === dir) {
+			throw new Error(`Could not locate package.json starting from ${start}`);
+		}
+		dir = parent;
+	}
+}
+
 const coreDir = dirname(fileURLToPath(import.meta.url));
-const packageRoot = resolve(coreDir, "..");
+const packageRoot = findPackageRoot(coreDir);
 
 // Path to the packaged framework template directory. Wrappers copy this on
 // /codecarto-init.
