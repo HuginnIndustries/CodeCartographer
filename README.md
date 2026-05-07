@@ -44,13 +44,17 @@ That's it. The LLM reads the guide, checks `workflow/status.yaml` for progress, 
 
 This branch also packages CodeCartographer for [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) without changing `.codecarto/` itself. Pi is an **optional peer dependency** — if you only want the template or the MCP server, you don't need Pi installed.
 
-Install from a local checkout or git URL:
+Install from npm, a local checkout, or a git URL:
 
 ```bash
+pi install npm:codecartographer-pi
+# or, from a local checkout:
 pi install /absolute/path/to/CodeCartographer
-# or
+# or, from a git URL:
 pi install git:github.com/your-user/CodeCartographer
 ```
+
+> **Don't run `npm install codecartographer-pi` for the Pi use case.** Plain `npm install` puts the package on disk but doesn't register it with Pi, so it never appears in the TUI. Use `pi install npm:codecartographer-pi` instead — Pi handles the npm install internally and writes the package into its own `settings.json` (`~/.pi/agent/settings.json` by default). Plain `npm install` is the right command only for the MCP-server use case described below.
 
 For extension development, you can also point Pi directly at the extension entrypoint or place it in an auto-discovered extensions directory and use `/reload`:
 
