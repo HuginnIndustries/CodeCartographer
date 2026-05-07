@@ -1,6 +1,6 @@
 {
   "name": "codecartographer-pi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CodeCartographer packaged for Pi as an extension-driven workflow wrapper.",
   "type": "module",
   "keywords": [
@@ -21,20 +21,20 @@
   },
   "homepage": "https://github.com/HuginnIndustries/CodeCartographer#readme",
   "engines": {
-    "node": ">=22.6.0"
+    "node": ">=20.0.0"
   },
   "files": [
     ".codecarto/**/*",
-    "core/**/*",
-    "extensions/**/*",
-    "mcp-server/**/*",
+    "dist/**/*",
     "README.md",
     "LICENSE"
   ],
   "bin": {
-    "codecarto-mcp": "./mcp-server/bin.mjs"
+    "codecarto-mcp": "./dist/mcp-server/bin.mjs"
   },
   "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.mjs",
     "smoke": "node scripts/smoke-mcp.mjs"
   },
@@ -47,7 +47,10 @@
   },
   "pi": {
     "extensions": [
-      "./extensions"
+      "./dist/extensions"
     ]
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }
