@@ -43,7 +43,7 @@
     "codecartographer-pi": "^0.1.1"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
     "@sinclair/typebox": "*"
   },
   "pi": {
