@@ -84,6 +84,8 @@ What the Pi extension adds:
 
 The same framework is also packaged as a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP-compatible host (Claude Code, Claude Desktop, etc.) can drive a CodeCartographer workflow without the Pi runtime. The server imports the same `core/` primitives the Pi extension uses, so phase prompts and validation are byte-identical across both surfaces.
 
+Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/specification/2025-11-25) via `@modelcontextprotocol/sdk` ≥ 1.29.0. The negotiated `protocolVersion` reflects whatever the connecting client requests; the server accepts every revision the SDK supports (currently `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`, `2024-10-07`).
+
 Install and wire it up:
 
 ```bash
