@@ -465,7 +465,7 @@ const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 
 export function buildServer() {
 	const server = new Server(
-		{ name: "codecartographer", version: "0.1.3" },
+		{ name: "codecartographer", version: "0.1.4" },
 		{ capabilities: { tools: {} } },
 	);
 

@@ -275,27 +275,35 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			// Orchestrator path: we're the parent. Spawn a child session for the
 			// phase so its tool calls and reasoning land in an isolated context.
+			//
+			// SDK contract: after `ctx.newSession()` resolves, `ctx` is invalidated
+			// — touching `ctx.ui` or `ctx.sessionManager` from the outer scope
+			// raises "extension ctx is stale after session replacement". So all
+			// outer-session work (status line, widget) has to happen BEFORE the
+			// call, and any work that needs a fresh ctx happens INSIDE the
+			// `withSession` callback against the new session's ctx.
 			if (currentSessionFile === orchestrator.sessionFile) {
-				const result = await ctx.newSession({
+				lastFeedbackLines = [`Spawned ${phase.id} phase in a sub-agent`];
+				setUiState(ctx, state, lastFeedbackLines);
+				ctx.ui.notify(`CodeCartographer phase: ${phase.id} (sub-agent)`, "info");
+				await ctx.newSession({
 					parentSession: orchestrator.sessionFile,
 					withSession: async (childCtx) => {
 						childCtx.sendUserMessage(prompt);
 					},
 				});
-				if (result.cancelled) {
-					ctx.ui.notify("Sub-agent spawn cancelled.", "warning");
-					return;
-				}
-				lastFeedbackLines = [`Spawned ${phase.id} phase in a sub-agent`];
-				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify(`CodeCartographer phase: ${phase.id} (sub-agent)`, "info");
 				return;
 			}
 
-			// Phase-child path: we're inside a phase sub-agent. Switch the TUI back
-			// to the orchestrator and chain the next phase atomically. The fresh
-			// state read inside withSession reflects any closeouts the child wrote.
-			const switchResult = await ctx.switchSession(orchestrator.sessionFile, {
+			// Phase-child path: switch the TUI back to the orchestrator and chain
+			// the next phase atomically. Same staleness rule: pre-switch work uses
+			// `ctx`; post-switch work uses the fresh `orchestratorCtx` passed to
+			// `withSession`. Inside that callback the inner `newSession()` again
+			// invalidates `orchestratorCtx`, so the inner spawn must be the last
+			// thing the callback does.
+			lastFeedbackLines = ["Returning to orchestrator and queuing next phase as a sub-agent"];
+			setUiState(ctx, state, lastFeedbackLines);
+			await ctx.switchSession(orchestrator.sessionFile, {
 				withSession: async (orchestratorCtx) => {
 					const freshState = await getWorkspaceState(orchestratorCtx.cwd);
 					if (!freshState) {
@@ -316,12 +324,6 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					});
 				},
 			});
-			if (switchResult.cancelled) {
-				ctx.ui.notify("Switch back to orchestrator cancelled.", "warning");
-				return;
-			}
-			lastFeedbackLines = ["Returned to orchestrator and queued next phase as a sub-agent"];
-			setUiState(ctx, state, lastFeedbackLines);
 		},
 	});
 

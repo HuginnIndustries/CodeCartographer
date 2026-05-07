@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-05-07
+
+### Fixed
+
+- **`/codecarto-next` no longer crashes with `extension ctx is stale after session replacement`.** The 0.1.3 sub-agent handler called `ctx.ui.notify(...)` and `setUiState(ctx, ...)` *after* `await ctx.newSession(...)` (and similarly after `ctx.switchSession(...)` on the phase-child path). Per the Pi SDK contract, the original `ctx` is invalidated as soon as the session-replacing call returns; touching it raises a runtime error that aborts the handler. The spawn itself succeeded — the child session was created with the phase prompt — but the post-spawn notification crashed loudly, making the feature look broken. Reordered: all outer-session UI updates (`lastFeedbackLines`, `setUiState`, `ctx.ui.notify`) now run *before* the session-replacing call; the `withSession` callback owns all post-replacement work via its own fresh ctx; the original `ctx` is never touched after the await. Same fix applied to the phase-child branch's `switchSession` plus the inner `orchestratorCtx.newSession` (which invalidates the outer `withSession` callback's ctx — so the inner spawn must be the last statement in that callback). The `result.cancelled` notifications were dropped from both branches since there's no live ctx to notify with on a cancelled spawn.
+
 ## [0.1.3] — 2026-05-07
 
 ### Added
