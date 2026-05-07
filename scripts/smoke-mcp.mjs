@@ -23,12 +23,21 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { values: argv } = parseArgs({
 	options: {
 		version: { type: "string" },
+		tarball: { type: "string" },
 		"keep-tmp": { type: "boolean", default: false },
 	},
 });
 
+if (argv.version && argv.tarball) {
+	console.error("error: pass either --version or --tarball, not both");
+	process.exit(2);
+}
+
 const repoPkg = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
-const VERSION = argv.version ?? repoPkg.version;
+const TARBALL = argv.tarball ? resolve(argv.tarball) : null;
+const VERSION = TARBALL ? null : (argv.version ?? repoPkg.version);
+const INSTALL_SPEC = TARBALL ?? `codecartographer-pi@${VERSION}`;
+const INSTALL_LABEL = TARBALL ? `tarball ${TARBALL}` : `codecartographer-pi@${VERSION}`;
 
 let smokeRoot;
 let keepTmp = argv["keep-tmp"];
@@ -61,10 +70,10 @@ async function setupFixture() {
 		JSON.stringify({ name: "smoke-harness", private: true, type: "module" }, null, 2),
 	);
 
-	console.error(`# installing codecartographer-pi@${VERSION} into ${pkgRoot}`);
+	console.error(`# installing ${INSTALL_LABEL} into ${pkgRoot}`);
 	await execFile(
 		"npm",
-		["install", "--no-audit", "--no-fund", "--prefix", pkgRoot, `codecartographer-pi@${VERSION}`],
+		["install", "--no-audit", "--no-fund", "--prefix", pkgRoot, INSTALL_SPEC],
 		{ env: { ...process.env, npm_config_loglevel: "error" } },
 	);
 

@@ -38,6 +38,18 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
+      - name: Build
+        run: npm run build
+      - name: Pack tarball for pre-publish smoke test
+        id: pack
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          TARBALL="$RUNNER_TEMP/codecartographer-pi-$VERSION.tgz"
+          npm pack --pack-destination "$RUNNER_TEMP"
+          test -f "$TARBALL" || { echo "expected $TARBALL after npm pack" >&2; exit 1; }
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+      - name: Smoke test the packed tarball
+        run: node scripts/smoke-mcp.mjs --tarball "${{ steps.pack.outputs.tarball }}"
       - name: Publish to npm (idempotent)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

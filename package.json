@@ -1,6 +1,6 @@
 {
   "name": "codecartographer-pi",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "CodeCartographer packaged for Pi as an extension-driven workflow wrapper.",
   "type": "module",
   "keywords": [
