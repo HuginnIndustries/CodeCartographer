@@ -18,6 +18,7 @@ import {
 	getWorkspaceState,
 	isWithinPath,
 	listSkillNames,
+	loadOrchestratorState,
 	loadYamlFile,
 	normalizeForComparison,
 	normalizeStatus,
@@ -34,6 +35,7 @@ import {
 	updateStatusAtomically,
 	validatePhaseOutput,
 	type WorkspaceState,
+	writeOrchestratorState,
 } from "../../core/index.ts";
 
 const STATUS_WIDGET_ID = "codecarto-widget";
@@ -205,6 +207,23 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			await writeFile(rawStatusPath, `${stringifySimpleYaml(normalizedStatus)}\n`, "utf8");
 
 			lastFeedbackLines = [`Initialized workspace with pipeline: ${getPipelineLabel(selectedPipelinePath)}`];
+
+			// Claim the current Pi session as the orchestrator for this workspace.
+			// /codecarto-next will then spawn each phase as a child session, keeping
+			// the orchestrator's context window clean. The pointer is gitignored
+			// (workflow/.orchestrator.local.yaml) so it's machine-local. If we have
+			// no session file (rare; Pi running headless), skip silently — handlers
+			// fall back to in-place phase prompts.
+			const orchestratorSessionFile = ctx.sessionManager.getSessionFile();
+			const orchestratorSessionId = ctx.sessionManager.getSessionId();
+			if (orchestratorSessionFile && orchestratorSessionId) {
+				await writeOrchestratorState(ctx.cwd, {
+					sessionFile: orchestratorSessionFile,
+					sessionId: orchestratorSessionId,
+				});
+				lastFeedbackLines.push(`Claimed this session as the orchestrator (${orchestratorSessionId.slice(0, 8)}…).`);
+			}
+
 			ctx.ui.notify(`Initialized CodeCartographer (${getPipelineLabel(selectedPipelinePath)})`, "info");
 			await ctx.reload();
 			return;
@@ -239,15 +258,70 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			}
 
 			const prompt = await buildPhasePrompt(state, phase, false);
-			if (ctx.isIdle()) {
-				pi.sendUserMessage(prompt);
-			} else {
-				pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+			const orchestrator = await loadOrchestratorState(ctx.cwd);
+			const currentSessionFile = ctx.sessionManager.getSessionFile();
+
+			// Legacy path: workspace has no orchestrator pointer (created by 0.1.2
+			// or earlier, or Pi has no session file). Queue the prompt in-place
+			// exactly as we did before sub-agent mode existed.
+			if (!orchestrator || !currentSessionFile) {
+				if (ctx.isIdle()) pi.sendUserMessage(prompt);
+				else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+				lastFeedbackLines = [`Queued phase prompt for ${phase.id} (in-place; run /codecarto-init to enable sub-agent mode)`];
+				setUiState(ctx, state, lastFeedbackLines);
+				ctx.ui.notify(`Queued CodeCartographer phase: ${phase.id}`, "info");
+				return;
 			}
 
-			lastFeedbackLines = [`Queued phase prompt for ${phase.id}`];
+			// Orchestrator path: we're the parent. Spawn a child session for the
+			// phase so its tool calls and reasoning land in an isolated context.
+			if (currentSessionFile === orchestrator.sessionFile) {
+				const result = await ctx.newSession({
+					parentSession: orchestrator.sessionFile,
+					withSession: async (childCtx) => {
+						childCtx.sendUserMessage(prompt);
+					},
+				});
+				if (result.cancelled) {
+					ctx.ui.notify("Sub-agent spawn cancelled.", "warning");
+					return;
+				}
+				lastFeedbackLines = [`Spawned ${phase.id} phase in a sub-agent`];
+				setUiState(ctx, state, lastFeedbackLines);
+				ctx.ui.notify(`CodeCartographer phase: ${phase.id} (sub-agent)`, "info");
+				return;
+			}
+
+			// Phase-child path: we're inside a phase sub-agent. Switch the TUI back
+			// to the orchestrator and chain the next phase atomically. The fresh
+			// state read inside withSession reflects any closeouts the child wrote.
+			const switchResult = await ctx.switchSession(orchestrator.sessionFile, {
+				withSession: async (orchestratorCtx) => {
+					const freshState = await getWorkspaceState(orchestratorCtx.cwd);
+					if (!freshState) {
+						orchestratorCtx.ui.notify("Workspace state not found after switch.", "error");
+						return;
+					}
+					const nextPhase = getNextEligiblePhase(freshState);
+					if (!nextPhase) {
+						orchestratorCtx.ui.notify("All CodeCartographer phases are complete.", "info");
+						return;
+					}
+					const nextPrompt = await buildPhasePrompt(freshState, nextPhase, false);
+					await orchestratorCtx.newSession({
+						parentSession: orchestrator.sessionFile,
+						withSession: async (nextChildCtx) => {
+							nextChildCtx.sendUserMessage(nextPrompt);
+						},
+					});
+				},
+			});
+			if (switchResult.cancelled) {
+				ctx.ui.notify("Switch back to orchestrator cancelled.", "warning");
+				return;
+			}
+			lastFeedbackLines = ["Returned to orchestrator and queued next phase as a sub-agent"];
 			setUiState(ctx, state, lastFeedbackLines);
-			ctx.ui.notify(`Queued CodeCartographer phase: ${phase.id}`, "info");
 		},
 	});
 

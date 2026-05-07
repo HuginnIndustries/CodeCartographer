@@ -77,12 +77,23 @@ If you install the whole repository as a Pi package, Pi may still run package in
 What the Pi extension adds:
 
 - `/codecarto-init` to copy `.codecarto/` into the current repository
-- `/codecarto-next` to queue the next eligible phase prompt
+- `/codecarto-next` to queue the next eligible phase prompt (or, in sub-agent mode, spawn the phase as a child session)
 - `/codecarto-status` to show current phase progress
 - `/codecarto-validate` and `/codecarto-complete` for validation-gated status updates
 - a footer/widget showing the active CodeCartographer phase
 - tool interception that blocks `edit` and `write` outside `.codecarto/`
 - direct phase prompts that tell Pi exactly which `.codecarto/findings/<phase>/SKILL.md` file to read, without registering those internal files as global Pi skills
+
+### Orchestrator / phase sub-agent mode
+
+When `/codecarto-init` runs from the Pi extension (0.1.3+), the current Pi session is recorded as the **orchestrator** for that workspace. Each subsequent `/codecarto-next`:
+
+- **Run from the orchestrator** — spawns a child Pi session pre-seeded with the phase prompt. The TUI switches to the child; phase tool calls and reasoning land in the child's context window, leaving the orchestrator clean.
+- **Run from inside a phase child** — switches the TUI back to the orchestrator and chains the next phase as another child, atomically.
+
+The orchestrator pointer is stored in `.codecarto/workflow/.orchestrator.local.yaml` (gitignored — the file holds an absolute path into the user's Pi session storage, which is machine-local). Workspaces created by 0.1.0 – 0.1.2 don't have this file; the extension falls back to in-place phase prompts (the legacy behavior). Re-run `/codecarto-init` to opt in.
+
+The MCP-server path is unaffected — it has no session concept; the host (Claude Desktop / Claude Code / etc.) is the orchestrator.
 
 ## MCP Server
 

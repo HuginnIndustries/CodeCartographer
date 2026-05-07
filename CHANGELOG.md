@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- **Sub-agent orchestrator mode for the Pi extension.** When `/codecarto-init` runs from Pi (0.1.3+), the current Pi session is recorded as the workspace's *orchestrator*; every subsequent `/codecarto-next` spawns the phase as a child session via `ctx.newSession({ parentSession })` instead of injecting the phase prompt into the current conversation. The phase's tool calls, file reads, and reasoning land in the child's own context window — the orchestrator only sees the phase entry/exit, not the work. When `/codecarto-next` is invoked *from inside* a phase child, the handler switches the TUI back to the orchestrator and chains the next phase atomically (single `ctx.switchSession({ withSession })` followed by `newSession`). The orchestrator pointer is written to `.codecarto/workflow/.orchestrator.local.yaml` (gitignored — it holds a machine-local absolute path to the Pi session file). Workspaces created by 0.1.0–0.1.2 have no orchestrator file and fall back to the legacy in-place phase prompt; re-run `/codecarto-init` to opt in. The MCP-server path is unaffected (it has no session concept; the host application is always the orchestrator). 7 unit tests added for the load/write round-trip.
+
 ### Changed
 
 - **Release workflow now smoke-tests the packed tarball before publishing.** `release.yml` now runs `npm pack` after the unit tests, then exercises `scripts/smoke-mcp.mjs --tarball` against the resulting `.tgz` *before* `npm publish`. A failing smoke kills the run before anything reaches the npm registry — preventing the 0.1.1 class of bug where the build pipeline broke template resolution but the existing post-publish smoke (under `workflow_run`) didn't surface the failure visibly. Removed the `workflow_run: ['Release']` trigger from `smoke.yml`; the daily cron + `workflow_dispatch` paths stay in place to catch registry-side regressions caused by transitive-dep updates after publish.

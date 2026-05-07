@@ -9,3 +9,4 @@ export * from "./status.ts";
 export * from "./pipeline.ts";
 export * from "./prompts.ts";
 export * from "./workspace.ts";
+export * from "./orchestrator.ts";
