@@ -6,15 +6,11 @@ on:
       version:
         description: 'codecartographer-pi version to smoke-test (default: package.json#version)'
         required: false
-  workflow_run:
-    workflows: ['Release']
-    types: [completed]
   schedule:
     - cron: '17 6 * * *'
 
 jobs:
   smoke:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
