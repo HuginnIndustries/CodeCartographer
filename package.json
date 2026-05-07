@@ -39,7 +39,7 @@
     "smoke": "node scripts/smoke-mcp.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "*"
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
