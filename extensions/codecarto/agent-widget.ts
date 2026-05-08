@@ -209,7 +209,7 @@ class CodecartoAgentsWidget {
 
 function formatRunningStats(a: PhaseActivity): string {
 	const parts: string[] = [];
-	if (a.turnCount > 0) parts.push(`⟳${a.turnCount}`);
+	if (a.turnCount > 0) parts.push(`⟳ ${a.turnCount}`);
 	if (a.toolUses > 0) parts.push(`${a.toolUses} tool use${a.toolUses === 1 ? "" : "s"}`);
 	const tokens = a.lifetimeUsage.input + a.lifetimeUsage.output;
 	if (tokens > 0) parts.push(formatTokens(tokens));
@@ -219,7 +219,7 @@ function formatRunningStats(a: PhaseActivity): string {
 
 function formatFinishedStats(a: PhaseActivity): string {
 	const parts: string[] = [];
-	if (a.turnCount > 0) parts.push(`⟳${a.turnCount}`);
+	if (a.turnCount > 0) parts.push(`⟳ ${a.turnCount}`);
 	if (a.toolUses > 0) parts.push(`${a.toolUses} tool use${a.toolUses === 1 ? "" : "s"}`);
 	const tokens = a.lifetimeUsage.input + a.lifetimeUsage.output;
 	if (tokens > 0) parts.push(formatTokens(tokens));

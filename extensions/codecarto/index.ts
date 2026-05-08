@@ -306,6 +306,11 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					}
 				})
 				.finally(() => {
+					// Sub-agent may have written findings, owner_notes, or carry-forward
+					// items into status.yaml. Refresh the main status widget so the
+					// "Open questions / Carry-forward / Next" lines reflect the new
+					// state without waiting for the user to run /codecarto-status.
+					void refreshWorkspaceUi(ctx);
 					// Linger 30s in M1 so /codecarto-status can show that the phase ran;
 					// M2's widget owns the proper "linger N turns" lifecycle.
 					setTimeout(() => clearPhase(phase.id), 30_000);
