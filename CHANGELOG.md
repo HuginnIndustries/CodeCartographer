@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-08
+
+### Added
+
+- **Opt-in LLM-steered seed prompt for `/codecarto-next`.** When enabled, the orchestrator's LLM is run as a one-shot rewriter that reads the previous phase's closeout + the next phase's stock prompt and produces a customized seed prompt that names the specific findings, open questions, and carry-forward items the next phase should pay attention to. Off by default. The user controls the trade-off (extra orchestrator-side tokens vs. context-aware customization) per workspace and per invocation.
+- **Workspace config at `.codecarto/workflow/config.yaml`.** New file shipped in the packaged template with `orchestrator.llm_steer_next_phase: false`. Loaded by `core/orchestrator-config.ts` (`loadCodecartoConfig`); missing file or unrecognized keys fall back to defaults, so existing workspaces keep working unchanged. Malformed YAML is non-fatal — falls back to defaults rather than blocking the command.
+- **Per-invocation flag overrides** for `/codecarto-next`:
+  - `/codecarto-next --llm-steer` — force on for this run regardless of config.
+  - `/codecarto-next --no-llm-steer` — force off for this run.
+  - Unknown flags surface a clear error rather than being silently ignored.
+  - Tab-completion: the slash-command argument completer now suggests `--llm-steer` and `--no-llm-steer`.
+- **`extensions/codecarto/agent-rewriter.ts` (~140 LOC).** One-shot in-memory `AgentSession` with `tools: []` (no extensions, no skills, no prompt templates, no themes, no context files) on the orchestrator's model. Reads the latest closeout matching the previous-phase ID under `.codecarto/closeouts/` (truncates to 8 KB before passing to the rewriter to keep the cost bounded) and asks the rewriter to emit a customized seed prompt — Markdown only, no commentary. On any failure (no prior phase, missing closeout, rewriter session error, empty output) returns the stock prompt with a `skipReason` and a `warning` notification — the command never aborts because of rewriter trouble.
+- **`extensions/codecarto/next-flags.ts`.** Small parser for `/codecarto-next` args; pure, exhaustively tested. Last-flag-wins resolution lets the user safely chain overrides.
+- **12 new unit tests** — 6 in `tests/orchestrator-config.test.mjs` (tmp-dir round-trips for missing/present/malformed YAML, plus pure `mergeConfig` shape checks), 6 in `tests/next-flags.test.mjs` (override matrix, last-wins, unknown collection, whitespace tolerance). Test count: 57 → 69.
+
+### Notes
+
+- The rewriter is **opt-in by design** — Option B from the orchestrator-visibility plan. Option A (always-on phase-completion summary injection, no LLM call) ships separately and is independently toggleable. Run them together for full visibility + steered prompts; run only A for the cheap visibility win; run only B if you want steering without the summary.
+- The rewriter prompt explicitly forbids inventing findings the closeout doesn't state and forbids changing the next phase's structure or completion criteria — guardrails against the "LLM rewriter wanders off" failure mode.
+- Closeout truncation (8 KB) was chosen by inspection of the closeout-template stub — it leaves headroom for one or two long phase outputs, well under typical orchestrator context windows. Tunable in `agent-rewriter.ts` if needed.
+- The new config schema is intentionally narrow (one knob). Future toggles should slot in alongside `llm_steer_next_phase` in the same `orchestrator:` block; `mergeConfig`'s "default-then-override" pattern means adding a key requires no migration.
+
 ## [0.4.0] — 2026-05-08
 
 ### Added
