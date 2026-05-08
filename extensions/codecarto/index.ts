@@ -2,6 +2,10 @@ import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { runPhase } from "./agent-runner.ts";
+import { clearPhase, finishPhase, getPhaseActivity, startPhase } from "./agent-state.ts";
+import { disposeAgentsWidget, getAgentsWidget } from "./agent-widget.ts";
+
 import {
 	buildPhasePrompt,
 	buildSkillPrompt,
@@ -18,7 +22,6 @@ import {
 	getWorkspaceState,
 	isWithinPath,
 	listSkillNames,
-	loadOrchestratorState,
 	loadYamlFile,
 	normalizeForComparison,
 	normalizeStatus,
@@ -35,7 +38,6 @@ import {
 	updateStatusAtomically,
 	validatePhaseOutput,
 	type WorkspaceState,
-	writeOrchestratorState,
 } from "../../core/index.ts";
 
 const STATUS_WIDGET_ID = "codecarto-widget";
@@ -119,6 +121,12 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		const state = await refreshWorkspaceUi(ctx);
 		if (!state) return;
 		pi.setActiveTools(SAFE_TOOL_NAMES);
+	});
+
+	pi.on("session_shutdown", async () => {
+		// Tear down the persistent agents widget so we don't leak the timer
+		// or render against a torn-down UI context after a session swap.
+		disposeAgentsWidget();
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -207,23 +215,6 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			await writeFile(rawStatusPath, `${stringifySimpleYaml(normalizedStatus)}\n`, "utf8");
 
 			lastFeedbackLines = [`Initialized workspace with pipeline: ${getPipelineLabel(selectedPipelinePath)}`];
-
-			// Claim the current Pi session as the orchestrator for this workspace.
-			// /codecarto-next will then spawn each phase as a child session, keeping
-			// the orchestrator's context window clean. The pointer is gitignored
-			// (workflow/.orchestrator.local.yaml) so it's machine-local. If we have
-			// no session file (rare; Pi running headless), skip silently — handlers
-			// fall back to in-place phase prompts.
-			const orchestratorSessionFile = ctx.sessionManager.getSessionFile();
-			const orchestratorSessionId = ctx.sessionManager.getSessionId();
-			if (orchestratorSessionFile && orchestratorSessionId) {
-				await writeOrchestratorState(ctx.cwd, {
-					sessionFile: orchestratorSessionFile,
-					sessionId: orchestratorSessionId,
-				});
-				lastFeedbackLines.push(`Claimed this session as the orchestrator (${orchestratorSessionId.slice(0, 8)}…).`);
-			}
-
 			ctx.ui.notify(`Initialized CodeCartographer (${getPipelineLabel(selectedPipelinePath)})`, "info");
 			await ctx.reload();
 			return;
@@ -244,7 +235,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("codecarto-next", {
-		description: "Queue the next eligible CodeCartographer phase prompt",
+		description: "Run the next eligible CodeCartographer phase as a sub-agent",
 		handler: async (_args, ctx) => {
 			const state = await ensureWorkspaceState(ctx);
 			if (!state) return;
@@ -257,73 +248,68 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
+			// Reject re-entry: don't spawn a duplicate runner for a phase that's
+			// already in flight from a previous /codecarto-next invocation.
+			const existing = getPhaseActivity(phase.id);
+			if (existing && existing.status === "running") {
+				ctx.ui.notify(`Phase ${phase.id} is already running.`, "warning");
+				return;
+			}
+
 			const prompt = await buildPhasePrompt(state, phase, false);
-			const orchestrator = await loadOrchestratorState(ctx.cwd);
-			const currentSessionFile = ctx.sessionManager.getSessionFile();
-
-			// Legacy path: workspace has no orchestrator pointer (created by 0.1.2
-			// or earlier, or Pi has no session file). Queue the prompt in-place
-			// exactly as we did before sub-agent mode existed.
-			if (!orchestrator || !currentSessionFile) {
-				if (ctx.isIdle()) pi.sendUserMessage(prompt);
-				else pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-				lastFeedbackLines = [`Queued phase prompt for ${phase.id} (in-place; run /codecarto-init to enable sub-agent mode)`];
-				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify(`Queued CodeCartographer phase: ${phase.id}`, "info");
-				return;
-			}
-
-			// Orchestrator path: we're the parent. Spawn a child session for the
-			// phase so its tool calls and reasoning land in an isolated context.
-			//
-			// SDK contract: after `ctx.newSession()` resolves, `ctx` is invalidated
-			// — touching `ctx.ui` or `ctx.sessionManager` from the outer scope
-			// raises "extension ctx is stale after session replacement". So all
-			// outer-session work (status line, widget) has to happen BEFORE the
-			// call, and any work that needs a fresh ctx happens INSIDE the
-			// `withSession` callback against the new session's ctx.
-			if (currentSessionFile === orchestrator.sessionFile) {
-				lastFeedbackLines = [`Spawned ${phase.id} phase in a sub-agent`];
-				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify(`CodeCartographer phase: ${phase.id} (sub-agent)`, "info");
-				await ctx.newSession({
-					parentSession: orchestrator.sessionFile,
-					withSession: async (childCtx) => {
-						childCtx.sendUserMessage(prompt);
-					},
-				});
-				return;
-			}
-
-			// Phase-child path: switch the TUI back to the orchestrator and chain
-			// the next phase atomically. Same staleness rule: pre-switch work uses
-			// `ctx`; post-switch work uses the fresh `orchestratorCtx` passed to
-			// `withSession`. Inside that callback the inner `newSession()` again
-			// invalidates `orchestratorCtx`, so the inner spawn must be the last
-			// thing the callback does.
-			lastFeedbackLines = ["Returning to orchestrator and queuing next phase as a sub-agent"];
+			const activity = startPhase(phase.id);
+			lastFeedbackLines = [`Running ${phase.id} phase as sub-agent`];
 			setUiState(ctx, state, lastFeedbackLines);
-			await ctx.switchSession(orchestrator.sessionFile, {
-				withSession: async (orchestratorCtx) => {
-					const freshState = await getWorkspaceState(orchestratorCtx.cwd);
-					if (!freshState) {
-						orchestratorCtx.ui.notify("Workspace state not found after switch.", "error");
-						return;
-					}
-					const nextPhase = getNextEligiblePhase(freshState);
-					if (!nextPhase) {
-						orchestratorCtx.ui.notify("All CodeCartographer phases are complete.", "info");
-						return;
-					}
-					const nextPrompt = await buildPhasePrompt(freshState, nextPhase, false);
-					await orchestratorCtx.newSession({
-						parentSession: orchestrator.sessionFile,
-						withSession: async (nextChildCtx) => {
-							nextChildCtx.sendUserMessage(nextPrompt);
-						},
-					});
+			ctx.ui.notify(`CodeCartographer phase: ${phase.id} (sub-agent running)`, "info");
+
+			// Attach the persistent "Agents" widget so the user can watch the
+			// phase's tool/turn/token counts live above the editor while the
+			// orchestrator's TUI stays responsive.
+			getAgentsWidget().attach(ctx.ui);
+
+			// Fire-and-forget: spawn the phase runner asynchronously so the
+			// orchestrator's TUI stays responsive. The runner mutates the shared
+			// agent-state map from event callbacks; M2 will read that map from a
+			// persistent widget. For M1 we just notify on completion.
+			void runPhase(
+				ctx,
+				prompt,
+				{
+					onSessionCreated: (session) => { activity.session = session; },
+					onToolStart: (id, name) => { activity.activeTools.set(id, name); activity.toolUses++; },
+					onToolEnd: (id) => { activity.activeTools.delete(id); },
+					onTextDelta: (_delta, fullText) => { activity.responseText = fullText; },
+					onTurnEnd: (turnCount) => { activity.turnCount = turnCount; },
+					onMessageEnd: (usage) => {
+						activity.lifetimeUsage.input += usage.input;
+						activity.lifetimeUsage.output += usage.output;
+						activity.lifetimeUsage.cacheWrite += usage.cacheWrite;
+					},
 				},
-			});
+			)
+				.then((result) => {
+					finishPhase(phase.id, { status: result.aborted ? "aborted" : "completed" });
+					if (ctx.hasUI) {
+						ctx.ui.notify(
+							result.aborted
+								? `Phase ${phase.id} aborted.`
+								: `Phase ${phase.id} sub-agent finished (${result.toolUses} tool uses, ${result.turnCount} turns).`,
+							result.aborted ? "warning" : "info",
+						);
+					}
+				})
+				.catch((err: unknown) => {
+					const message = err instanceof Error ? err.message : String(err);
+					finishPhase(phase.id, { status: "error", error: message });
+					if (ctx.hasUI) {
+						ctx.ui.notify(`Phase ${phase.id} sub-agent failed: ${message}`, "error");
+					}
+				})
+				.finally(() => {
+					// Linger 30s in M1 so /codecarto-status can show that the phase ran;
+					// M2's widget owns the proper "linger N turns" lifecycle.
+					setTimeout(() => clearPhase(phase.id), 30_000);
+				});
 		},
 	});
 
