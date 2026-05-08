@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-08
+
+### Added
+
+- **Phase-completion summary is now injected into the orchestrator's session.** When `/codecarto-next` runs a phase sub-agent to completion (or it aborts, or it errors), the extension calls `pi.sendMessage({ customType: "codecarto-phase-summary", display: true })` with a Markdown summary block. The block becomes a `CustomMessageEntry` in the orchestrator's session: it renders in the TUI scrollback so the user sees `Phase X finished. ⟳ 5 · 12 tool uses · 2.3k tokens · 1m30s`, and on the user's next message it shows up in the orchestrator LLM's context as a prior user message. No `triggerTurn` — the orchestrator does **not** auto-respond, which keeps the user fully in control of when the next action happens. Closes the gap between "phase ran" and "user can ask the orchestrator about it" without forcing a closeout-file read on every follow-up question.
+- **`extensions/codecarto/agent-summary.ts` (~95 LOC).** Pure formatter — no I/O, no session manipulation. Owns the `buildPhaseSummary()` helper. Three header variants (finished / aborted / failed); error path includes the error message and skips the excerpt/trailer; completed path includes the response excerpt (truncated to 2000 chars with a "transcript truncated; resume the phase session" tail), the session file path with a `/resume` hint, and validate/complete next-step pointers. Sessions without a recorded `sessionFile` (e.g. resumed before 0.3.0's persistent-session change lands) just drop the transcript line and keep the rest.
+- **7 new unit tests in `tests/agent-summary.test.mjs`** covering the header variants, the truncation path, zero-activity formatting, missing session file, and the k/M token threshold formatting. Test count: 57 → 64.
+
+### Notes
+
+- This is **Option A** from the orchestrator-visibility plan — always on, no LLM calls (so no extra orchestrator-side tokens), works regardless of whether the phase session is in-memory or persisted.
+- Option B (opt-in LLM-steered customization of the next phase's seed prompt) is a separate change set, expected next.
+- The `display: true` rendering uses Pi's default custom-message styling. Registering a dedicated `pi.registerMessageRenderer("codecarto-phase-summary", ...)` for codecarto-themed rendering is intentionally deferred — the default already reads cleanly and the TUI affordance can be tuned without an API change.
+
 ## [0.3.0] — 2026-05-08
 
 ### Changed (minor bump per pre-1.0 convention)
