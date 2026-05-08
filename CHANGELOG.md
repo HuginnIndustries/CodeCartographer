@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-08
+
+### Changed (minor bump per pre-1.0 convention)
+
+- **Phase sub-agents now persist to the same Pi session directory the orchestrator uses.** `extensions/codecarto/agent-runner.ts` swaps `SessionManager.inMemory(cwd)` for `SessionManager.create(cwd)`, which writes a JSONL file under `~/.pi/agent/sessions/<encoded-cwd>/`. Pi's `/resume`, `/tree`, and `/export` already read that directory, so phase transcripts become first-class browsable artifacts: open the picker and resume into a previous phase, view its tool-call tree, export to HTML, etc. — no codecarto-side plumbing needed. In-memory sessions left no trace once `/codecarto-next` returned, so the rich event stream rendered in the live widget vanished the moment the spinner aged out; this closes that gap.
+- **Phase sessions are tagged for the picker.** Each spawn calls `sessionManager.appendSessionInfo("CodeCartographer phase: <id>")` so the session shows up in `/resume` with a meaningful name (rather than the default first-message preview), and rewrites the header with `parentSession: <orchestrator's session file>` so Pi's `SessionInfo.parentSessionPath` exposes provenance to any UI that wants to render lineage.
+- **`PhaseRunResult.sessionFile`** added — the absolute path to the on-disk session JSONL. Useful for follow-on tooling (the planned `/codecarto-usage` command, downstream session viewers) that wants to point at a phase's transcript without rebuilding the path from `cwd`.
+- **`runPhase()` signature** gained a `PhaseRunOptions` argument (currently `{ sessionName?: string }`) between callbacks and signal. The single internal caller (`/codecarto-next`) passes the phase ID-derived name; all other args remain backward compatible.
+
+### Notes
+
+- The session directory is shared between the orchestrator's TUI session and every phase sub-agent run — by design, so `/resume` lists them together. The `parentSession` header makes the relationship discoverable; the explicit `appendSessionInfo` name keeps them visually distinct from regular orchestrator sessions in the picker.
+- Phase sub-agent session files are stored in `~/.pi/agent/sessions/`, **not** inside the project's `.codecarto/`. Nothing new lands in the repo's gitignore; existing Pi cleanup (the user's session-directory hygiene practices, if any) applies unchanged.
+- 57/57 tests pass — no schema changes touch the on-disk workspace state.
+
 ## [0.2.1] — 2026-05-08
 
 ### Fixed

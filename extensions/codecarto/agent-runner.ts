@@ -35,12 +35,23 @@ export interface PhaseRunCallbacks {
 	onMessageEnd?: (usage: { input: number; output: number; cacheWrite: number }) => void;
 }
 
+export interface PhaseRunOptions {
+	/** Display name written via appendSessionInfo so the session shows up in
+	 *  /resume's picker as e.g. "CodeCartographer phase: blueprint". Pi reads
+	 *  it via SessionManager.getSessionName(). */
+	sessionName?: string;
+}
+
 export interface PhaseRunResult {
 	session: AgentSession;
 	responseText: string;
 	toolUses: number;
 	turnCount: number;
 	aborted: boolean;
+	/** Path to the on-disk session file (under ~/.pi/agent/sessions/<encoded-cwd>/).
+	 *  Stable across the run; useful for /codecarto-usage and any future tooling
+	 *  that wants to point at the phase's transcript. */
+	sessionFile: string | undefined;
 }
 
 /**
@@ -48,11 +59,19 @@ export interface PhaseRunResult {
  * function blocks until the phase completes (or aborts via signal). The
  * orchestrator's TUI stays active throughout — only the phase's own context
  * window holds the tool calls and reasoning.
+ *
+ * The phase session is **persisted** to the default Pi session directory
+ * (`~/.pi/agent/sessions/<encoded-cwd>/`), the same directory the orchestrator
+ * uses, so Pi's `/resume`, `/tree`, and `/export` see phase transcripts as
+ * first-class sessions. They're tagged via `appendSessionInfo` (display name)
+ * and `parentSession` (the orchestrator's session file path) so the picker
+ * shows lineage.
  */
 export async function runPhase(
 	ctx: ExtensionContext,
 	prompt: string,
 	callbacks: PhaseRunCallbacks = {},
+	options: PhaseRunOptions = {},
 	signal?: AbortSignal,
 ): Promise<PhaseRunResult> {
 	const cwd = ctx.cwd;
@@ -72,10 +91,27 @@ export async function runPhase(
 	});
 	await loader.reload();
 
+	// File-backed session in the same directory the orchestrator's TUI uses.
+	// Pi's /resume, /tree, and /export read this directory, so phase
+	// transcripts become first-class browsable artifacts. Tag with
+	// parentSession (orchestrator's file) for lineage and a session_info
+	// display name so the picker can identify them at a glance.
+	const sessionManager = SessionManager.create(cwd);
+	const orchestratorSessionFile = ctx.sessionManager.getSessionFile();
+	if (orchestratorSessionFile) {
+		// SessionManager.create() calls newSession() with no options in its
+		// constructor; rewrite the header to attach the parent before the
+		// session ever flushes to disk.
+		sessionManager.newSession({ parentSession: orchestratorSessionFile });
+	}
+	if (options.sessionName) {
+		sessionManager.appendSessionInfo(options.sessionName);
+	}
+
 	const { session } = await createAgentSession({
 		cwd,
 		agentDir,
-		sessionManager: SessionManager.inMemory(cwd),
+		sessionManager,
 		settingsManager: SettingsManager.create(cwd, agentDir),
 		modelRegistry: ctx.modelRegistry,
 		model: ctx.model,
@@ -160,6 +196,7 @@ export async function runPhase(
 		toolUses,
 		turnCount,
 		aborted,
+		sessionFile: sessionManager.getSessionFile(),
 	};
 }
 

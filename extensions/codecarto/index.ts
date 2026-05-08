@@ -286,6 +286,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						activity.lifetimeUsage.cacheWrite += usage.cacheWrite;
 					},
 				},
+				{ sessionName: `CodeCartographer phase: ${phase.id}` },
 			)
 				.then((result) => {
 					finishPhase(phase.id, { status: result.aborted ? "aborted" : "completed" });
