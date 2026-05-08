@@ -3,9 +3,11 @@ import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { runPhase } from "./agent-runner.ts";
+import { rewritePhasePrompt } from "./agent-rewriter.ts";
 import { clearPhase, finishPhase, getPhaseActivity, startPhase } from "./agent-state.ts";
 import { buildPhaseSummary } from "./agent-summary.ts";
 import { disposeAgentsWidget, getAgentsWidget } from "./agent-widget.ts";
+import { parseNextFlags } from "./next-flags.ts";
 
 import {
 	buildPhasePrompt,
@@ -23,6 +25,7 @@ import {
 	getWorkspaceState,
 	isWithinPath,
 	listSkillNames,
+	loadCodecartoConfig,
 	loadYamlFile,
 	normalizeForComparison,
 	normalizeStatus,
@@ -236,8 +239,20 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("codecarto-next", {
-		description: "Run the next eligible CodeCartographer phase as a sub-agent",
-		handler: async (_args, ctx) => {
+		description: "Run the next eligible CodeCartographer phase as a sub-agent. Flags: --llm-steer / --no-llm-steer",
+		getArgumentCompletions: (prefix) => {
+			const items = ["--llm-steer", "--no-llm-steer"]
+				.filter((value) => value.startsWith(prefix))
+				.map((value) => ({ value, label: value }));
+			return items.length > 0 ? items : null;
+		},
+		handler: async (args, ctx) => {
+			const flags = parseNextFlags(args);
+			if (flags.unknown.length > 0) {
+				ctx.ui.notify(`Unknown /codecarto-next flag: ${flags.unknown.join(" ")}`, "error");
+				return;
+			}
+
 			const state = await ensureWorkspaceState(ctx);
 			if (!state) return;
 
@@ -257,7 +272,21 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const prompt = await buildPhasePrompt(state, phase, false);
+			const config = await loadCodecartoConfig(state.workspaceDir);
+			const llmSteerEnabled = flags.llmSteerOverride ?? config.orchestrator.llm_steer_next_phase;
+
+			let prompt = await buildPhasePrompt(state, phase, false);
+			if (llmSteerEnabled) {
+				ctx.ui.notify(`Customizing ${phase.id} prompt via LLM rewriter…`, "info");
+				const rewrite = await rewritePhasePrompt({ ctx, state, originalPrompt: prompt, nextPhaseId: phase.id });
+				if (rewrite.used) {
+					prompt = rewrite.prompt;
+					ctx.ui.notify(`LLM rewriter customized ${phase.id} seed prompt.`, "info");
+				} else {
+					ctx.ui.notify(`LLM rewriter skipped (${rewrite.skipReason}); using stock prompt.`, "warning");
+				}
+			}
+
 			const activity = startPhase(phase.id);
 			lastFeedbackLines = [`Running ${phase.id} phase as sub-agent`];
 			setUiState(ctx, state, lastFeedbackLines);

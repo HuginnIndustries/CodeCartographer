@@ -1,0 +1,13 @@
+# CodeCartographer workspace-level orchestrator configuration. Optional.
+# Missing keys fall back to defaults defined in core/orchestrator-config.ts.
+
+orchestrator:
+  # When true, /codecarto-next runs the orchestrator's LLM as a one-shot
+  # rewriter: it reads the previous phase's closeout + the next phase's
+  # template and produces a customized seed prompt for the sub-agent.
+  # Adds orchestrator-side tokens; off by default.
+  #
+  # Per-invocation overrides:
+  #   /codecarto-next --llm-steer       -> force on for this run
+  #   /codecarto-next --no-llm-steer    -> force off for this run
+  llm_steer_next_phase: false
