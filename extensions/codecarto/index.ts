@@ -10,12 +10,15 @@ import { disposeAgentsWidget, getAgentsWidget } from "./agent-widget.ts";
 import { parseNextFlags } from "./next-flags.ts";
 
 import {
+	appendUsageRun,
 	buildPhasePrompt,
 	buildSkillPrompt,
 	buildThreadLogEntry,
 	buildValidationSummary,
 	canonicalPath,
 	closeoutFileName,
+	computePerPhaseTotals,
+	computeTotals,
 	createEmptyStatus,
 	dateOnly,
 	DEFAULT_PIPELINE_PATH,
@@ -26,6 +29,7 @@ import {
 	isWithinPath,
 	listSkillNames,
 	loadCodecartoConfig,
+	loadUsage,
 	loadYamlFile,
 	normalizeForComparison,
 	normalizeStatus,
@@ -40,6 +44,7 @@ import {
 	stringifySimpleYaml,
 	uniqueStrings,
 	updateStatusAtomically,
+	type UsageRunStatus,
 	validatePhaseOutput,
 	type WorkspaceState,
 } from "../../core/index.ts";
@@ -47,6 +52,46 @@ import {
 const STATUS_WIDGET_ID = "codecarto-widget";
 const STATUS_LINE_ID = "codecarto-status";
 const SAFE_TOOL_NAMES = ["read", "grep", "find", "ls", "edit", "write"];
+
+async function recordUsage(
+	workspaceDir: string,
+	phaseId: string,
+	status: UsageRunStatus,
+	activity: { startedAt: number; completedAt?: number; turnCount: number; toolUses: number; lifetimeUsage: { input: number; output: number; cacheWrite: number } },
+): Promise<void> {
+	try {
+		await appendUsageRun(workspaceDir, {
+			timestamp: new Date().toISOString(),
+			phase: phaseId,
+			status,
+			turn_count: activity.turnCount,
+			tool_uses: activity.toolUses,
+			duration_ms: (activity.completedAt ?? Date.now()) - activity.startedAt,
+			tokens: {
+				input: activity.lifetimeUsage.input,
+				output: activity.lifetimeUsage.output,
+				cache_write: activity.lifetimeUsage.cacheWrite,
+			},
+		});
+	} catch {
+		// Local usage logging is best-effort. A full disk or permission
+		// failure shouldn't surface as a phase error to the user.
+	}
+}
+
+function formatUsageTokens(count: number): string {
+	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(2)}M`;
+	if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
+	return `${count}`;
+}
+
+function formatUsageDuration(ms: number): string {
+	if (ms < 1000) return `${ms}ms`;
+	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+	const minutes = Math.floor(ms / 60_000);
+	const seconds = Math.floor((ms % 60_000) / 1000);
+	return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
+}
 
 function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): string[] {
 	const nextPhase = getNextEligiblePhase(state);
@@ -319,7 +364,8 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				{ sessionName: `CodeCartographer phase: ${phase.id}` },
 			)
 				.then((result) => {
-					finishPhase(phase.id, { status: result.aborted ? "aborted" : "completed" });
+					const status: UsageRunStatus = result.aborted ? "aborted" : "completed";
+					finishPhase(phase.id, { status });
 					if (ctx.hasUI) {
 						ctx.ui.notify(
 							result.aborted
@@ -346,6 +392,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						}),
 						display: true,
 					});
+					void recordUsage(state.workspaceDir, phase.id, status, activity);
 				})
 				.catch((err: unknown) => {
 					const message = err instanceof Error ? err.message : String(err);
@@ -367,6 +414,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						}),
 						display: true,
 					});
+					void recordUsage(state.workspaceDir, phase.id, "error", activity);
 				})
 				.finally(() => {
 					// Sub-agent may have written findings, owner_notes, or carry-forward
@@ -571,6 +619,42 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			lastFeedbackLines = [`Queued post-pipeline skill: ${skillName}`];
 			setUiState(ctx, state, lastFeedbackLines);
 			ctx.ui.notify(`Queued CodeCartographer skill: ${skillName}`, "info");
+		},
+	});
+
+	pi.registerCommand("codecarto-usage", {
+		description: "Show cumulative + per-phase token usage from local phase runs",
+		handler: async (_args, ctx) => {
+			const state = await ensureWorkspaceState(ctx);
+			if (!state) return;
+
+			const usage = await loadUsage(state.workspaceDir);
+			if (usage.runs.length === 0) {
+				lastFeedbackLines = ["No phase runs recorded yet."];
+				setUiState(ctx, state, lastFeedbackLines);
+				ctx.ui.notify("No phase runs recorded yet.", "info");
+				return;
+			}
+
+			const totals = computeTotals(usage);
+			const perPhase = computePerPhaseTotals(usage);
+
+			const lines: string[] = [];
+			lines.push(`Total runs: ${totals.runs}`);
+			lines.push(`Total tokens: ${formatUsageTokens(totals.tokens.input)} in · ${formatUsageTokens(totals.tokens.output)} out · ${formatUsageTokens(totals.tokens.cache_write)} cache-write`);
+			lines.push(`Total duration: ${formatUsageDuration(totals.duration_ms)} · ${totals.tool_uses} tool uses`);
+			lines.push("");
+			lines.push("Per-phase totals:");
+			for (const [phaseId, t] of perPhase) {
+				const tokensTotal = t.tokens.input + t.tokens.output;
+				lines.push(
+					`  ${phaseId}: ${t.runs} run${t.runs === 1 ? "" : "s"} · ${formatUsageTokens(tokensTotal)} tokens · ${t.tool_uses} tool uses · ${formatUsageDuration(t.duration_ms)}`,
+				);
+			}
+
+			lastFeedbackLines = lines;
+			setUiState(ctx, state, lastFeedbackLines);
+			ctx.ui.notify(`CodeCartographer usage: ${totals.runs} run${totals.runs === 1 ? "" : "s"}, ${formatUsageTokens(totals.tokens.input + totals.tokens.output)} tokens total`, "info");
 		},
 	});
 }

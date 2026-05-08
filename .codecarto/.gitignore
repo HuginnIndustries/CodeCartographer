@@ -23,6 +23,12 @@ scratch/*
 # committed.
 workflow/.orchestrator.local.yaml
 
+# Phase-run usage log (machine-local, written by /codecarto-next on each
+# phase completion; consumed by /codecarto-usage). Holds timestamps, token
+# counts, and absolute Pi session-file paths; useless to share, includes
+# local cwd metadata, must never be committed.
+workflow/.usage.local.yaml
+
 # OS artifacts
 .DS_Store
 Thumbs.db

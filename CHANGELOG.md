@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-08
+
+### Added
+
+- **Per-phase usage tracking.** `/codecarto-next` now appends a record to `.codecarto/workflow/.usage.local.yaml` every time a phase sub-agent finishes (completed, aborted, or errored). Each record holds the timestamp, phase ID, status, turn count, tool-use count, duration, and full token breakdown (`input` / `output` / `cache_write`). Append failures are swallowed — local logging is best-effort and never escalates to a phase error the user sees.
+- **`/codecarto-usage` command.** Reads the local usage log and renders cumulative + per-phase totals to the status widget and an info notification: total runs, total tokens (input + output + cache-write, k/M-formatted), total duration, total tool uses, and a per-phase breakdown sorted by appearance order. On a fresh workspace with no recorded runs, surfaces an explicit "No phase runs recorded yet." message.
+- **`core/usage.ts`** (~115 LOC). `loadUsage`, `appendUsageRun`, `computeTotals`, `computePerPhaseTotals`. Schema is intentionally narrow (`{ version, runs: UsageRun[] }`); totals are computed on read so the file never holds a number that contradicts the runs. Malformed YAML and entries missing required fields fall back to the empty case rather than blocking the command. Atomic-rename write (`.tmp` + `rename`) so a crash mid-write can't leave a partial file.
+- **Template `.gitignore` entry** for `workflow/.usage.local.yaml` — the file holds absolute Pi session paths and machine-local timestamps; useless to share, easy to leak by accident.
+- **6 new unit tests in `tests/usage.test.mjs`** covering tmp-dir round-trips for missing/present/malformed YAML, totals math, per-phase grouping, and entry validation. The Pi-extension command-registration invariant test in `tests/default-pipeline.test.mjs` was extended to require `usage` alongside the other 7 commands. Test count: 57 → **63**.
+
+### Notes
+
+- This is the **observability** half of the orchestrator-experience plan. Pairs naturally with the phase-summary injection (Option A) and opt-in LLM steering (Option B), but doesn't depend on either — the usage log is populated regardless of what other features are enabled.
+- The MCP server is unchanged. The MCP path returns prompt text for the host to dispatch and never runs sub-agents itself, so there's no per-phase usage to track on that side. `/codecarto-usage` is a Pi-only command.
+- The schema carries a `version: 1` field. If the shape grows breaking later, bump the version and have `loadUsage` migrate or reject. For now everything is forward-compatible: extra keys are ignored, missing optional keys default to zero.
+- "Best-effort" really means best-effort — a full disk, permission denied, or read-only filesystem will silently lose the record. The orchestrator's own model-side billing and Pi's own session log remain the canonical accounting; this file is a convenience.
+
 ## [0.5.0] — 2026-05-08
 
 ### Added
@@ -61,6 +78,7 @@ All notable changes to this project are documented here. The format is based on 
 
 - **Agents-widget turn count now renders with a space** (`⟳ 5` instead of `⟳5`). The unspaced glyph collided with the digits on terminals whose font mapped `⟳` to a slightly wider cell than nominal, making the count hard to read at a glance.
 - **Main status widget now refreshes when a phase sub-agent finishes.** The "Open questions / Carry-forward / Next" lines were stale until the user manually ran `/codecarto-status` (or any other command that re-rendered the widget), even when the sub-agent had written new findings, owner_notes, or carry-forward items into `status.yaml`. `/codecarto-next`'s `.finally()` now calls `refreshWorkspaceUi(ctx)` after the phase resolves, so the orchestrator's status widget tracks reality without user action. The `agent_end` handler already covered the orchestrator's own turns; this closes the gap for phase sub-agents whose lifecycle is independent of `agent_end`.
+
 
 ## [0.2.0] — 2026-05-07
 
