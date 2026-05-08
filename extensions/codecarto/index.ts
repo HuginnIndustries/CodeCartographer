@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 
 import { runPhase } from "./agent-runner.ts";
 import { clearPhase, finishPhase, getPhaseActivity, startPhase } from "./agent-state.ts";
+import { buildPhaseSummary } from "./agent-summary.ts";
 import { disposeAgentsWidget, getAgentsWidget } from "./agent-widget.ts";
 
 import {
@@ -298,6 +299,24 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 							result.aborted ? "warning" : "info",
 						);
 					}
+					// Inject a CustomMessageEntry into the orchestrator's session so
+					// the user sees a closeout summary in the TUI scrollback and the
+					// orchestrator's LLM picks up the phase result as context on the
+					// next turn. display:true renders in the TUI; no triggerTurn so
+					// the LLM doesn't auto-respond — the user remains in control.
+					pi.sendMessage({
+						customType: "codecarto-phase-summary",
+						content: buildPhaseSummary({
+							phaseId: phase.id,
+							status: result.aborted ? "aborted" : "completed",
+							turnCount: activity.turnCount,
+							toolUses: activity.toolUses,
+							tokens: activity.lifetimeUsage,
+							durationMs: (activity.completedAt ?? Date.now()) - activity.startedAt,
+							responseText: result.responseText,
+						}),
+						display: true,
+					});
 				})
 				.catch((err: unknown) => {
 					const message = err instanceof Error ? err.message : String(err);
@@ -305,6 +324,20 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					if (ctx.hasUI) {
 						ctx.ui.notify(`Phase ${phase.id} sub-agent failed: ${message}`, "error");
 					}
+					pi.sendMessage({
+						customType: "codecarto-phase-summary",
+						content: buildPhaseSummary({
+							phaseId: phase.id,
+							status: "error",
+							turnCount: activity.turnCount,
+							toolUses: activity.toolUses,
+							tokens: activity.lifetimeUsage,
+							durationMs: (activity.completedAt ?? Date.now()) - activity.startedAt,
+							responseText: "",
+							error: message,
+						}),
+						display: true,
+					});
 				})
 				.finally(() => {
 					// Sub-agent may have written findings, owner_notes, or carry-forward
