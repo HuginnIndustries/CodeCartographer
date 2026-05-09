@@ -77,26 +77,36 @@ If you install the whole repository as a Pi package, Pi may still run package in
 What the Pi extension adds:
 
 - `/codecarto-init` to copy `.codecarto/` into the current repository
-- `/codecarto-next` to queue the next eligible phase prompt (or, in sub-agent mode, spawn the phase as a child session)
+- `/codecarto-next [--llm-steer | --no-llm-steer]` to spawn the next eligible phase as a sub-agent (the optional flag opts into the LLM-rewriter for the seed prompt; see *Phase orchestration* below)
 - `/codecarto-status` to show current phase progress
 - `/codecarto-validate` and `/codecarto-complete` for validation-gated status updates
-- a footer/widget showing the active CodeCartographer phase
+- `/codecarto-phase <id>` to force a specific phase even out of pipeline order
+- `/codecarto-skill <name>` to run a post-pipeline skill once all phases are complete
+- `/codecarto-usage` to show cumulative + per-phase token usage from local phase runs (0.6.0+)
+- a footer/widget showing the active CodeCartographer phase, plus a live **Agents** widget above the editor while a phase sub-agent is running
 - tool interception that blocks `edit` and `write` outside `.codecarto/`
 - direct phase prompts that tell Pi exactly which `.codecarto/findings/<phase>/SKILL.md` file to read, without registering those internal files as global Pi skills
 
-### Phase sub-agents (0.2.0+)
+### Phase orchestration (0.2.0 – 0.6.0)
 
-`/codecarto-next` runs each phase as an isolated in-memory `AgentSession` while your TUI stays on the orchestrator session. The phase's tool calls, file reads, and reasoning live in the child's own context window — they never accumulate in the orchestrator. A persistent **Agents** widget appears above the editor while a phase is running, showing live tool count, token usage, elapsed time, and the current activity. The widget auto-clears once the phase finishes (and lingers a few seconds after for visibility).
+`/codecarto-next` runs each phase as an isolated `AgentSession` while your TUI stays on the orchestrator session. The phase's tool calls, file reads, and reasoning live in the child's own context window — they never accumulate in the orchestrator. A persistent **Agents** widget appears above the editor while a phase is running, showing live tool count, token usage, elapsed time, and the current activity. The widget auto-clears once the phase finishes (and lingers a few seconds after for visibility).
 
 ```
 ● CodeCartographer
-└─ ⠹ architecture phase  ⟳3 · 5 tool uses · 12.3k tokens · 1m32s
+└─ ⠹ architecture phase  ⟳ 3 · 5 tool uses · 12.3k tokens · 1m32s
    ⎿ reading…
 ```
 
-Versions 0.1.3 – 0.1.4 used a different design — a session-switching pattern via `ctx.newSession()` that flipped the TUI to the child. That delivered context isolation but the switch was visually invisible during normal flow, so 0.2.0 replaced it with the parallel-widget approach. 0.1.x workspaces don't need migration; existing `.codecarto/` directories work with 0.2.0 unchanged.
+Capabilities layered on top of the parallel-widget runner:
 
-The MCP-server path is unaffected — it has no session concept; the host (Claude Desktop / Claude Code / etc.) is always the orchestrator.
+- **0.3.0 — file-backed sessions.** Phase sub-agents persist their transcripts to the same `~/.pi/agent/sessions/<encoded-cwd>/` directory the orchestrator uses, so Pi's `/resume`, `/tree`, and `/export` browse them as first-class sessions. The picker shows them with an explicit `CodeCartographer phase: <id>` name and lineage back to the orchestrator's own session.
+- **0.4.0 — phase-completion summary.** When a phase finishes (completed, aborted, or errored), a Markdown closeout block is appended to the orchestrator's transcript via `pi.sendMessage(...)`. You see it in the TUI scrollback; the orchestrator's LLM picks it up as context on your next message. No auto-trigger — control of the next step stays with you.
+- **0.5.0 — opt-in LLM-steered seed prompt.** Set `orchestrator.llm_steer_next_phase: true` in `.codecarto/workflow/config.yaml`, or pass `--llm-steer` per invocation, and the orchestrator's model will run a one-shot rewriter that reads the previous phase's closeout and customizes the next phase's seed prompt to highlight relevant prior findings. Off by default — extra orchestrator-side tokens, opt-in.
+- **0.6.0 — local usage log.** Each phase run is appended to `.codecarto/workflow/.usage.local.yaml` (gitignored). `/codecarto-usage` reports cumulative + per-phase totals. Best-effort logging — write failures don't surface as phase errors.
+
+Versions 0.1.3 – 0.1.4 used a different design — a session-switching pattern via `ctx.newSession()` that flipped the TUI to the child. That delivered context isolation but the switch was visually invisible during normal flow, so 0.2.0 replaced it with the parallel-widget approach. 0.1.x workspaces don't need migration; existing `.codecarto/` directories work with 0.6.0 unchanged.
+
+The MCP-server path is unaffected — it has no session concept; the host (Claude Desktop / Claude Code / etc.) is always the orchestrator. `/codecarto-usage` is Pi-only; the MCP path doesn't run sub-agents itself, so there's no per-phase usage to track on that side.
 
 ## MCP Server
 

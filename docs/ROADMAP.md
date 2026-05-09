@@ -2,16 +2,23 @@
 
 This document tracks future-facing work. For the current shipped surface, see [README.md](../README.md).
 
-## Where We Are (v0.1.0)
+## Where We Are (v0.6.0)
 
 Already shipped:
 
 - **Template**: pure Markdown + YAML pipeline definitions in `.codecarto/`. LLM-agnostic.
-- **`core/`**: pipeline state machine, YAML validators, prompt templates, workspace utilities.
-- **Pi extension** (`extensions/codecarto/`): `/codecarto-init`, `/codecarto-status`, `/codecarto-next`, `/codecarto-validate`, `/codecarto-complete`, `/codecarto-phase`, `/codecarto-skill`, plus tool interception that blocks edits outside `.codecarto/`.
-- **MCP server** (`mcp-server/`): same seven primitives exposed to any MCP host (Claude Code, Claude Desktop). Imports the same `core/` as the Pi extension, so phase prompts and validation are byte-identical.
+- **`core/`**: pipeline state machine, YAML validators, prompt templates, workspace utilities, workspace-config loader (`orchestrator-config.ts`), local usage log (`usage.ts`).
+- **Pi extension** (`extensions/codecarto/`):
+  - Slash commands: `/codecarto-init`, `/codecarto-status`, `/codecarto-next` (with `--llm-steer` / `--no-llm-steer` flags), `/codecarto-validate`, `/codecarto-complete`, `/codecarto-phase`, `/codecarto-skill`, `/codecarto-usage`.
+  - Tool interception: blocks `bash` outright and `edit`/`write` outside `.codecarto/`.
+  - **Phase sub-agents (0.2.0).** `/codecarto-next` spawns each phase as a parallel `AgentSession` with a live "Agents" widget above the editor. Orchestrator's TUI stays responsive; phase context window is isolated from the orchestrator's.
+  - **File-backed sessions (0.3.0).** Phase transcripts persist under `~/.pi/agent/sessions/<encoded-cwd>/` with a `CodeCartographer phase: <id>` display name and `parentSession` lineage; visible in `/resume`, `/tree`, `/export`.
+  - **Phase-completion summary (0.4.0).** Markdown closeout block injected into the orchestrator's session via `pi.sendMessage` on every phase finish. No auto-trigger; user-controlled.
+  - **LLM-steered seed prompt (0.5.0).** Opt-in via `orchestrator.llm_steer_next_phase` in `.codecarto/workflow/config.yaml` or `--llm-steer` per invocation. Reads the previous phase's closeout and customizes the next phase's seed prompt; falls back to the stock prompt on any failure.
+  - **Local usage log (0.6.0).** Append-only `.usage.local.yaml` per workspace; `/codecarto-usage` renders cumulative + per-phase totals.
+- **MCP server** (`mcp-server/`): seven primitives exposed to any MCP host (Claude Code, Claude Desktop). Imports the same `core/` as the Pi extension, so phase prompts and validation are byte-identical. The phase-orchestration features above are Pi-only — the MCP path returns prompt text for the host to dispatch and never runs sub-agents itself.
 - **Pipelines**: `architecture-only`, `lite`, `defect-scan`, `full`, `full-with-audit`, and `full-with-deep-audit` (default). The deep-audit variant splits the defect scan into a mechanical early pass and a semantic late pass.
-- **CI**: invariant tests (`tests/`) catch cross-wrapper drift between the template, Pi extension, and MCP server.
+- **CI**: invariant tests (`tests/`) catch cross-wrapper drift between the template, Pi extension, and MCP server. Release pipeline is tag-driven (`v*` tag pushes only) — see `CONTRIBUTING.md` for the maintainer release process.
 
 ## What's Next
 
