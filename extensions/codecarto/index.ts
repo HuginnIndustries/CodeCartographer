@@ -3,7 +3,7 @@ import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { runPhase } from "./agent-runner.ts";
-import { rewritePhasePrompt } from "./agent-rewriter.ts";
+import { buildSteeringMessage, rewritePhasePrompt } from "./agent-rewriter.ts";
 import { clearPhase, finishPhase, getPhaseActivity, startPhase } from "./agent-state.ts";
 import { buildPhaseSummary } from "./agent-summary.ts";
 import { disposeAgentsWidget, getAgentsWidget } from "./agent-widget.ts";
@@ -327,6 +327,20 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				if (rewrite.used) {
 					prompt = rewrite.prompt;
 					ctx.ui.notify(`LLM rewriter customized ${phase.id} seed prompt.`, "info");
+					// Inject the full rewritten prompt into the orchestrator's session
+					// so the user can audit what the rewriter chose to emphasize before
+					// the phase sub-agent starts. Same pattern as the phase-completion
+					// summary: display:true renders in the TUI; no triggerTurn so the
+					// orchestrator doesn't auto-respond.
+					pi.sendMessage({
+						customType: "codecarto-steering",
+						content: buildSteeringMessage({
+							nextPhaseId: phase.id,
+							prevPhaseId: rewrite.prevPhaseId,
+							rewrittenPrompt: rewrite.prompt,
+						}),
+						display: true,
+					});
 				} else {
 					ctx.ui.notify(`LLM rewriter skipped (${rewrite.skipReason}); using stock prompt.`, "warning");
 				}

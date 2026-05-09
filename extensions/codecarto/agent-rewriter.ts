@@ -37,6 +37,8 @@ export interface RewritePhasePromptResult {
 	prompt: string;
 	used: boolean;
 	skipReason?: string;
+	/** ID of the previous phase whose closeout the rewriter read, when used. */
+	prevPhaseId?: string;
 }
 
 /**
@@ -78,7 +80,28 @@ export async function rewritePhasePrompt(input: RewritePhasePromptInput): Promis
 		return { prompt: originalPrompt, used: false, skipReason: "rewriter returned empty output" };
 	}
 
-	return { prompt: trimmed, used: true };
+	return { prompt: trimmed, used: true, prevPhaseId };
+}
+
+/**
+ * Build the markdown block injected into the orchestrator's session
+ * (via pi.sendMessage with customType "codecarto-steering") whenever the
+ * rewriter produces a customized seed. Lets the user audit what the
+ * rewriter chose to emphasize before the phase sub-agent starts.
+ */
+export function buildSteeringMessage(input: { nextPhaseId: string; prevPhaseId?: string; rewrittenPrompt: string }): string {
+	const provenance = input.prevPhaseId
+		? `customized by the orchestrator's LLM from \`${input.prevPhaseId}\`'s closeout`
+		: "customized by the orchestrator's LLM";
+	return [
+		`**Steering: \`${input.nextPhaseId}\` seed prompt**`,
+		"",
+		`_${provenance}. The phase sub-agent will receive the prompt below as its first user message._`,
+		"",
+		"---",
+		"",
+		input.rewrittenPrompt,
+	].join("\n");
 }
 
 function findPreviousPhaseId(state: WorkspaceState, nextPhaseId: string): string | undefined {
