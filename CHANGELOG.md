@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-05-09
+
+### Fixed
+
+- **`--llm-steer` now surfaces its customized seed prompt in the orchestrator transcript.** Previously the rewriter ran silently — the only signal that anything happened was a transient "LLM rewriter customized X seed prompt." toast — and the rewritten prompt itself was visible only by `/resume`-ing into the phase sub-agent and reading its first user message. The user couldn't tell what the rewriter chose to emphasize, what prior findings it surfaced, or whether it had hallucinated something the closeout didn't say. `/codecarto-next` now injects the full customized prompt into the orchestrator's session via `pi.sendMessage({ customType: "codecarto-steering", display: true })` whenever the rewriter succeeds. The skip path keeps using a transient toast — those cases (no prior phase, missing closeout, empty output, rewriter session error) are uninteresting and shouldn't clutter the transcript.
+- New `buildSteeringMessage()` helper in `extensions/codecarto/agent-rewriter.ts` (~20 LOC). Markdown header names the next phase and the closeout source (`from \`<prevPhase>\`'s closeout`); a horizontal rule separates header from the verbatim rewritten prompt. Same `display: true`, no `triggerTurn` pattern as the phase-completion summary, so the orchestrator's LLM picks it up as context on the user's next message but doesn't auto-respond.
+- `RewritePhasePromptResult` gained a `prevPhaseId` field so the message header can name the closeout source. Backward-compatible (optional field).
+- 4 new unit tests in `tests/agent-rewriter.test.mjs` covering the header naming, full-prompt embedding, missing-prevPhaseId fallback, and structural format. Test count: 82 → **86**.
+
+### Notes
+
+- The orchestrator's LLM now sees the rewritten prompt in context on the next user turn. That's bounded (~5–15k tokens for a typical phase prompt) and is the whole point of the visibility — the orchestrator can answer "what was the rewriter looking at?" without re-reading the closeout.
+- Pi's default custom-message rendering is used (no registered renderer). The TUI shows `[codecarto-steering]` followed by the formatted block, the same way `[codecarto-phase-summary]` blocks render today.
+
 ## [0.6.0] — 2026-05-08
 
 ### Added
