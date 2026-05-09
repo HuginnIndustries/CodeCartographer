@@ -80,10 +80,47 @@ Out of scope without prior discussion:
 
 ## Maintainer Release Process
 
-1. Update `CHANGELOG.md` under a new version heading.
-2. Bump `version` in `package.json`.
-3. `git tag vX.Y.Z && git push --tags`.
-4. The release workflow (`.github/workflows/release.yml`) publishes to npm using the `NPM_TOKEN` repo secret.
+The release workflow at `.github/workflows/release.yml` triggers **only on `v*` tag pushes**, not on merges to `main`. A PR that bumps `version` and updates `CHANGELOG.md` does not by itself ship a release — someone has to push the matching tag. **Merging without tagging leaves the version bump dangling**, and subsequent merges will pile up version bumps with no published artifacts (see the 0.2.1 → 0.6.0 sequence for an example of this drifting silently).
+
+### Standard release (single version)
+
+For a PR that includes a version bump and changelog entry:
+
+1. Merge the PR (CI green; version in `package.json` matches the new `## [VERSION]` heading in `CHANGELOG.md`).
+2. From a synced clone:
+   ```bash
+   git fetch origin
+   git tag vX.Y.Z origin/main
+   git push origin vX.Y.Z
+   ```
+3. Watch the run at `https://github.com/HuginnIndustries/CodeCartographer/actions`. The workflow will:
+   - Verify the tag matches `package.json`'s `version`.
+   - Run tests + build.
+   - `npm pack` and smoke-test the tarball.
+   - `npm publish --provenance --access public` (idempotent — skips if the version is already on the registry).
+   - Create the GitHub Release with notes auto-extracted from the matching `## [VERSION]` block of `CHANGELOG.md`.
+
+### Backfill (multiple unreleased versions on main)
+
+If several version bumps merged without tags, you can ship them all at once. Each tag must point at the merge commit on `main` whose tree carries the matching `package.json` version:
+
+```bash
+git log --oneline main          # find the SHA of each "Merge pull request #..." commit
+
+# Tag each merge commit with its version
+git tag v0.2.1 <sha>
+git tag v0.3.0 <sha>
+# … etc
+
+# Push them all at once
+git push origin v0.2.1 v0.3.0 v0.4.0 v0.5.0 v0.6.0
+```
+
+The workflow runs in parallel for each tag. Publish + release-create are both idempotent, so re-running on a tag that's already published is a no-op.
+
+### Why the workflow is tag-driven
+
+A merge-driven release would fire on every merge to `main`, including non-version-bumping PRs (docs fixes, internal refactors). Requiring an explicit tag push keeps the release moment in the maintainer's hands and makes "what's published" a one-line query (`git tag --list 'v*'`). The trade-off is the failure mode you just observed: bumps without tags accumulate silently.
 
 ## License
 
