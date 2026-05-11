@@ -21,5 +21,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install harness dependencies
+        # The smoke script imports @modelcontextprotocol/sdk at the top.
+        # The published package is installed into a temp dir by the script
+        # itself, but the driver needs the SDK at the repo root to start.
+        run: npm ci
       - name: Run smoke test
         run: node scripts/smoke-mcp.mjs ${{ inputs.version && format('--version {0}', inputs.version) || '' }}
