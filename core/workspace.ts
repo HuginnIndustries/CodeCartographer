@@ -3,7 +3,7 @@
 // + normalizes the per-project workspace state from disk, and provides the
 // atomic status-update primitive used by /codecarto-complete.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { appendFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,18 @@ const packageRoot = findPackageRoot(coreDir);
 // Path to the packaged framework template directory. Wrappers copy this on
 // /codecarto-init.
 export const packagedWorkspaceDir = join(packageRoot, ".codecarto");
+
+// Resolved at module-load time from the same package.json that findPackageRoot
+// located. Used by the HTML dashboard renderer for the footer; cheap to read
+// once since startup is already paying for findPackageRoot.
+export const PACKAGE_VERSION: string = (() => {
+	try {
+		const pkg = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+		return typeof pkg.version === "string" ? pkg.version : "0.0.0";
+	} catch {
+		return "0.0.0";
+	}
+})();
 
 export async function getWorkspaceState(cwd: string): Promise<WorkspaceState | null> {
 	const workspaceDir = join(cwd, ".codecarto");
