@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-13
+
+### Added
+
+- **HTML dashboard.** `.codecarto/dashboard.html` is regenerated on every state change — `/codecarto-init` (initial empty render), `/codecarto-next` `.then`/`.catch` callbacks (after phase success or error), and `/codecarto-complete` (after a phase is marked done). The dashboard aggregates everything a human wants to see at a glance: project header (name / pipeline / current phase / last-updated / generation timestamp / package version), a pipeline-progress strip with per-phase status badges, collapsible per-phase cards (closed for complete, open for current/running) showing outputs / open questions / carry-forward / owner notes / last-run usage, an aggregate usage panel with per-phase breakdown, an activity timeline (newest 10 visible, older inside `<details>`), an open-questions roll-up grouped by source phase, a reverse-chronological closeouts list with relative-path links, and a footer with the package version. Self-contained: embedded `<style>`, no JavaScript, no external assets; works opened directly from `file://`. Light/dark via `@media (prefers-color-scheme: dark)`. Mobile single-column collapse at `<720px`. All disk-sourced strings (phase IDs, owner notes, open-question descriptions, carry-forward `target_phase`, closeout filenames, paths in href attributes) pass through `escapeHtml`.
+- **`/codecarto-dashboard` command.** Manual regenerate (useful after editing `status.yaml` by hand) plus the `--narrate` flag for the opt-in LLM executive summary. Tab-completion suggests `--narrate`.
+- **`/codecarto-dashboard --narrate` — opt-in LLM-narrated executive summary.** Runs the orchestrator's model as a one-shot in-memory `AgentSession` with `tools: []` (same pattern as the 0.5.0 rewriter), reads up to 3 most recent closeouts + status + usage totals, and produces a 200-400 word Markdown summary. The summary is cached to `.codecarto/.dashboard-narration.local.md` with a YAML frontmatter recording `generatedAt` and `phaseCountAtGeneration`. Subsequent deterministic re-renders surface the cached narration with a "(N runs since)" staleness note computed from the current completed-phase count. On any failure (no closeouts, session error, empty output) toasts the skip reason and proceeds with a deterministic render — never throws, never blocks.
+- **`core/dashboard.ts`** (~430 LOC, pure). `renderDashboard(inputs) → string`. No I/O. The MCP server can adopt it later without touching the renderer.
+- **`extensions/codecarto/dashboard-writer.ts`** (~120 LOC). Gathers inputs (fresh workspace state, usage log, closeouts directory listing parsed against the `closeoutFileName` regex from `core/prompts.ts:116`, per-phase output existence checks, narration cache + frontmatter parse) and atomic-rename-writes to `.codecarto/dashboard.html`. Failures are swallowed — same best-effort discipline as `recordUsage`.
+- **`extensions/codecarto/dashboard-narrator.ts`** (~150 LOC). Opt-in narrator session; never throws.
+- **`extensions/codecarto/dashboard-flags.ts`** (~25 LOC). `parseDashboardFlags` recognizes `--narrate`; collects unknown flags for caller to surface as errors.
+- **`core/workspace.ts`** exports `PACKAGE_VERSION`, read once at module load from the same `package.json` that `findPackageRoot` locates. Used by the dashboard footer.
+- **`core/utils.ts`** gains `formatTokenCount` and `formatMillis`. The renderer reuses them; the extension's existing `formatUsageTokens` / `formatUsageDuration` stay in place (they have slightly different output shapes that downstream call sites depend on).
+- **Template `.gitignore`** picks up `dashboard.html` and `.dashboard-narration.local.md`. Both surface data from `workflow/.usage.local.yaml` (absolute Pi session paths); committing them would transitively leak those paths.
+- **10 new unit tests in `tests/dashboard.test.mjs`** covering escape coverage, empty-state markers, full-state with HTML-special owner note (XSS guard), output-link presence vs missing, carry-forward `target_phase` rendering, open-questions roll-up grouping, usage panel totals, timeline visible/overflow split, narration staleness, and closeout reverse-chronological ordering. The `default-pipeline.test.mjs` command-registration invariant now requires `dashboard` alongside the existing 8 commands. Test count: **86 → 96**.
+
+### Notes
+
+- **Pi-only for v1.** The dashboard is tied to the sub-agent lifecycle, which only the Pi path runs. The MCP server returns prompt text for the host to dispatch and has no per-phase state changes to react to. The renderer lives in `core/` so MCP can adopt it later (deferred to 0.8.0+) by exposing a `dashboard` tool that returns the rendered HTML — trivial wrapper, just not on the critical path.
+- **Hybrid LLM strategy.** The dashboard's "facts" (token counts, paths, status badges) are always deterministic — they read from disk on every regen. The "story" is opt-in: only `/codecarto-dashboard --narrate` produces a narrative, and that narrative is cached so subsequent deterministic re-renders preserve it across phase finishes until the next `--narrate`.
+- **No JavaScript.** Collapsibles use `<details>`/`<summary>`. Keeps the file diff-friendly, tamper-evident, and viewable in any browser without script execution.
+
+### Deferred (target 0.8.0+)
+
+- MCP `dashboard` tool — trivial wrapper on `renderDashboard` returning the HTML string.
+- JS-enhanced dashboard — sortable timeline columns, filter-by-phase, live-reload via filesystem-watch script.
+- Per-run drilldown pages — clicking a UsageRun row opens `dashboard-run-<timestamp>.html` with the full transcript excerpt.
+- Auto-narrate-on-finish config knob (`orchestrator.dashboard_narrate_on_finish`) mirroring `llm_steer_next_phase` for users who want fresh narration on every state change at orchestrator-side token cost.
+
 ## [0.6.1] — 2026-05-09
 
 ### Fixed

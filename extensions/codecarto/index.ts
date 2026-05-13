@@ -8,6 +8,7 @@ import { clearPhase, finishPhase, getPhaseActivity, startPhase } from "./agent-s
 import { buildPhaseSummary } from "./agent-summary.ts";
 import { disposeAgentsWidget, getAgentsWidget } from "./agent-widget.ts";
 import { parseDashboardFlags } from "./dashboard-flags.ts";
+import { narrateDashboard } from "./dashboard-narrator.ts";
 import { writeDashboard } from "./dashboard-writer.ts";
 import { parseNextFlags } from "./next-flags.ts";
 
@@ -699,10 +700,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const state = await ensureWorkspaceState(ctx);
 			if (!state) return;
 
-			// Narration wiring lands in the next commit; for now --narrate
-			// surfaces a stub notice so the flag is discoverable end-to-end.
 			if (flags.narrate) {
-				ctx.ui.notify("LLM narration not yet wired (coming in 0.7.0); rendering deterministic dashboard.", "warning");
+				ctx.ui.notify(`Narrating dashboard via LLM…`, "info");
+				const result = await narrateDashboard(ctx, state);
+				if (result.used) {
+					ctx.ui.notify("Narration written to .codecarto/.dashboard-narration.local.md", "info");
+				} else {
+					ctx.ui.notify(`LLM narration skipped (${result.skipReason}); rendering deterministic dashboard.`, "warning");
+				}
 			}
 
 			await writeDashboard(ctx.cwd, PACKAGE_VERSION);
