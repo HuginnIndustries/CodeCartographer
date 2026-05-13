@@ -189,7 +189,7 @@ Beyond the slash commands, the Pi extension layers on:
 |---|---|
 | `/codecarto-init [variant]` | Copy `.codecarto/` into the current repository, select pipeline variant |
 | `/codecarto-status` | Current phase, progress, open questions |
-| `/codecarto-next [--llm-steer \| --no-llm-steer]` | Spawn the next eligible phase as a sub-agent |
+| `/codecarto-next [--auto [--strict]] [--llm-steer \| --no-llm-steer]` | Spawn the next eligible phase as a sub-agent. `--auto` walks the full pipeline end-to-end (auto-validate + auto-complete + advance); `--strict` flips the `PASS WITH GAPS` rule from "advance" to "pause". |
 | `/codecarto-phase <id>` | Force a specific phase, even out of pipeline order |
 | `/codecarto-validate [phase]` | Validate a phase output against completion criteria |
 | `/codecarto-complete [phase]` | Atomically mark a phase complete (validation must pass) |
@@ -197,9 +197,17 @@ Beyond the slash commands, the Pi extension layers on:
 | `/codecarto-usage` | Cumulative + per-phase token usage |
 | `/codecarto-dashboard [--narrate]` | Regenerate `.codecarto/dashboard.html`; `--narrate` for the LLM executive summary |
 
+### End-to-end auto mode (0.8.0+)
+
+`/codecarto-next --auto` walks the entire pipeline without intervention. The loop spawns each next-eligible phase, auto-validates the output, auto-marks it complete, and advances until the pipeline finishes — or until something stops it (`FAIL` / `MISSING` validation, sub-agent error, or `ctx.signal` abort). The orchestrator's TUI stays responsive throughout; per-phase summaries land in the transcript as usual, and a final `codecarto-auto-summary` block reports the outcome with cumulative tokens, wall time, and a recovery hint if the run stopped early.
+
+- **Resumability** is implicit: re-running `--auto` reads `status.yaml` and picks up from `getNextEligiblePhase`.
+- **`--strict`** (requires `--auto`) treats `PASS WITH GAPS` as a stop — useful when you want to triage gaps before advancing.
+- **`--auto --llm-steer`** runs the rewriter on every phase transition; the per-phase steering blocks land in the orchestrator transcript so the run is auditable.
+
 ### Version history (Pi orchestration)
 
-The current parallel-sub-agent design landed in 0.2.0 and has been incrementally enriched: file-backed sessions (0.3.0), summary injection (0.4.0), opt-in LLM steering (0.5.0), usage tracking (0.6.0), and the HTML dashboard (0.7.0). 0.1.x workspaces don't need migration — existing `.codecarto/` directories work unchanged. See `CHANGELOG.md` for details.
+The current parallel-sub-agent design landed in 0.2.0 and has been incrementally enriched: file-backed sessions (0.3.0), summary injection (0.4.0), opt-in LLM steering (0.5.0), usage tracking (0.6.0), HTML dashboard (0.7.0), and end-to-end auto mode (0.8.0). 0.1.x workspaces don't need migration — existing `.codecarto/` directories work unchanged. See `CHANGELOG.md` for details.
 
 ---
 
