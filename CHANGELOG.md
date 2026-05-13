@@ -4,6 +4,43 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-13
+
+### Added
+
+- **`/codecarto-next --auto`** runs the full pipeline end-to-end without manual intervention. For each next-eligible phase the loop spawns the sub-agent, auto-validates the output, and auto-marks-complete (mirroring `/codecarto-complete`'s `PASS`/`PASS WITH GAPS` rule). It advances until the pipeline finishes, validation reports `FAIL`/`MISSING`, the sub-agent errors, or the user aborts. Re-running `--auto` after a stop resumes from `getNextEligiblePhase` — `status.yaml` is the implicit checkpoint.
+- **`--strict` modifier** (requires `--auto`) flips the `PASS WITH GAPS` rule: the loop pauses on PWG and emits a recovery hint telling the user to review the gaps and run `/codecarto-complete <phase>` manually before resuming with `--auto`. Default (without `--strict`) auto-advances on PWG.
+- **`--auto` composes with `--llm-steer` / `--no-llm-steer`** as independent flags. `--auto --llm-steer` runs the rewriter on every phase transition; `--auto` alone leaves steering at the workspace-config default (`orchestrator.llm_steer_next_phase`).
+- **`codecarto-auto-summary` custom message type** renders the run summary in the orchestrator transcript: heading (`complete` / `stopped at <phase>` / `aborted at <phase>`), stats (`⟳ N/M phases · X tokens · wall-time`), recovery hints for the stop and abort paths, and a dashboard link + skill suggestion for the complete path. Same `display: true`, no-`triggerTurn` discipline as the existing per-phase summary.
+- **Tab completion** for `/codecarto-next` now suggests `--auto` and `--strict` alongside the existing `--llm-steer` / `--no-llm-steer`.
+
+### Internal
+
+- New `extensions/codecarto/auto-runner.ts` (~410 LOC) — owns `runAuto`, `runSinglePhase` (the awaitable phase-execution helper now shared between the one-shot `/codecarto-next` path and the auto loop), `autoCompletePhase` (programmatic `/codecarto-complete`, no UI notifies), `buildAutoSummary` (the markdown body for the new custom message), and `decideAfterPhase` (the pure per-iteration decision function — the testable seam for the validation matrix).
+- **`/codecarto-next`** handler shrinks from ~150 lines to ~30. The inline phase-spawn chain (`runPhase` + post-runner `.then`/`.catch`/`.finally`) is replaced by `void runSinglePhase(...)`, keeping the one-shot path fire-and-forget for TUI responsiveness.
+- **`/codecarto-complete`** handler delegates the atomic-status update to `autoCompletePhase` and keeps the UI notifies inline.
+- **`extensions/codecarto/next-flags.ts`** gains `auto` / `strict` / `error` fields and the `--strict requires --auto` validation rule.
+
+### Fixed
+
+- **`ctx.signal` is now threaded through `/codecarto-next` to the phase sub-agent.** Previously the one-shot path didn't pass the signal to `runPhase`, so a user-initiated abort during a phase wasn't actually delivered to the sub-agent. The refactor that extracted `runSinglePhase` corrects this for both the one-shot and the new auto paths. Mid-phase aborts now actually cancel.
+
+### Tests
+
+- **`tests/auto-runner.test.mjs`** (10 tests) — the `decideAfterPhase` validation-decision matrix: aborted / errored / completed × `PASS` / `PASS WITH GAPS` / `FAIL` / `MISSING` × strict-on / strict-off, plus the "completed but validation missing" guard.
+- **`tests/auto-summary.test.mjs`** (7 tests) — `buildAutoSummary` covers complete / stopped / aborted paths, skill-suggestion presence/absence, validation-summary block inclusion, the FAIL vs `PASS WITH GAPS` recovery-hint branches, and tabular token/duration formatting.
+- **`tests/next-flags.test.mjs`** extended (+6 tests) — `--auto`, `--auto --strict`, `--strict` alone (error), `--auto --llm-steer`, `--auto --strict --llm-steer`, unknown-flag mixed with `--auto`.
+
+Test count: **96 → 119**.
+
+### Notes / deferred (target 0.8.x or 0.9.0+)
+
+- **DAG-parallel auto mode** — `getNextEligiblePhase` returns one phase; parallel needs a `getEligiblePhases` variant and concurrent `runSinglePhase` calls.
+- **Retry-on-fail** — `--auto --retry-failed N` with per-phase attempt counter + backoff.
+- **Budget caps** — `--max-tokens`, `--max-turns-per-phase`, `--max-wall-time`.
+- **Pre-phase confirmation prompts** — `--auto --confirm`.
+- **Post-pipeline auto-skill chaining** — `--auto --then-skill <name>`.
+
 ## [0.7.0] — 2026-05-13
 
 ### Added

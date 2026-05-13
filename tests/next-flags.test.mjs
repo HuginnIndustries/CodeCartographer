@@ -40,3 +40,47 @@ test("whitespace tolerance: extra spaces don't produce empty unknowns", () => {
 	assert.equal(r.llmSteerOverride, true);
 	assert.deepEqual(r.unknown, []);
 });
+
+// --- auto / strict ---------------------------------------------------------
+
+test("--auto sets auto:true; strict defaults false", () => {
+	const r = parseNextFlags("--auto");
+	assert.equal(r.auto, true);
+	assert.equal(r.strict, false);
+	assert.equal(r.error, undefined);
+});
+
+test("--auto --strict sets both", () => {
+	const r = parseNextFlags("--auto --strict");
+	assert.equal(r.auto, true);
+	assert.equal(r.strict, true);
+	assert.equal(r.error, undefined);
+});
+
+test("--strict without --auto surfaces an error", () => {
+	const r = parseNextFlags("--strict");
+	assert.equal(r.strict, true);
+	assert.equal(r.auto, false);
+	assert.match(r.error, /--strict requires --auto/);
+});
+
+test("--auto composes with --llm-steer (independent flags)", () => {
+	const r = parseNextFlags("--auto --llm-steer");
+	assert.equal(r.auto, true);
+	assert.equal(r.llmSteerOverride, true);
+	assert.equal(r.error, undefined);
+});
+
+test("--auto --strict --llm-steer all set together; no error", () => {
+	const r = parseNextFlags("--auto --strict --llm-steer");
+	assert.equal(r.auto, true);
+	assert.equal(r.strict, true);
+	assert.equal(r.llmSteerOverride, true);
+	assert.equal(r.error, undefined);
+});
+
+test("unknown flag mixed with --auto is still collected in unknown[]", () => {
+	const r = parseNextFlags("--auto --bogus");
+	assert.equal(r.auto, true);
+	assert.deepEqual(r.unknown, ["--bogus"]);
+});

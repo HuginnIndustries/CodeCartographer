@@ -314,6 +314,49 @@ export interface AutoRunResult {
 	validationSummary?: string[];
 }
 
+/**
+ * Per-iteration decision: given the outcome of a sub-agent run and (if it
+ * completed) its validation result, what should the auto loop do next?
+ * Pure function — no I/O, no module state — so the decision matrix is
+ * unit-testable without mocking the SDK.
+ */
+export type AutoDecision =
+	| { action: "continue" }
+	| { action: "stop"; reason: string; validation?: ValidationOverall; error?: string; validationSummary?: string[] }
+	| { action: "aborted" };
+
+export function decideAfterPhase(
+	phaseStatus: SinglePhaseResult["status"],
+	phaseError: string | undefined,
+	validation: ValidationResult | null,
+	strict: boolean,
+): AutoDecision {
+	if (phaseStatus === "aborted") return { action: "aborted" };
+	if (phaseStatus === "error") {
+		return { action: "stop", reason: phaseError ?? "Sub-agent errored.", error: phaseError };
+	}
+	if (!validation) {
+		return { action: "stop", reason: "Validation skipped (no result)." };
+	}
+	if (validation.overall === "FAIL" || validation.overall === "MISSING") {
+		return {
+			action: "stop",
+			reason: `Validation ${validation.overall} on ${validation.phaseId}.`,
+			validation: validation.overall,
+			validationSummary: buildValidationSummary(validation),
+		};
+	}
+	if (validation.overall === "PASS WITH GAPS" && strict) {
+		return {
+			action: "stop",
+			reason: `PASS WITH GAPS on ${validation.phaseId} (strict mode).`,
+			validation: validation.overall,
+			validationSummary: buildValidationSummary(validation),
+		};
+	}
+	return { action: "continue" };
+}
+
 export async function runAuto(
 	ctx: ExtensionContext,
 	pi: ExtensionAPI,
@@ -364,47 +407,38 @@ export async function runAuto(
 		totalTokens.output += phaseResult.activity.lifetimeUsage.output;
 		totalTokens.cacheWrite += phaseResult.activity.lifetimeUsage.cacheWrite;
 
-		if (phaseResult.status === "aborted") {
+		// Validate only when the phase actually completed. Aborts and errors
+		// short-circuit; decideAfterPhase handles all three outcomes.
+		let validation: ValidationResult | null = null;
+		if (phaseResult.status === "completed") {
+			// State must be refreshed because the sub-agent may have written
+			// findings to disk that the validator reads.
+			const stateForValidation = (await getWorkspaceState(ctx.cwd)) ?? state;
+			validation = await validatePhaseOutput(stateForValidation, phase.id);
+		}
+
+		const decision = decideAfterPhase(phaseResult.status, phaseResult.error, validation, options.strict);
+
+		if (decision.action === "aborted") {
 			return finish({
 				outcome: "aborted",
 				reason: `Aborted during ${phase.id}.`,
 				stoppedAt: { phaseId: phase.id },
 			});
 		}
-		if (phaseResult.status === "error") {
+		if (decision.action === "stop") {
 			return finish({
 				outcome: "stopped",
-				reason: phaseResult.error ?? "Sub-agent errored.",
-				stoppedAt: { phaseId: phase.id, error: phaseResult.error },
+				reason: decision.reason,
+				stoppedAt: { phaseId: phase.id, validation: decision.validation, error: decision.error },
+				validationSummary: decision.validationSummary,
 			});
 		}
 
-		// Phase finished — auto-validate. State must be refreshed because the
-		// sub-agent may have written findings to disk that the validator reads.
-		const stateForValidation = (await getWorkspaceState(ctx.cwd)) ?? state;
-		const validation = await validatePhaseOutput(stateForValidation, phase.id);
-
-		if (validation.overall === "FAIL" || validation.overall === "MISSING") {
-			return finish({
-				outcome: "stopped",
-				reason: `Validation ${validation.overall} on ${phase.id}.`,
-				stoppedAt: { phaseId: phase.id, validation: validation.overall },
-				validationSummary: buildValidationSummary(validation),
-			});
-		}
-
-		if (validation.overall === "PASS WITH GAPS" && options.strict) {
-			return finish({
-				outcome: "stopped",
-				reason: `PASS WITH GAPS on ${phase.id} (strict mode).`,
-				stoppedAt: { phaseId: phase.id, validation: validation.overall },
-				validationSummary: buildValidationSummary(validation),
-			});
-		}
-
-		// PASS or PASS-WITH-GAPS (non-strict) → auto-complete and continue.
+		// decision.action === "continue" → auto-complete and loop.
+		// validation is guaranteed non-null on the continue branch.
 		try {
-			const { updatedState } = await autoCompletePhase(ctx, validation);
+			const { updatedState } = await autoCompletePhase(ctx, validation!);
 			state = updatedState;
 			phasesRun.push(phase.id);
 		} catch (err: unknown) {
