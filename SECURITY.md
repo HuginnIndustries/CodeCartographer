@@ -36,7 +36,6 @@ Out of scope:
 
 - Issues in third-party hosts (Pi, Claude Code, Claude Desktop, etc.). Please report those upstream.
 - Issues in user-supplied LLM providers.
-- The marketing website under `website/` (informational only).
 
 ## Disclosure
 
