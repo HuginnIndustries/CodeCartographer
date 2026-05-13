@@ -3,125 +3,63 @@
 [![CI](https://github.com/HuginnIndustries/CodeCartographer/actions/workflows/ci.yml/badge.svg)](https://github.com/HuginnIndustries/CodeCartographer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![npm version](https://img.shields.io/npm/v/codecartographer-pi.svg)](https://www.npmjs.com/package/codecartographer-pi)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 
-A structured reverse-engineering toolkit for understanding unfamiliar codebases using LLMs. Drop it into any repository, point an LLM at the guide, and get a comprehensive analysis: architecture map, behavioral contracts, protocol documentation, defect report, porting synthesis, and reimplementation spec.
+> **A structured pipeline for reverse-engineering unfamiliar codebases with an LLM.** Drop it into any repo, point an LLM at the guide, and walk away with a layered analysis: architecture map, behavioral contracts, protocol documentation, defect report, porting bundle, and a language-agnostic reimplementation spec. Every finding is evidence-tagged. Every phase output is validated before the next one starts.
 
-## What It Does
+```text
+●  CodeCartographer
+├─ ✓  architecture phase    ⟳ 25 · 76 tool uses · 1.0M tokens · 4m28s
+├─ ✓  defect-scan-mech.     ⟳ 39 · 91 tool uses · 2.4M tokens · 7m05s
+└─ ⠹  contracts phase       ⟳ 11 · 37 tool uses · 335.1k tokens · 40.1s
+       ⎿ extracting behavioral contracts from server/index.ts…
+```
 
-CodeCartographer guides an LLM through a phased analysis of your source code, producing structured documentation at each step. Instead of asking an LLM "explain this codebase" and getting a vague summary, you get a systematic evaluation with evidence-tagged findings, validated outputs, and cross-session continuity.
+---
 
-Each phase builds on the last. The architecture map feeds into behavioral contracts, which feed into protocol documentation, which feeds into a porting bundle, which feeds into a reimplementation spec. At the end, you have a complete evaluation bundle that a human or another LLM can use to understand, maintain, or rewrite the codebase.
+## At a glance
 
-## Quick Start
+| What you get | Where it lives |
+|---|---|
+| **Layered analysis pipeline** — architecture → defect scan → behavioral contracts → protocols → porting → reimplementation spec | `.codecarto/` template |
+| **Validation gates between phases** — no advancing past a `FAIL` output | `core/` state machine |
+| **Three delivery surfaces** — Pi extension, MCP server, or pure template | All three share `core/` |
+| **Live progress widget** while phase sub-agents work | Pi extension |
+| **HTML dashboard** — single-file aggregate of progress, links, usage, narrative | `.codecarto/dashboard.html` |
+| **Per-phase token tracking** | `/codecarto-usage` |
+| **Opt-in LLM steering** of the next phase's seed prompt | `/codecarto-next --llm-steer` |
 
-**1. Copy `.codecarto/` into your repository:**
+---
+
+## Install
+
+Pick the surface that matches your tooling. All three share the same `core/` and produce byte-identical phase prompts.
+
+### Pi extension (recommended for interactive use)
+
+[Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) is a TUI coding agent. The CodeCartographer extension adds slash commands, a live agents widget, and the dashboard.
 
 ```bash
-cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
+pi install npm:codecartographer-pi          # from the npm registry
+pi install /absolute/path/to/CodeCartographer  # from a local checkout
+pi install git:github.com/your-user/CodeCartographer  # from a git URL
 ```
 
-**2. Choose a pipeline** (optional — defaults to the full 7-phase with split defect scan):
+> **Don't** run `npm install codecartographer-pi` for the Pi use case. Plain `npm install` puts the package on disk but doesn't register it with Pi. Use `pi install npm:...` so Pi writes the package into its own `~/.pi/agent/settings.json`.
 
-```yaml
-# Edit .codecarto/workflow/status.yaml and set the pipeline field:
-pipeline: workflow/pipeline-full-with-deep-audit.yaml  # 7-phase with split defect scan (default; depth-first)
-pipeline: workflow/pipeline-full-with-audit.yaml       # 6-phase with single early defect scan
-pipeline: workflow/pipeline.yaml                       # 5-phase without defect scan — remove defect-scan phases
-pipeline: workflow/pipeline-defect-scan.yaml           # 2-phase defect audit — remove contracts through reimplementation-spec
-pipeline: workflow/pipeline-lite.yaml                  # 3-phase understanding — remove defect-scan phases, porting, and reimplementation-spec
-pipeline: workflow/pipeline-architecture-only.yaml     # 1-phase quick overview — keep only architecture
-```
-
-**3. Point an LLM at the guide:**
-
-```
-Read .codecarto/GUIDE.md and begin the analysis.
-```
-
-That's it. The LLM reads the guide, checks `workflow/status.yaml` for progress, and starts the next phase automatically. Each phase produces a validated output in `.codecarto/findings/`.
-
-## Pi Package
-
-This branch also packages CodeCartographer for [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) without changing `.codecarto/` itself. Pi is an **optional peer dependency** — if you only want the template or the MCP server, you don't need Pi installed.
-
-Install from npm, a local checkout, or a git URL:
-
-```bash
-pi install npm:codecartographer-pi
-# or, from a local checkout:
-pi install /absolute/path/to/CodeCartographer
-# or, from a git URL:
-pi install git:github.com/your-user/CodeCartographer
-```
-
-> **Don't run `npm install codecartographer-pi` for the Pi use case.** Plain `npm install` puts the package on disk but doesn't register it with Pi, so it never appears in the TUI. Use `pi install npm:codecartographer-pi` instead — Pi handles the npm install internally and writes the package into its own `settings.json` (`~/.pi/agent/settings.json` by default). Plain `npm install` is the right command only for the MCP-server use case described below.
-
-For extension development, you can also point Pi directly at the extension entrypoint or place it in an auto-discovered extensions directory and use `/reload`:
+For extension development, point Pi directly at the entrypoint:
 
 ```bash
 pi -e /absolute/path/to/CodeCartographer/extensions/codecarto/index.ts
 ```
 
-The extension is self-contained at runtime. It uses only Node built-ins plus Pi's peer dependencies, so direct loading and `/reload` do not require a separate `npm install`.
-
-Then in the target repository:
-
-```text
-/codecarto-init [full-with-deep-audit|full-with-audit|full|defect-scan|lite|architecture-only]
-/codecarto-status
-/codecarto-next
-```
-
-If you install the whole repository as a Pi package, Pi may still run package installation steps for the package itself, but the CodeCartographer extension does not depend on any third-party runtime modules.
-
-What the Pi extension adds:
-
-- `/codecarto-init` to copy `.codecarto/` into the current repository
-- `/codecarto-next [--llm-steer | --no-llm-steer]` to spawn the next eligible phase as a sub-agent (the optional flag opts into the LLM-rewriter for the seed prompt; see *Phase orchestration* below)
-- `/codecarto-status` to show current phase progress
-- `/codecarto-validate` and `/codecarto-complete` for validation-gated status updates
-- `/codecarto-phase <id>` to force a specific phase even out of pipeline order
-- `/codecarto-skill <name>` to run a post-pipeline skill once all phases are complete
-- `/codecarto-usage` to show cumulative + per-phase token usage from local phase runs (0.6.0+)
-- a footer/widget showing the active CodeCartographer phase, plus a live **Agents** widget above the editor while a phase sub-agent is running
-- tool interception that blocks `edit` and `write` outside `.codecarto/`
-- direct phase prompts that tell Pi exactly which `.codecarto/findings/<phase>/SKILL.md` file to read, without registering those internal files as global Pi skills
-
-### Phase orchestration (0.2.0 – 0.6.0)
-
-`/codecarto-next` runs each phase as an isolated `AgentSession` while your TUI stays on the orchestrator session. The phase's tool calls, file reads, and reasoning live in the child's own context window — they never accumulate in the orchestrator. A persistent **Agents** widget appears above the editor while a phase is running, showing live tool count, token usage, elapsed time, and the current activity. The widget auto-clears once the phase finishes (and lingers a few seconds after for visibility).
-
-```
-● CodeCartographer
-└─ ⠹ architecture phase  ⟳ 3 · 5 tool uses · 12.3k tokens · 1m32s
-   ⎿ reading…
-```
-
-Capabilities layered on top of the parallel-widget runner:
-
-- **0.3.0 — file-backed sessions.** Phase sub-agents persist their transcripts to the same `~/.pi/agent/sessions/<encoded-cwd>/` directory the orchestrator uses, so Pi's `/resume`, `/tree`, and `/export` browse them as first-class sessions. The picker shows them with an explicit `CodeCartographer phase: <id>` name and lineage back to the orchestrator's own session.
-- **0.4.0 — phase-completion summary.** When a phase finishes (completed, aborted, or errored), a Markdown closeout block is appended to the orchestrator's transcript via `pi.sendMessage(...)`. You see it in the TUI scrollback; the orchestrator's LLM picks it up as context on your next message. No auto-trigger — control of the next step stays with you.
-- **0.5.0 — opt-in LLM-steered seed prompt.** Set `orchestrator.llm_steer_next_phase: true` in `.codecarto/workflow/config.yaml`, or pass `--llm-steer` per invocation, and the orchestrator's model will run a one-shot rewriter that reads the previous phase's closeout and customizes the next phase's seed prompt to highlight relevant prior findings. Off by default — extra orchestrator-side tokens, opt-in.
-- **0.6.0 — local usage log.** Each phase run is appended to `.codecarto/workflow/.usage.local.yaml` (gitignored). `/codecarto-usage` reports cumulative + per-phase totals. Best-effort logging — write failures don't surface as phase errors.
-
-Versions 0.1.3 – 0.1.4 used a different design — a session-switching pattern via `ctx.newSession()` that flipped the TUI to the child. That delivered context isolation but the switch was visually invisible during normal flow, so 0.2.0 replaced it with the parallel-widget approach. 0.1.x workspaces don't need migration; existing `.codecarto/` directories work with 0.6.0 unchanged.
-
-The MCP-server path is unaffected — it has no session concept; the host (Claude Desktop / Claude Code / etc.) is always the orchestrator. `/codecarto-usage` is Pi-only; the MCP path doesn't run sub-agents itself, so there's no per-phase usage to track on that side.
-
-## MCP Server
-
-The same framework is also packaged as a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP-compatible host (Claude Code, Claude Desktop, etc.) can drive a CodeCartographer workflow without the Pi runtime. The server imports the same `core/` primitives the Pi extension uses, so phase prompts and validation are byte-identical across both surfaces.
-
-Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/specification/2025-11-25) via `@modelcontextprotocol/sdk` ≥ 1.29.0. The negotiated `protocolVersion` reflects whatever the connecting client requests; the server accepts every revision the SDK supports (currently `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`, `2024-10-07`).
-
-Install and wire it up:
+### MCP server (for Claude Code, Claude Desktop, any MCP host)
 
 ```bash
 npm install --global codecartographer-pi
-# or, in a project: npm install codecartographer-pi
 ```
 
-Add it to your MCP host config (Claude Code: `~/.config/claude-code/config.json`, Claude Desktop: `claude_desktop_config.json`):
+Add to your host config (`~/.config/claude-code/config.json`, `claude_desktop_config.json`, etc.):
 
 ```json
 {
@@ -133,67 +71,178 @@ Add it to your MCP host config (Claude Code: `~/.config/claude-code/config.json`
 }
 ```
 
-The server exposes seven tools, each accepting an absolute `cwd` for the target repository:
+### Pure template (no runtime, any LLM that reads/writes files)
 
-| Tool | Purpose | Pi equivalent |
-|---|---|---|
-| `codecarto_init` | Copy `.codecarto/` into the target repo and select a pipeline | `/codecarto-init` |
-| `codecarto_status` | Current phase, active pipeline, progress, open questions | `/codecarto-status` |
-| `codecarto_next` | Return the next eligible phase prompt as text | `/codecarto-next` |
-| `codecarto_phase` | Return a specific phase's prompt (forced, even out of order) | `/codecarto-phase` |
-| `codecarto_validate` | Validate a phase output, returning structured criteria rows | `/codecarto-validate` |
-| `codecarto_complete` | Atomically mark a phase complete after validation passes | `/codecarto-complete` |
-| `codecarto_skill` | Return a post-pipeline skill prompt | `/codecarto-skill` |
+```bash
+cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
+```
 
-`codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation).
+Then in the LLM session: `Read .codecarto/GUIDE.md and begin the analysis.`
 
-## What It Produces
+---
+
+## How it works
+
+The "code" is structured Markdown + YAML inside `.codecarto/`:
+
+- **`GUIDE.md`** — LLM entry point. Every session reads this first.
+- **`workflow/pipeline.yaml`** — phase definitions, dependencies, output paths.
+- **`workflow/status.yaml`** — mutable per-project state. Single source of truth for progress.
+- **`workflow/VALIDATE.md`** — validation protocol run after every phase.
+- **`findings/<phase>/SKILL.md`** — detailed analysis instructions per phase.
+- **`templates/`** — output templates that enforce consistent structure.
+
+Phases form a DAG: `contracts` and `protocols` can run in parallel after `architecture`; `porting` waits for both; `reimplementation-spec` is last. The host (Pi, MCP, or your shell) reads the active pipeline, finds the next phase whose dependencies are all `complete`, hands the LLM that phase's instructions, validates the output, and advances `status.yaml`.
+
+For multi-session work, every new session reads `.codecarto/GUIDE.md` (or the lighter `NEW_THREAD_BLURB.md`), checks `workflow/status.yaml`, and picks up where the last session left off. You don't explain what happened in previous sessions.
+
+---
+
+## Phases produce these artifacts
 
 | Artifact | Description |
 |---|---|
-| Architecture map | Layers, dependency direction, public surfaces, runtime lifecycle, concurrency model |
-| Defect report | Multi-pass scan for logic errors, security issues, concurrency bugs, API violations |
-| Defect fix tracker | Remediation log mapping each fix, deferral, or acceptance back to the defect report |
-| Behavioral contracts | Feature-by-feature behavior with defaults, error handling, and acceptance tests |
-| Protocols and state | Event flows, state machines, persistence formats, compatibility hazards |
-| Porting bundle | Everything synthesized into a porting-oriented view with priority rankings |
-| Reimplementation spec | Language-agnostic build plan with modules, acceptance scenarios, and known unknowns |
+| **Architecture map** | Layers, dependency direction, public surfaces, runtime lifecycle, concurrency model |
+| **Defect report** | Multi-pass scan for logic errors, security issues, concurrency bugs, API violations |
+| **Defect fix tracker** | Remediation log mapping each fix, deferral, or acceptance back to the defect report |
+| **Behavioral contracts** | Feature-by-feature behavior with defaults, error handling, and acceptance tests |
+| **Protocols and state** | Event flows, state machines, persistence formats, compatibility hazards |
+| **Porting bundle** | Everything synthesized into a porting-oriented view with priority rankings |
+| **Reimplementation spec** | Language-agnostic build plan with modules, acceptance scenarios, and known unknowns |
 
-Every finding is tagged with an evidence level: **observed fact**, **strong inference**, **portability hazard**, or **open question**. Every phase output is validated against explicit completion criteria before the pipeline advances.
+Every finding is tagged with an evidence level: `observed fact`, `strong inference`, `portability hazard`, or `open question`. Every phase output is validated against explicit completion criteria before the pipeline advances.
 
-## Pipeline Variants
+---
 
-Not every project needs the full analysis. The default is the 7-phase **full-with-deep-audit** pipeline, which splits the defect scan into an early mechanical pass and a deep semantic pass so the reimplementation can design around defects with full contracts and protocols context. Scale back if you want less, or use the legacy single-scan pipeline if you don't need the deeper context-grounded defect findings:
+## Pipeline variants
+
+The default is a 7-phase run that splits the defect scan into a mechanical early pass and a semantic late pass — the reimplementation phase then designs around defects with full contracts and protocols context. Scale back if you want less:
 
 | Variant | Phases | Use when |
 |---|---|---|
 | **Full with deep audit** (default) | 7 | Complete analysis with split defect scan; reimplementation grounded in contracts/protocols-aware defect findings |
-| **Full with audit** | 6 | Single early defect scan; cheaper than the deep variant when the defects are mostly mechanical |
+| **Full with audit** | 6 | Single early defect scan; cheaper than the deep variant when defects are mostly mechanical |
 | **Full** | 5 | Porting or reimplementation without any defect scan |
 | **Defect scan** | 2 | Maintenance audit to surface latent problems |
 | **Lite** | 3 | You need to understand behavior without porting plans |
 | **Architecture only** | 1 | Quick structural overview |
 
-## Compatible Environments
+Set the active pipeline by editing `workflow/status.yaml`'s `pipeline:` field, or pass it as the argument to `/codecarto-init`.
 
-CodeCartographer works with any LLM that can read and write files:
+**On disk:**
+
+| Variant | Pipeline file |
+|---|---|
+| Full with deep audit (**default**) | `workflow/pipeline-full-with-deep-audit.yaml` |
+| Full with audit | `workflow/pipeline-full-with-audit.yaml` |
+| Full | `workflow/pipeline.yaml` |
+| Defect scan | `workflow/pipeline-defect-scan.yaml` |
+| Lite | `workflow/pipeline-lite.yaml` |
+| Architecture only | `workflow/pipeline-architecture-only.yaml` |
+
+---
+
+## The dashboard
+
+Every state change re-renders `.codecarto/dashboard.html` — a self-contained single-file artifact you open in any browser. Aggregates everything a human wants to see at a glance:
+
+- Pipeline progress strip with per-phase status badges
+- Per-phase cards with output links, open questions, carry-forward routing, owner notes, last-run usage
+- Aggregate token usage panel + per-phase breakdown
+- Activity timeline with session-file links
+- Open questions roll-up grouped by source phase
+- Closeouts list (reverse-chronological) with relative-path links
+
+No JavaScript. No external assets. Light/dark via `prefers-color-scheme`. Works opened directly from `file://`.
+
+**Opt-in narrative summary.** `/codecarto-dashboard --narrate` runs the orchestrator's model as a one-shot session that writes a 200–400 word executive summary citing specific findings from recent closeouts. Cached to `.codecarto/.dashboard-narration.local.md` and preserved across deterministic re-renders with a "(N runs since)" staleness note.
+
+---
+
+## Pi extension features
+
+Beyond the slash commands, the Pi extension layers on:
+
+**Phase sub-agents.** `/codecarto-next` spawns each phase as an isolated `AgentSession`. Tool calls, file reads, and reasoning live in the child's own context window — they never accumulate in the orchestrator. Your TUI stays on the orchestrator session and remains responsive while phases work in background.
+
+**Live agents widget** above the editor showing tool count, token usage, elapsed time, and current activity.
+
+```text
+●  CodeCartographer
+└─ ⠹  architecture phase  ⟳ 3 · 5 tool uses · 12.3k tokens · 1m32s
+       ⎿ reading…
+```
+
+**File-backed phase sessions.** Phase transcripts persist to the same Pi session directory the orchestrator uses, so `/resume`, `/tree`, and `/export` browse them as first-class sessions. Each appears as `CodeCartographer phase: <id>` with lineage back to the orchestrator's session.
+
+**Phase-completion summary in the orchestrator transcript.** When a phase finishes, a Markdown closeout block is appended to the orchestrator's session via `pi.sendMessage(...)`. Visible in the TUI scrollback; available to the orchestrator's LLM as context on your next message. No auto-trigger — you stay in control.
+
+**Opt-in LLM-steered seed prompts.** Set `orchestrator.llm_steer_next_phase: true` in `.codecarto/workflow/config.yaml` (or pass `--llm-steer` per invocation), and the orchestrator's LLM rewrites the next phase's seed prompt to highlight relevant prior findings. Off by default — extra orchestrator-side tokens, opt-in. The rewritten prompt is injected into the orchestrator transcript so you can audit what the rewriter chose to emphasize.
+
+**Per-phase usage tracking.** Each phase run is appended to `.codecarto/workflow/.usage.local.yaml`. `/codecarto-usage` reports cumulative + per-phase totals.
+
+**Tool interception.** `bash` is blocked outright; `edit` and `write` are confined to `.codecarto/`. Same rules apply to phase sub-agents.
+
+### Slash commands
+
+| Command | Purpose |
+|---|---|
+| `/codecarto-init [variant]` | Copy `.codecarto/` into the current repository, select pipeline variant |
+| `/codecarto-status` | Current phase, progress, open questions |
+| `/codecarto-next [--llm-steer \| --no-llm-steer]` | Spawn the next eligible phase as a sub-agent |
+| `/codecarto-phase <id>` | Force a specific phase, even out of pipeline order |
+| `/codecarto-validate [phase]` | Validate a phase output against completion criteria |
+| `/codecarto-complete [phase]` | Atomically mark a phase complete (validation must pass) |
+| `/codecarto-skill <name>` | Run a post-pipeline skill once all phases are complete |
+| `/codecarto-usage` | Cumulative + per-phase token usage |
+| `/codecarto-dashboard [--narrate]` | Regenerate `.codecarto/dashboard.html`; `--narrate` for the LLM executive summary |
+
+### Version history (Pi orchestration)
+
+The current parallel-sub-agent design landed in 0.2.0 and has been incrementally enriched: file-backed sessions (0.3.0), summary injection (0.4.0), opt-in LLM steering (0.5.0), usage tracking (0.6.0), and the HTML dashboard (0.7.0). 0.1.x workspaces don't need migration — existing `.codecarto/` directories work unchanged. See `CHANGELOG.md` for details.
+
+---
+
+## MCP server
+
+The same framework is packaged as a [Model Context Protocol](https://modelcontextprotocol.io) server. The MCP path returns prompt text for the host to dispatch and never runs sub-agents itself, so the Pi-only orchestration features (sub-agents, live widget, dashboard, usage tracking) don't apply — but phase prompts and validation are byte-identical with the Pi path because both import the same `core/`.
+
+Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/specification/2025-11-25) via `@modelcontextprotocol/sdk` ≥ 1.29.0. The negotiated `protocolVersion` reflects whatever the connecting client requests; the server accepts every revision the SDK supports (currently `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`, `2024-10-07`).
+
+| Tool | Pi equivalent |
+|---|---|
+| `codecarto_init` | `/codecarto-init` |
+| `codecarto_status` | `/codecarto-status` |
+| `codecarto_next` | `/codecarto-next` |
+| `codecarto_phase` | `/codecarto-phase` |
+| `codecarto_validate` | `/codecarto-validate` |
+| `codecarto_complete` | `/codecarto-complete` |
+| `codecarto_skill` | `/codecarto-skill` |
+
+Each tool accepts an absolute `cwd` for the target repository. `codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation).
+
+---
+
+## Compatible environments
 
 | Environment | Notes |
 |---|---|
-| **Claude Code** | Point it at `.codecarto/GUIDE.md`. Works out of the box. |
-| **OpenCode** | Same as Claude Code — file read/write is built in. |
-| **Cursor / Windsurf / IDE copilots** | Open the repo. Point the LLM at `.codecarto/GUIDE.md` in chat. |
-| **Aider** | Run from the repo root. |
+| **Pi** | Native — install the extension, get slash commands + widget + dashboard. |
+| **Claude Code** | MCP server, or point it at `.codecarto/GUIDE.md` directly. |
+| **Claude Desktop** | MCP server. |
+| **OpenCode / Aider / Cursor / Windsurf / IDE copilots** | Open the repo, point the LLM at `.codecarto/GUIDE.md`. |
 | **Claude.ai / ChatGPT (web chat)** | Paste file contents manually. Tedious for multi-phase runs. |
 | **API-based agents** | Load files programmatically, pass to the model, write outputs back. |
 
-## Token Usage and Cost
+---
 
-CodeCartographer is token-intensive. It reads your source code multiple times across phases and produces thousands of words of structured output. Here's what to expect:
+## Token usage and cost
 
-### Template Overhead (Fixed Cost)
+CodeCartographer is token-intensive — it reads source code multiple times across phases and produces thousands of words of structured output. Plan accordingly.
 
-Every session reads the guide, pipeline definition, status file, and validation protocol. On top of that, each phase reads its own SKILL.md and output template. This overhead is fixed regardless of codebase size:
+### Template overhead (fixed cost)
+
+Every session reads the guide, pipeline definition, status, and validation protocol. Each phase additionally reads its own `SKILL.md` and output template. Fixed regardless of codebase size:
 
 | Component | Tokens (input) |
 |---|---|
@@ -204,17 +253,16 @@ Every session reads the guide, pipeline definition, status file, and validation 
 | Protocols phase instructions | ~1,200 |
 | Porting phase instructions | ~1,200 |
 | Reimplementation spec phase instructions | ~1,100 |
-| **Total template overhead for a 6-phase run** | **~27,000** |
+| **Total template overhead, 6-phase run** | **~27,000** |
+| **Total template overhead, 7-phase deep-audit** | **~32,000** (split defect scan adds one more SKILL load) |
 
-### Source Code Reading (Variable Cost)
+### Source code reading (variable cost)
 
-This is the dominant cost. Each phase reads some or all of your source code. The architecture phase reads the most (full structural scan); later phases are more targeted but also read prior findings.
+The dominant cost. Each phase reads some or all of your source code; the architecture phase reads the most. Rough guide: **expect 1–3× your codebase size in tokens per phase**. A 50k-token codebase might consume 100–200k input tokens across a full pipeline run.
 
-Rough guide: **expect to read 1-3x your codebase size in tokens per phase**. A 50k-token codebase might consume 100-200k input tokens across a full pipeline run.
+### Output generation
 
-### Output Generation
-
-Each phase produces a structured findings document. From a real 6-phase run (CodeCartographer analyzing itself — a small ~14k-word template):
+From a real 6-phase run (CodeCartographer analyzing itself — a small ~14k-word template):
 
 | Phase | Output size |
 |---|---|
@@ -228,36 +276,40 @@ Each phase produces a structured findings document. From a real 6-phase run (Cod
 
 Larger codebases produce proportionally larger outputs.
 
-### Cost Estimates
+### Cost estimates
 
 For a medium-sized codebase (~100k tokens of source):
 
-| Pipeline | Estimated Input | Estimated Output | Total |
+| Pipeline | Estimated input | Estimated output | Total |
 |---|---|---|---|
 | Architecture only | ~130k | ~5k | ~135k tokens |
 | Defect scan (2-phase) | ~260k | ~10k | ~270k tokens |
 | Lite (3-phase) | ~370k | ~15k | ~385k tokens |
 | Full (5-phase) | ~570k | ~22k | ~592k tokens |
 | Full with audit (6-phase) | ~700k | ~27k | ~727k tokens |
+| Full with deep audit (7-phase, default) | ~830k | ~32k | ~862k tokens |
 
-At current API pricing (~$3/M input, ~$15/M output for Claude Sonnet), a full 5-phase run on a 100k-token codebase costs roughly **$2-4**. Larger codebases scale linearly.
+At current API pricing (~$3/M input, ~$15/M output for Claude Sonnet), a full 5-phase run on a 100k-token codebase costs roughly **$2–4**. Larger codebases scale linearly.
 
-### Tips to Reduce Token Usage
+### Tips to reduce token usage
 
-- **Start with architecture-only** to see if the output quality is useful before committing to a full run.
-- **Use one session per phase** — each phase gets a fresh context window, so you're not paying to carry stale context.
-- **For very large codebases** (500k+ tokens of source), the LLM can't read everything anyway. It will use the architecture map to prioritize and produce partial results. Check `open_questions` in status.yaml to see what it skipped.
-- **The lite pipeline (3 phases) gives 80% of the value** for understanding a codebase without the porting-specific phases.
+- **Start with `architecture-only`** to see if the output quality is useful before committing to a full run.
+- **One LLM session per phase** — each phase gets a fresh context window so you're not paying to carry stale context.
+- **For very large codebases** (500k+ tokens of source), the LLM can't read everything anyway. It uses the architecture map to prioritize and produces partial results. `open_questions` in `status.yaml` shows what was skipped.
+- **The `lite` pipeline (3 phases) gives 80% of the value** for understanding a codebase without porting-specific phases.
+- **Skip `--llm-steer`** unless you're hitting cross-phase coherence issues — the rewriter costs orchestrator-side tokens per phase.
 
-## Model Compatibility
+---
 
-CodeCartographer is LLM-agnostic by design, but model choice affects both what you can analyze and how good the results are. There are two independent constraints: context window size and model capability.
+## Model compatibility
 
-### Context Window
+LLM-agnostic by design, but model choice affects both what you can analyze and how good the results are. Two independent constraints: **context window size** and **model capability**.
 
-Each phase runs in its own session, so the context window limits how much source code can be read per phase — not across the whole pipeline. After subtracting template overhead, prior-phase findings, and output generation, here's how much room remains for reading source code:
+### Context window
 
-| Phase | Available for Source Code (128k model) | Available (200k model) |
+Each phase runs in its own session, so the context window limits how much source code can be read per phase — not across the whole pipeline. After template overhead, prior-phase findings, and output generation:
+
+| Phase | Available for source (128k model) | Available (200k model) |
 |---|---|---|
 | Architecture | ~121k | ~193k |
 | Defect scan | ~115k | ~187k |
@@ -266,79 +318,40 @@ Each phase runs in its own session, so the context window limits how much source
 | Porting | ~104k | ~176k |
 | Reimplementation spec | ~103k | ~175k |
 
-Since each phase reads 1–3x the codebase, practical limits by context window:
+Practical limits by codebase size:
 
-| Codebase Size | 128k Context | 200k Context |
+| Codebase | 128k context | 200k context |
 |---|---|---|
 | <30k tokens | All phases comfortable | All phases comfortable |
-| 30–60k tokens | Feasible, some PARTIAL results | Comfortable |
-| 60–100k tokens | Marginal — heavy PARTIAL use | Feasible with prioritization |
-| >100k tokens | Not viable | Feasible, later phases may PARTIAL |
+| 30–60k tokens | Feasible, some `PARTIAL` results | Comfortable |
+| 60–100k tokens | Marginal — heavy `PARTIAL` use | Feasible with prioritization |
+| >100k tokens | Not viable | Feasible, later phases may `PARTIAL` |
 
-The pipeline handles context exhaustion gracefully: phases can write `PARTIAL` validation and log remaining work in `open_questions` in status.yaml.
+The pipeline handles context exhaustion gracefully: phases write `PARTIAL` validation and log remaining work in `open_questions`.
 
-### Model Capability
+### Model capability
 
-Context window is the easier problem. The harder constraint is whether the model can handle the cognitive demands of each phase. The tasks that degrade fastest on weaker models:
+The harder constraint. Tasks that degrade fastest on weaker models:
 
-1. **Evidence classification** (high risk) — distinguishing `observed fact` from `strong inference` from `open question` requires calibrated self-awareness about certainty. Weaker models tend to over-classify inferences as facts and skip `open question` tagging.
-2. **Defect scan** (high risk) — the 6-pass scan demands domain-specific reasoning (concurrency, security, API contracts). Weaker models produce more false positives, miss subtle bugs, and over-report style issues as defects.
-3. **Architecture synthesis** (medium-high risk) — abstracting a coherent layer map from many files is high-order reasoning. Weaker models produce flatter, shallower descriptions with poor dependency direction analysis.
+1. **Evidence classification** (high risk) — distinguishing `observed fact` from `strong inference` from `open question` requires calibrated self-awareness about certainty. Weaker models over-classify inferences as facts and skip `open question` tagging.
+2. **Defect scan** (high risk) — the multi-pass scan demands domain-specific reasoning (concurrency, security, API contracts). Weaker models produce more false positives, miss subtle bugs, and over-report style issues as defects.
+3. **Architecture synthesis** (medium-high risk) — abstracting a coherent layer map from many files is high-order reasoning.
 4. **Structured output adherence** (medium risk) — filling templates correctly with all required sections and consistent formatting.
-5. **Cross-phase coherence** (medium risk) — later phases build on earlier findings. Weak architecture output compounds errors downstream.
+5. **Cross-phase coherence** (medium risk) — later phases build on earlier findings. Weak architecture compounds errors downstream.
 
-### Recommended Model Tiers
+### Recommended model tiers
 
-| Model Tier | Examples | Recommended Pipeline | Notes |
+| Tier | Examples | Recommended pipeline | Notes |
 |---|---|---|---|
-| Frontier | Claude Opus 4.6, Claude Sonnet 4.6 | Full-with-deep-audit (default) or full-with-audit | Full quality on codebases up to ~100k tokens; the deep audit's semantic pass benefits most from frontier reasoning |
-| Strong mid-tier | Claude Haiku 4.5, GPT-4o | Lite (3-phase) | Architecture and contracts are solid. Skip defect scan — false positive rate too high. Evidence classification less reliable. |
-| Smaller / faster | GPT-4o-mini, Gemini Flash, small open-weight models | Architecture only | Fair structural overview. Multi-phase pipelines produce significant quality loss. Defect scan not recommended. |
+| **Frontier** | Claude Opus 4.6, Claude Sonnet 4.6 | Full-with-deep-audit (default) | Full quality on codebases up to ~100k tokens; the deep audit's semantic pass benefits most from frontier reasoning. |
+| **Strong mid-tier** | Claude Haiku 4.5, GPT-4o | Lite (3-phase) | Architecture and contracts are solid. Skip defect scan — false-positive rate too high. |
+| **Smaller / faster** | GPT-4o-mini, Gemini Flash, small open-weight models | Architecture only | Fair structural overview. Multi-phase runs produce significant quality loss. |
 
-### What to Expect Below Sonnet 4.6
+If you're testing a new model, start with `pipeline-architecture-only.yaml` on a codebase you already understand and compare the output against your own knowledge. Fast signal on whether to trust the model with deeper phases.
 
-- **Architecture phase**: Usually passable. The layer map and public surfaces will be present but may lack nuance in dependency direction and porting priorities.
-- **Contracts and protocols**: Quality depends heavily on how well architecture was captured. Expect missing edge cases and less precise error-behavior documentation.
-- **Defect scan**: Not recommended. The six specialized passes require strong domain reasoning. Weaker models produce noisy reports that cost more time to triage than they save.
-- **Porting and reimplementation**: These synthesis phases amplify upstream quality. If earlier phases are weak, these will be too.
+---
 
-If you're testing a new model, start with `pipeline-architecture-only.yaml` on a codebase you already understand, and compare the output against your own knowledge. That gives you a fast signal on whether to trust the model with deeper phases.
-
-## How It Works
-
-CodeCartographer is a pure template — no CLI, no runtime, no dependencies. The "code" is structured Markdown and YAML files that tell an LLM what to analyze, in what order, and how to format the results.
-
-The workflow is driven by flat files inside `.codecarto/`:
-
-- **`GUIDE.md`** — the LLM entry point. Every session starts here.
-- **`workflow/pipeline.yaml`** — phase definitions, dependencies, and output paths.
-- **`workflow/status.yaml`** — mutable per-project state. Single source of truth for progress.
-- **`workflow/VALIDATE.md`** — validation protocol run after every phase.
-- **`findings/<phase>/SKILL.md`** — detailed analysis instructions per phase.
-- **`templates/`** — output templates that enforce consistent structure.
-
-Phases form a DAG: `contracts` and `protocols` can run in parallel after `architecture`; `porting` waits for both; `reimplementation-spec` is last.
-
-### Multi-Session Workflows
-
-Large codebases typically need one LLM session per phase. Start a new session and point it at `.codecarto/GUIDE.md` — it reads `status.yaml`, sees what's done, and picks up the next phase automatically. You don't need to explain what happened in previous sessions.
-
-For follow-up sessions, you can also use `NEW_THREAD_BLURB.md` as a lighter entry point — it's a compact checklist that saves tokens by skipping the full guide.
-
-### The Defect Scan
-
-The defect-scan phase runs six sequential analysis passes: logic and correctness, error handling, concurrency, security, API contract violations, and configuration hazards. Each finding gets a severity (critical/high/medium/low) and a recommended action (fix before porting / port differently / leave behind).
-
-## Design Principles
-
-- **LLM-agnostic**: works with any model that can read/write files.
-- **Phase-gated**: one phase per session, validated before advancing.
-- **Single source of truth**: `status.yaml` tracks progress; no duplicated state.
-- **Evidence-classified**: every finding is tagged as observed fact, strong inference, portability hazard, or open question.
-- **Template-driven**: consistent output structure across projects and sessions.
-- **Drop-in**: lives inside your repo as `.codecarto/`. No symlinking or copying source code.
-
-## Repository Structure
+## Repository structure
 
 ```
 .codecarto/                  # The drop-in template (Markdown + YAML).
@@ -346,30 +359,30 @@ The defect-scan phase runs six sequential analysis passes: logic and correctness
   findings/
     architecture/            # System structure, layers, dependency direction.
     defect-scan/             # Multi-pass defect report with severity and actions.
-      passes/                # Per-category analysis instructions (6 pass files).
     contracts/               # User-visible behavior, defaults, acceptance checks.
     protocols/               # Event streams, state machines, persistence formats.
     porting/                 # Reverse-engineering synthesis bundle.
-    reimplementation-spec/   # Final language-agnostic build spec.
+    reimplementation-spec/   # Language-agnostic build spec.
   scratch/                   # Disposable analysis notes.
   templates/                 # Output structure templates.
-  workflow/                  # Pipeline definitions, status, validation.
+  workflow/                  # Pipeline definitions, status, validation, config.
+  closeouts/                 # Per-session closeout files.
   THREAD_LOG.md              # Cross-session summary log.
-core/                        # Pipeline state machine, validators, prompt assembly.
-extensions/codecarto/        # Pi extension surface (slash commands, widget, tool gating).
-mcp-server/                  # MCP server surface (seven tools mirroring the Pi commands).
+  dashboard.html             # Generated; gitignored.
+core/                        # Pipeline state machine, validators, prompt assembly,
+                             # dashboard renderer, usage log, orchestrator config.
+extensions/codecarto/        # Pi extension surface (slash commands, widget,
+                             # tool gating, dashboard writer + narrator).
+mcp-server/                  # MCP server surface (seven tools mirroring Pi commands).
 tests/                       # Invariant tests catching cross-wrapper drift.
 docs/                        # Roadmap, design notes.
-CONTRIBUTING.md              # How to contribute to CodeCartographer itself.
-SECURITY.md                  # Security policy and reporting.
-CHANGELOG.md                 # Version history.
 ```
 
-## Git
+The `.codecarto/.gitignore` excludes generated findings, scratch files, the dashboard, and the local usage / narration caches. Template files (workflow definitions, skills, output templates) are safe to commit so teammates can run their own analyses.
 
-The `.codecarto/.gitignore` excludes generated findings and scratch files by default. The template files (workflow definitions, skills, templates) are safe to commit so other team members can run their own analysis.
+---
 
-## For Automated Agents
+## For automated agents
 
 1. Load the active pipeline YAML and `workflow/status.yaml`.
 2. Select the first phase whose status is not `complete` and whose dependencies are all `complete`.
@@ -377,9 +390,24 @@ The `.codecarto/.gitignore` excludes generated findings and scratch files by def
 4. Write outputs to the declared paths. Run validation. Update status.
 5. Repeat until all phases are complete. Set `current_phase` to `complete` when done.
 
+The MCP server does steps 1–3 directly; the Pi extension wraps them as slash commands plus the parallel-sub-agent runner described above.
+
+---
+
+## Design principles
+
+- **LLM-agnostic** — works with any model that can read and write files.
+- **Phase-gated** — one phase per session, validated before advancing.
+- **Single source of truth** — `status.yaml` tracks progress; no duplicated state.
+- **Evidence-classified** — every finding tagged as observed fact, strong inference, portability hazard, or open question.
+- **Template-driven** — consistent output structure across projects and sessions.
+- **Drop-in** — lives inside your repo as `.codecarto/`. No symlinks, no copying source code, no runtime daemon.
+
+---
+
 ## Contributing
 
-Bug reports, feature requests, and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, branch model, and the maintainer release process. All participants are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). For security issues, please follow [SECURITY.md](SECURITY.md) instead of filing a public issue.
+Bug reports, feature requests, and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, branch model, and the maintainer release process. All participants are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). For security issues, follow [SECURITY.md](SECURITY.md) instead of filing a public issue.
 
 ## License
 
