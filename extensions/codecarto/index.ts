@@ -2,30 +2,22 @@ import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { runPhase } from "./agent-runner.ts";
-import { buildSteeringMessage, rewritePhasePrompt } from "./agent-rewriter.ts";
-import { clearPhase, finishPhase, getPhaseActivity, startPhase } from "./agent-state.ts";
-import { buildPhaseSummary } from "./agent-summary.ts";
-import { disposeAgentsWidget, getAgentsWidget } from "./agent-widget.ts";
+import { autoCompletePhase, buildAutoSummary, isPhaseRunning, runAuto, runSinglePhase } from "./auto-runner.ts";
+import { disposeAgentsWidget } from "./agent-widget.ts";
 import { parseDashboardFlags } from "./dashboard-flags.ts";
 import { narrateDashboard } from "./dashboard-narrator.ts";
 import { writeDashboard } from "./dashboard-writer.ts";
 import { parseNextFlags } from "./next-flags.ts";
 
 import {
-	appendUsageRun,
 	buildPhasePrompt,
 	buildSkillPrompt,
-	buildThreadLogEntry,
 	buildValidationSummary,
 	canonicalPath,
-	closeoutFileName,
 	computePerPhaseTotals,
 	computeTotals,
 	createEmptyStatus,
-	dateOnly,
 	DEFAULT_PIPELINE_PATH,
-	ensureCloseoutStub,
 	getNextEligiblePhase,
 	getPipelineLabel,
 	getWorkspaceState,
@@ -34,21 +26,16 @@ import {
 	loadCodecartoConfig,
 	loadUsage,
 	loadYamlFile,
-	PACKAGE_VERSION,
 	normalizeForComparison,
-	normalizeStatus,
-	type OpenQuestionEntry,
 	packagedWorkspaceDir,
 	pathExists,
+	PACKAGE_VERSION,
 	PIPELINE_ALIASES,
 	type PipelineFile,
 	resolvePhase,
 	resolvePipelineChoice,
 	type StatusFile,
 	stringifySimpleYaml,
-	uniqueStrings,
-	updateStatusAtomically,
-	type UsageRunStatus,
 	validatePhaseOutput,
 	type WorkspaceState,
 } from "../../core/index.ts";
@@ -56,32 +43,6 @@ import {
 const STATUS_WIDGET_ID = "codecarto-widget";
 const STATUS_LINE_ID = "codecarto-status";
 const SAFE_TOOL_NAMES = ["read", "grep", "find", "ls", "edit", "write"];
-
-async function recordUsage(
-	workspaceDir: string,
-	phaseId: string,
-	status: UsageRunStatus,
-	activity: { startedAt: number; completedAt?: number; turnCount: number; toolUses: number; lifetimeUsage: { input: number; output: number; cacheWrite: number } },
-): Promise<void> {
-	try {
-		await appendUsageRun(workspaceDir, {
-			timestamp: new Date().toISOString(),
-			phase: phaseId,
-			status,
-			turn_count: activity.turnCount,
-			tool_uses: activity.toolUses,
-			duration_ms: (activity.completedAt ?? Date.now()) - activity.startedAt,
-			tokens: {
-				input: activity.lifetimeUsage.input,
-				output: activity.lifetimeUsage.output,
-				cache_write: activity.lifetimeUsage.cacheWrite,
-			},
-		});
-	} catch {
-		// Local usage logging is best-effort. A full disk or permission
-		// failure shouldn't surface as a phase error to the user.
-	}
-}
 
 function formatUsageTokens(count: number): string {
 	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(2)}M`;
@@ -291,15 +252,19 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("codecarto-next", {
-		description: "Run the next eligible CodeCartographer phase as a sub-agent. Flags: --llm-steer / --no-llm-steer",
+		description: "Run the next eligible CodeCartographer phase as a sub-agent. Flags: --llm-steer / --no-llm-steer / --auto [--strict]",
 		getArgumentCompletions: (prefix) => {
-			const items = ["--llm-steer", "--no-llm-steer"]
+			const items = ["--llm-steer", "--no-llm-steer", "--auto", "--strict"]
 				.filter((value) => value.startsWith(prefix))
 				.map((value) => ({ value, label: value }));
 			return items.length > 0 ? items : null;
 		},
 		handler: async (args, ctx) => {
 			const flags = parseNextFlags(args);
+			if (flags.error) {
+				ctx.ui.notify(flags.error, "error");
+				return;
+			}
 			if (flags.unknown.length > 0) {
 				ctx.ui.notify(`Unknown /codecarto-next flag: ${flags.unknown.join(" ")}`, "error");
 				return;
@@ -307,6 +272,25 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			const state = await ensureWorkspaceState(ctx);
 			if (!state) return;
+
+			if (flags.auto) {
+				ctx.ui.notify(`Auto pipeline${flags.strict ? " (strict)" : ""} running…`, "info");
+				const result = await runAuto(ctx, pi, state, {
+					strict: flags.strict,
+					llmSteerOverride: flags.llmSteerOverride,
+					signal: ctx.signal,
+				});
+				const availableSkills = await listSkillNames(state.workspaceDir).catch(() => [] as string[]);
+				pi.sendMessage({
+					customType: "codecarto-auto-summary",
+					content: buildAutoSummary(result, availableSkills),
+					display: true,
+				});
+				lastFeedbackLines = [`Auto pipeline ${result.outcome}: ${result.reason}`];
+				await refreshWorkspaceUi(ctx, lastFeedbackLines);
+				ctx.ui.notify(`Auto pipeline ${result.outcome}: ${result.phasesRun.length}/${result.totalPhases} phases.`, result.outcome === "complete" ? "info" : "warning");
+				return;
+			}
 
 			const phase = getNextEligiblePhase(state);
 			if (!phase) {
@@ -318,8 +302,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			// Reject re-entry: don't spawn a duplicate runner for a phase that's
 			// already in flight from a previous /codecarto-next invocation.
-			const existing = getPhaseActivity(phase.id);
-			if (existing && existing.status === "running") {
+			if (isPhaseRunning(phase.id)) {
 				ctx.ui.notify(`Phase ${phase.id} is already running.`, "warning");
 				return;
 			}
@@ -327,127 +310,18 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const config = await loadCodecartoConfig(state.workspaceDir);
 			const llmSteerEnabled = flags.llmSteerOverride ?? config.orchestrator.llm_steer_next_phase;
 
-			let prompt = await buildPhasePrompt(state, phase, false);
-			if (llmSteerEnabled) {
-				ctx.ui.notify(`Customizing ${phase.id} prompt via LLM rewriter…`, "info");
-				const rewrite = await rewritePhasePrompt({ ctx, state, originalPrompt: prompt, nextPhaseId: phase.id });
-				if (rewrite.used) {
-					prompt = rewrite.prompt;
-					ctx.ui.notify(`LLM rewriter customized ${phase.id} seed prompt.`, "info");
-					// Inject the full rewritten prompt into the orchestrator's session
-					// so the user can audit what the rewriter chose to emphasize before
-					// the phase sub-agent starts. Same pattern as the phase-completion
-					// summary: display:true renders in the TUI; no triggerTurn so the
-					// orchestrator doesn't auto-respond.
-					pi.sendMessage({
-						customType: "codecarto-steering",
-						content: buildSteeringMessage({
-							nextPhaseId: phase.id,
-							prevPhaseId: rewrite.prevPhaseId,
-							rewrittenPrompt: rewrite.prompt,
-						}),
-						display: true,
-					});
-				} else {
-					ctx.ui.notify(`LLM rewriter skipped (${rewrite.skipReason}); using stock prompt.`, "warning");
-				}
-			}
-
-			const activity = startPhase(phase.id);
 			lastFeedbackLines = [`Running ${phase.id} phase as sub-agent`];
 			setUiState(ctx, state, lastFeedbackLines);
-			ctx.ui.notify(`CodeCartographer phase: ${phase.id} (sub-agent running)`, "info");
 
-			// Attach the persistent "Agents" widget so the user can watch the
-			// phase's tool/turn/token counts live above the editor while the
-			// orchestrator's TUI stays responsive.
-			getAgentsWidget().attach(ctx.ui);
-
-			// Fire-and-forget: spawn the phase runner asynchronously so the
-			// orchestrator's TUI stays responsive. The runner mutates the shared
-			// agent-state map from event callbacks; M2 will read that map from a
-			// persistent widget. For M1 we just notify on completion.
-			void runPhase(
-				ctx,
-				prompt,
-				{
-					onSessionCreated: (session) => { activity.session = session; },
-					onToolStart: (id, name) => { activity.activeTools.set(id, name); activity.toolUses++; },
-					onToolEnd: (id) => { activity.activeTools.delete(id); },
-					onTextDelta: (_delta, fullText) => { activity.responseText = fullText; },
-					onTurnEnd: (turnCount) => { activity.turnCount = turnCount; },
-					onMessageEnd: (usage) => {
-						activity.lifetimeUsage.input += usage.input;
-						activity.lifetimeUsage.output += usage.output;
-						activity.lifetimeUsage.cacheWrite += usage.cacheWrite;
-					},
-				},
-				{ sessionName: `CodeCartographer phase: ${phase.id}` },
-			)
-				.then((result) => {
-					const status: UsageRunStatus = result.aborted ? "aborted" : "completed";
-					finishPhase(phase.id, { status });
-					if (ctx.hasUI) {
-						ctx.ui.notify(
-							result.aborted
-								? `Phase ${phase.id} aborted.`
-								: `Phase ${phase.id} sub-agent finished (${result.toolUses} tool uses, ${result.turnCount} turns).`,
-							result.aborted ? "warning" : "info",
-						);
-					}
-					// Inject a CustomMessageEntry into the orchestrator's session so
-					// the user sees a closeout summary in the TUI scrollback and the
-					// orchestrator's LLM picks up the phase result as context on the
-					// next turn. display:true renders in the TUI; no triggerTurn so
-					// the LLM doesn't auto-respond — the user remains in control.
-					pi.sendMessage({
-						customType: "codecarto-phase-summary",
-						content: buildPhaseSummary({
-							phaseId: phase.id,
-							status: result.aborted ? "aborted" : "completed",
-							turnCount: activity.turnCount,
-							toolUses: activity.toolUses,
-							tokens: activity.lifetimeUsage,
-							durationMs: (activity.completedAt ?? Date.now()) - activity.startedAt,
-							responseText: result.responseText,
-						}),
-						display: true,
-					});
-					void recordUsage(state.workspaceDir, phase.id, status, activity);
-					void writeDashboard(ctx.cwd, PACKAGE_VERSION);
-				})
-				.catch((err: unknown) => {
-					const message = err instanceof Error ? err.message : String(err);
-					finishPhase(phase.id, { status: "error", error: message });
-					if (ctx.hasUI) {
-						ctx.ui.notify(`Phase ${phase.id} sub-agent failed: ${message}`, "error");
-					}
-					pi.sendMessage({
-						customType: "codecarto-phase-summary",
-						content: buildPhaseSummary({
-							phaseId: phase.id,
-							status: "error",
-							turnCount: activity.turnCount,
-							toolUses: activity.toolUses,
-							tokens: activity.lifetimeUsage,
-							durationMs: (activity.completedAt ?? Date.now()) - activity.startedAt,
-							responseText: "",
-							error: message,
-						}),
-						display: true,
-					});
-					void recordUsage(state.workspaceDir, phase.id, "error", activity);
-					void writeDashboard(ctx.cwd, PACKAGE_VERSION);
-				})
+			// Fire-and-forget: keep the TUI responsive while the sub-agent works.
+			// runSinglePhase handles all side effects (steering message, notify,
+			// phase summary, recordUsage, dashboard regen, clearPhase linger).
+			void runSinglePhase(ctx, pi, state, phase, { llmSteerEnabled, signal: ctx.signal })
 				.finally(() => {
-					// Sub-agent may have written findings, owner_notes, or carry-forward
-					// items into status.yaml. Refresh the main status widget so the
-					// "Open questions / Carry-forward / Next" lines reflect the new
-					// state without waiting for the user to run /codecarto-status.
+					// Refresh the status widget after the phase resolves so the
+					// "Open questions / Carry-forward / Next" lines reflect any
+					// owner_notes the sub-agent wrote to status.yaml.
 					void refreshWorkspaceUi(ctx);
-					// Linger 30s in M1 so /codecarto-status can show that the phase ran;
-					// M2's widget owns the proper "linger N turns" lifecycle.
-					setTimeout(() => clearPhase(phase.id), 30_000);
 				});
 		},
 	});
@@ -512,82 +386,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const completionTimestamp = new Date().toISOString();
-			const updatedState = await updateStatusAtomically(ctx.cwd, (lockedState) => {
-				const phase = resolvePhase(lockedState, validation.phaseId);
-				if (!phase?.primary_output) {
-					throw new Error(`Phase ${validation.phaseId} is missing primary_output.`);
-				}
-
-				const nextStatus = normalizeStatus(lockedState.status, lockedState.pipeline, lockedState.status.pipeline, lockedState.cwd);
-				const existingPhase = nextStatus.phases[validation.phaseId] ?? {
-					status: "pending",
-					owner_notes: [],
-					outputs_present: [],
-					open_questions: [],
-					carry_forward: [],
-				};
-
-				const gapEntries: OpenQuestionEntry[] = validation.rows
-					.filter((row) => row.result.toUpperCase().includes("PARTIAL"))
-					.map((row) => ({
-						kind: "needs-maintainer-decision",
-						description: row.criterion || "Partial validation gap",
-						deferred_reason: row.evidence || "Marked PARTIAL by validation",
-					}));
-
-				const mergedOpenQuestions: OpenQuestionEntry[] = [...existingPhase.open_questions];
-				for (const candidate of gapEntries) {
-					const dupe = mergedOpenQuestions.some((entry) => entry.description === candidate.description && entry.deferred_reason === candidate.deferred_reason);
-					if (!dupe) mergedOpenQuestions.push(candidate);
-				}
-
-				nextStatus.phases[validation.phaseId] = {
-					status: "complete",
-					owner_notes: uniqueStrings([
-						...existingPhase.owner_notes,
-						`Completed via /codecarto-complete on ${completionTimestamp}.`,
-						`Primary output: .codecarto/${validation.primaryOutput}`,
-						`Validation: ${validation.overall}`,
-					]).slice(-3),
-					outputs_present: uniqueStrings([...existingPhase.outputs_present, validation.primaryOutput]),
-					open_questions: mergedOpenQuestions,
-					carry_forward: existingPhase.carry_forward ?? [],
-				};
-
-				nextStatus.last_updated = completionTimestamp;
-				const updatedWorkspaceState: WorkspaceState = {
-					...lockedState,
-					status: nextStatus,
-				};
-
-				const nextEligible = getNextEligiblePhase(updatedWorkspaceState);
-				nextStatus.current_phase = nextEligible?.id ?? "complete";
-				nextStatus.next_actions = nextEligible
-					? [
-						`Begin ${nextEligible.id} phase by producing ${nextEligible.primary_output ?? `findings/${nextEligible.id}/`}`,
-					]
-					: ["All phases complete. Review findings, open questions, and downstream implementation notes."];
-
-				return {
-					state: {
-						...updatedWorkspaceState,
-						status: nextStatus,
-					},
-					threadLogEntry: buildThreadLogEntry(validation.phaseId, validation, completionTimestamp),
-				};
-			});
-
-			let closeoutNotice: string | undefined;
-			try {
-				const created = await ensureCloseoutStub(updatedState.workspaceDir, validation.phaseId, completionTimestamp);
-				if (created) {
-					closeoutNotice = `Closeout stub: .codecarto/closeouts/${closeoutFileName(dateOnly(completionTimestamp), validation.phaseId)} (fill it in)`;
-				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				closeoutNotice = `Closeout stub not created: ${message}`;
-			}
+			const { updatedState, closeoutNotice } = await autoCompletePhase(ctx, validation);
 
 			lastFeedbackLines = [
 				`Completed phase: ${validation.phaseId}`,
@@ -598,7 +397,6 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			setUiState(ctx, updatedState, lastFeedbackLines);
 			ctx.ui.notify(`Marked ${validation.phaseId} complete`, validation.overall === "PASS WITH GAPS" ? "warning" : "info");
 			if (closeoutNotice) ctx.ui.notify(closeoutNotice, "info");
-			void writeDashboard(ctx.cwd, PACKAGE_VERSION);
 		},
 	});
 
