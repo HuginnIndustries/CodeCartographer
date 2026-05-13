@@ -7,6 +7,9 @@ import { buildSteeringMessage, rewritePhasePrompt } from "./agent-rewriter.ts";
 import { clearPhase, finishPhase, getPhaseActivity, startPhase } from "./agent-state.ts";
 import { buildPhaseSummary } from "./agent-summary.ts";
 import { disposeAgentsWidget, getAgentsWidget } from "./agent-widget.ts";
+import { parseDashboardFlags } from "./dashboard-flags.ts";
+import { narrateDashboard } from "./dashboard-narrator.ts";
+import { writeDashboard } from "./dashboard-writer.ts";
 import { parseNextFlags } from "./next-flags.ts";
 
 import {
@@ -31,6 +34,7 @@ import {
 	loadCodecartoConfig,
 	loadUsage,
 	loadYamlFile,
+	PACKAGE_VERSION,
 	normalizeForComparison,
 	normalizeStatus,
 	type OpenQuestionEntry,
@@ -266,6 +270,9 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			lastFeedbackLines = [`Initialized workspace with pipeline: ${getPipelineLabel(selectedPipelinePath)}`];
 			ctx.ui.notify(`Initialized CodeCartographer (${getPipelineLabel(selectedPipelinePath)})`, "info");
 			await ctx.reload();
+			// Render the initial dashboard (empty usage, all phases pending) so
+			// the user sees the file exist immediately after /codecarto-init.
+			void writeDashboard(ctx.cwd, PACKAGE_VERSION);
 			return;
 		},
 	});
@@ -407,6 +414,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						display: true,
 					});
 					void recordUsage(state.workspaceDir, phase.id, status, activity);
+					void writeDashboard(ctx.cwd, PACKAGE_VERSION);
 				})
 				.catch((err: unknown) => {
 					const message = err instanceof Error ? err.message : String(err);
@@ -429,6 +437,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						display: true,
 					});
 					void recordUsage(state.workspaceDir, phase.id, "error", activity);
+					void writeDashboard(ctx.cwd, PACKAGE_VERSION);
 				})
 				.finally(() => {
 					// Sub-agent may have written findings, owner_notes, or carry-forward
@@ -589,6 +598,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			setUiState(ctx, updatedState, lastFeedbackLines);
 			ctx.ui.notify(`Marked ${validation.phaseId} complete`, validation.overall === "PASS WITH GAPS" ? "warning" : "info");
 			if (closeoutNotice) ctx.ui.notify(closeoutNotice, "info");
+			void writeDashboard(ctx.cwd, PACKAGE_VERSION);
 		},
 	});
 
@@ -669,6 +679,41 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			lastFeedbackLines = lines;
 			setUiState(ctx, state, lastFeedbackLines);
 			ctx.ui.notify(`CodeCartographer usage: ${totals.runs} run${totals.runs === 1 ? "" : "s"}, ${formatUsageTokens(totals.tokens.input + totals.tokens.output)} tokens total`, "info");
+		},
+	});
+
+	pi.registerCommand("codecarto-dashboard", {
+		description: "Regenerate .codecarto/dashboard.html (use --narrate for an LLM executive summary)",
+		getArgumentCompletions: (prefix) => {
+			const items = ["--narrate"]
+				.filter((value) => value.startsWith(prefix))
+				.map((value) => ({ value, label: value }));
+			return items.length > 0 ? items : null;
+		},
+		handler: async (args, ctx) => {
+			const flags = parseDashboardFlags(args);
+			if (flags.unknown.length > 0) {
+				ctx.ui.notify(`Unknown /codecarto-dashboard flag: ${flags.unknown.join(" ")}`, "error");
+				return;
+			}
+
+			const state = await ensureWorkspaceState(ctx);
+			if (!state) return;
+
+			if (flags.narrate) {
+				ctx.ui.notify(`Narrating dashboard via LLM…`, "info");
+				const result = await narrateDashboard(ctx, state);
+				if (result.used) {
+					ctx.ui.notify("Narration written to .codecarto/.dashboard-narration.local.md", "info");
+				} else {
+					ctx.ui.notify(`LLM narration skipped (${result.skipReason}); rendering deterministic dashboard.`, "warning");
+				}
+			}
+
+			await writeDashboard(ctx.cwd, PACKAGE_VERSION);
+			lastFeedbackLines = ["Dashboard regenerated: .codecarto/dashboard.html"];
+			setUiState(ctx, state, lastFeedbackLines);
+			ctx.ui.notify("Dashboard regenerated: .codecarto/dashboard.html", "info");
 		},
 	});
 }

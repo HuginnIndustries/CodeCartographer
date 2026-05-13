@@ -50,3 +50,28 @@ export function uniqueStrings(items: string[]): string[] {
 export function dateOnly(timestamp: string): string {
 	return timestamp.slice(0, 10);
 }
+
+/**
+ * Format an integer as `2.50M` / `2.3k` / `500`. Used by the HTML dashboard
+ * for compact numeric cells. The widget and notify paths have their own
+ * formatters that include " tokens" / unit suffixes inline; this helper is
+ * deliberately suffix-free so callers attach units in surrounding markup.
+ */
+export function formatTokenCount(count: number): string {
+	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(2)}M`;
+	if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
+	return `${count}`;
+}
+
+/**
+ * Format a millisecond duration as `2m30s` / `1.5s` / `500ms`. Matches the
+ * extension widget's `formatDuration` shape; promoted to `core/` so the
+ * dashboard renderer can reuse without crossing the core/extensions boundary.
+ */
+export function formatMillis(ms: number): string {
+	if (ms < 1000) return `${ms}ms`;
+	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+	const minutes = Math.floor(ms / 60_000);
+	const seconds = Math.floor((ms % 60_000) / 1000);
+	return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
+}

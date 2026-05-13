@@ -11,3 +11,4 @@ export * from "./prompts.ts";
 export * from "./workspace.ts";
 export * from "./orchestrator-config.ts";
 export * from "./usage.ts";
+export * from "./dashboard.ts";
