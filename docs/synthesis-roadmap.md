@@ -92,25 +92,25 @@ Sequenced for dependency, not time. Each milestone should leave
 commits. Commit prefixes from CLAUDE.md: `feat:`, `fix:`, `docs:`,
 `refactor:`, `ci:`, `framework:`.
 
-### M0 — Docs + design freeze
+### M0 — Docs + design freeze ✅ 2026-05-14
 
 Goal: lock the revised shape in writing before any code moves. Anyone
 opening the repo after this milestone should see the new plan and the
 new positioning.
 
-- [ ] Update `docs/design-synthesis-phases.md` with a "Revised
+- [x] Update `docs/design-synthesis-phases.md` with a "Revised
       2026-05-14" header pointing at this roadmap as the source of
       truth for the revised shape.
-- [ ] Write `docs/library-format.md` — public read-side contract for
+- [x] Write `docs/library-format.md` — public read-side contract for
       `.codecarto-library` marker, `metadata.yaml`, `index.yaml`,
       `INDEX.md`. Marked **experimental, may break before v2**.
-- [ ] Update `CLAUDE.md` — replace "three delivery surfaces" parity
+- [x] Update `CLAUDE.md` — replace "three delivery surfaces" parity
       framing with the surface priority. Add note on `tool_call` hook
       change coming in M2.
-- [ ] Rewrite `README.md` lead with surface-priority ordering: Pi
+- [x] Rewrite `README.md` lead with surface-priority ordering: Pi
       install first, MCP setup second, drop-in third. Each section
       framed by "when to use this," not feature parity.
-- [ ] Stub `CHANGELOG.md` entry for the upcoming release noting the
+- [x] Stub `CHANGELOG.md` entry for the upcoming release noting the
       positioning shift and new synthesis surface.
 
 Acceptance: a new contributor reading `docs/` + `README.md` + `CLAUDE.md`

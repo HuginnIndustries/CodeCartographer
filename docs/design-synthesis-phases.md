@@ -1,7 +1,16 @@
 # CodeCartographer Synthesis Phases — Design Plan
 
+> **Revised 2026-05-14 — superseded by [docs/synthesis-roadmap.md](./synthesis-roadmap.md).**
+>
+> This document is kept as the historical record of the original six-phase design.
+> The roadmap captures the revised shape: three synthesis phases (not six),
+> library promoted to its own git-trackable repository, surface-priority
+> reframe (Pi → MCP → drop-in), and `metadata.yaml` with model/harness
+> generation context. Read the roadmap for the current target shape; read
+> this file only for the original proposal and the critique trail.
+
 Branch: `claude/design-synthesis-phases-mtfUw`
-Status: design proposal, awaiting maintainer approval before implementation.
+Status: original design proposal — see roadmap for revised plan.
 
 ## Context
 

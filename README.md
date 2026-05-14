@@ -23,19 +23,25 @@
 |---|---|
 | **Layered analysis pipeline** — architecture → defect scan → behavioral contracts → protocols → porting → reimplementation spec | `.codecarto/` template |
 | **Validation gates between phases** — no advancing past a `FAIL` output | `core/` state machine |
-| **Three delivery surfaces** — Pi extension, MCP server, or pure template | All three share `core/` |
+| **Three surfaces, one framework** — Pi extension (recommended), MCP server (for other coding agents), or drop-in template (one-off / evaluation) | All three share `core/` |
 | **Live progress widget** while phase sub-agents work | Pi extension |
 | **HTML dashboard** — single-file aggregate of progress, links, usage, narrative | `.codecarto/dashboard.html` |
 | **Per-phase token tracking** | `/codecarto-usage` |
 | **Opt-in LLM steering** of the next phase's seed prompt | `/codecarto-next --llm-steer` |
 
+> **Coming soon — forward-flow synthesis.** A library + synthesis pipeline is in active design: accumulate `reimplementation-spec.md` artifacts from many repos into a git-trackable library, then synthesize a new `project-plan.md` from a vision plus selected library entries. See [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md) for the implementation tracker.
+
 ---
 
 ## Install
 
-Pick the surface that matches your tooling. All three share the same `core/` and produce byte-identical phase prompts.
+Three surfaces, in recommended order. All three share the same `core/` and produce byte-identical phase prompts — but the user experience differs by surface, and new features (live widget, dashboard, auto-runner, the upcoming library + synthesis workflows) land on Pi first, MCP second, drop-in last.
 
-### Pi extension (recommended for interactive use)
+1. **Pi extension** — recommended for interactive use. First-class UX.
+2. **MCP server** — for Claude Code, Codex, opencode, Cursor, Claude Desktop, and any other MCP-capable agent.
+3. **Drop-in template** — pure `.codecarto/` markdown + YAML for one-off evaluation or any LLM that can read and write files. Library and synthesis workflows are **not** available in pure drop-in mode; the analysis side works fully.
+
+### Pi extension (recommended)
 
 [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) is a TUI coding agent. The CodeCartographer extension adds slash commands, a live agents widget, and the dashboard.
 
@@ -53,7 +59,9 @@ For extension development, point Pi directly at the entrypoint:
 pi -e /absolute/path/to/CodeCartographer/extensions/codecarto/index.ts
 ```
 
-### MCP server (for Claude Code, Claude Desktop, any MCP host)
+### MCP server (for other coding agents)
+
+Use this when your coding agent isn't Pi — Claude Code, Codex, opencode, Cursor, Claude Desktop, or anything else that speaks MCP. The host drives the conversation and runs the LLM; CodeCartographer provides phase prompts, validation, and (with the upcoming synthesis release) library operations.
 
 ```bash
 npm install --global codecartographer-pi
@@ -71,13 +79,17 @@ Add to your host config (`~/.config/claude-code/config.json`, `claude_desktop_co
 }
 ```
 
-### Pure template (no runtime, any LLM that reads/writes files)
+### Drop-in template (one-off / evaluation)
+
+Use this to try CodeCartographer in any repo without installing anything, or in environments where neither Pi nor an MCP-capable agent is available. Works with any LLM that can read and write files.
 
 ```bash
 cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
 ```
 
 Then in the LLM session: `Read .codecarto/GUIDE.md and begin the analysis.`
+
+> **Limitation.** Drop-in mode runs the analysis pipeline fully, but the upcoming library + synthesis workflows (publishing entries, reading them back, generating a project plan from a vision) require executable code and are only available on Pi and MCP. See [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md) for the planned scope.
 
 ---
 
@@ -233,14 +245,15 @@ Each tool accepts an absolute `cwd` for the target repository. `codecarto_init` 
 
 ## Compatible environments
 
-| Environment | Notes |
+| Environment | Recommended surface |
 |---|---|
-| **Pi** | Native — install the extension, get slash commands + widget + dashboard. |
-| **Claude Code** | MCP server, or point it at `.codecarto/GUIDE.md` directly. |
+| **Pi** | Native Pi extension — slash commands + widget + dashboard. |
+| **Claude Code / Codex / opencode** | MCP server. All three speak MCP cleanly. |
+| **Cursor / Windsurf / IDE copilots** | MCP server where supported; otherwise drop-in template (`.codecarto/GUIDE.md`). |
 | **Claude Desktop** | MCP server. |
-| **OpenCode / Aider / Cursor / Windsurf / IDE copilots** | Open the repo, point the LLM at `.codecarto/GUIDE.md`. |
-| **Claude.ai / ChatGPT (web chat)** | Paste file contents manually. Tedious for multi-phase runs. |
-| **API-based agents** | Load files programmatically, pass to the model, write outputs back. |
+| **Aider** | Drop-in template — point at `.codecarto/GUIDE.md`. |
+| **Claude.ai / ChatGPT (web chat)** | Drop-in, paste file contents manually. Tedious for multi-phase runs. |
+| **API-based agents** | Load files programmatically, pass to the model, write outputs back. Drop-in semantics. |
 
 ---
 

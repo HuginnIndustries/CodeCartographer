@@ -4,6 +4,53 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Planned (synthesis + library upgrade — see `docs/synthesis-roadmap.md`)
+
+The next release adds **forward-flow synthesis** to CodeCartographer: take
+N existing reimplementation specs from a shared library plus a user-written
+vision, and produce a `project-plan.md` for a new build. Three concurrent
+shifts make this a coherent release rather than a single feature:
+
+- **Surface priority reframe.** README + CLAUDE.md restructured to lead
+  with the Pi extension as the recommended user surface, then MCP for
+  other coding agents (Claude Code, Codex, opencode, Cursor, etc.), then
+  drop-in template for one-off evaluation. The "three surfaces, byte-identical
+  phase prompts" architecture invariant is preserved — the change is in
+  user-facing framing and where new-feature UX work lands first. No
+  behavior change for existing users.
+- **Library format (experimental).** A new `docs/library-format.md`
+  specifies an on-disk format for accumulating `reimplementation-spec.md`
+  artifacts across analysis runs in a git-trackable directory: marker
+  file, namespaced or single-tenant entry layout, per-version
+  `metadata.yaml` (with a `generation:` block capturing surface / agent /
+  agent_version / model / model_vendor / reasoning), derived `index.yaml`
+  + `INDEX.md`, idempotent content-hash-based version increments. Schema
+  is marked **experimental, may break before v2** until the first external
+  consumer appears.
+- **Synthesis pipeline.** A new `pipeline-synthesis.yaml` with three new
+  phases — `vision-capture` (interactive vision normalizer),
+  `goal-synthesis-propose` (LLM shortlist of library entries, user
+  confirms via markdown checkboxes), and `goal-synthesis-finalize` (the
+  project plan). A `spec-merge` phase between propose and finalize
+  produces a debuggable intermediate. A separate `pipeline-spec-mutate.yaml`
+  applies deltas to an existing spec and republishes as a new library
+  version.
+
+The full implementation tracker lives in
+[`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md). M0 (docs +
+design freeze) is in progress; M1 (library helpers in `core/library.ts`)
+through M5 (release polish) follow.
+
+### Notes
+
+- Library and synthesis workflows require Pi or MCP at runtime —
+  drop-in users still get full analysis-side functionality but cannot
+  publish or synthesize without an executable surface.
+- The Pi extension's `tool_call` hook will gain a configurable
+  `library_path` allow-list entry as part of M2. This is the only
+  security-adjacent change in the upgrade and will be reviewed
+  carefully when it lands.
+
 ## [0.8.0] — 2026-05-13
 
 ### Added
