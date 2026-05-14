@@ -44,8 +44,8 @@ The invariant tests are the most important guardrail: any change to a phase prom
 
 ## Branches and PRs
 
-- Default branch: `master`.
-- Open PRs against `master`. CI (`.github/workflows/ci.yml`) runs `npm ci && npm test` on Node 20 and 22.
+- Default branch: `main`.
+- Open PRs against `main`. CI (`.github/workflows/ci.yml`) runs `npm ci && npm test` on Node 22 and 24.
 - Keep PRs focused. A bug fix and a refactor should be separate PRs.
 
 ## Commit Messages

@@ -241,7 +241,7 @@ Initial public release under the MIT license.
 - **Default pipeline**: `pipeline-full-with-deep-audit.yaml` (7 phases). Splits the defect scan into a mechanical early pass and a semantic late pass so the reimplementation spec can design around defects with full contracts and protocols context.
 - **Pipeline variants**: `architecture-only` (1 phase), `lite` (3 phase), `defect-scan` (2 phase), `full` (5 phase), `full-with-audit` (6 phase, single early defect scan), and `full-with-deep-audit` (7 phase, default).
 - **Invariant tests** (`tests/`): default-pipeline, doc-mention, mcp-server, pipeline-invariants. Catch cross-wrapper drift between template, Pi extension, and MCP server.
-- **CI** (`.github/workflows/ci.yml`): runs `npm ci && npm test` on every PR and push to `master`.
+- **CI** (`.github/workflows/ci.yml`): runs `npm ci && npm test` on every PR and push to `main`.
 - **Documentation**: README with quick-start, pipeline variants, model-compatibility tiers, token-cost guidance; MANUAL for human users; per-phase SKILL.md and template files inside `.codecarto/`.
 
 ### Notes
