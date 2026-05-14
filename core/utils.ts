@@ -3,7 +3,8 @@
 
 import { access } from "node:fs/promises";
 import { constants } from "node:fs";
-import { normalize, resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, normalize, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
 
 export function sleep(ms: number): Promise<void> {
@@ -49,6 +50,21 @@ export function uniqueStrings(items: string[]): string[] {
 
 export function dateOnly(timestamp: string): string {
 	return timestamp.slice(0, 10);
+}
+
+/**
+ * Expand a leading `~` or `~/` to the user's home directory. Node's `path`
+ * module deliberately doesn't do this (it's a shell convention, not a path
+ * primitive), so callers that accept user-typed paths (config files,
+ * `library.path`) need to expand explicitly before passing to `resolve`.
+ * Paths without a leading tilde are returned unchanged.
+ */
+export function expandTilde(path: string): string {
+	if (path === "~") return homedir();
+	if (path.startsWith("~/") || path.startsWith("~\\")) {
+		return join(homedir(), path.slice(2));
+	}
+	return path;
 }
 
 /**

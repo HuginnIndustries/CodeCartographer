@@ -1,12 +1,23 @@
-// Workspace-level orchestrator configuration. Lives at
-// `.codecarto/workflow/config.yaml`. Missing file or missing keys fall back
-// to defaults, so existing workspaces created before this file existed
-// keep working unchanged. Schema is intentionally narrow — one surface
-// per feature, easy to grow.
+// Workspace-level orchestrator configuration. Two layers:
+//
+//   1. User-global  — `~/.codecarto/config.yaml`. Default location for
+//      `library.path`, `library.namespace`, `library.publish_confirm`, and
+//      the orchestrator toggles. Shared across all workspaces on this
+//      machine.
+//   2. Per-workspace — `.codecarto/workflow/config.yaml` inside the
+//      workspace. Overrides individual keys from the user-global layer.
+//
+// Resolution order (top wins): per-workspace > user-global > defaults.
+// Missing files at either layer fall back to defaults; malformed YAML
+// at either layer is non-fatal (drops the layer, logs nothing).
+//
+// `library.path` is returned tilde-expanded and absolute so consumers
+// don't have to expand themselves.
 
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import type { PathLike } from "node:fs";
-import { pathExists } from "./utils.ts";
+import { expandTilde, pathExists } from "./utils.ts";
 import { loadYamlFile } from "./yaml.ts";
 
 export interface OrchestratorConfig {
@@ -17,49 +28,127 @@ export interface OrchestratorConfig {
 	llm_steer_next_phase: boolean;
 }
 
+export interface LibraryConfig {
+	/** Absolute, tilde-expanded path to the CodeCartographer library
+	 *  this workspace publishes to and reads from. Null if unconfigured —
+	 *  callers should prompt the user on first use. */
+	path: string | null;
+	/** Default namespace for entries published by this workspace.
+	 *  Null if unconfigured (single-tenant libraries should use null). */
+	namespace: string | null;
+	/** Whether `codecarto publish` should display a confirmation prompt
+	 *  with slug + source + library path before writing. Default true. */
+	publish_confirm: boolean;
+}
+
 export interface CodecartoConfig {
 	orchestrator: OrchestratorConfig;
+	library: LibraryConfig;
 }
 
 export const CONFIG_RELATIVE_PATH = "workflow/config.yaml";
+export const USER_CONFIG_DIR = join(homedir(), ".codecarto");
+export const USER_CONFIG_PATH = join(USER_CONFIG_DIR, "config.yaml");
+
+/**
+ * Tests and tooling can override the user-global config path by setting
+ * `CODECARTO_USER_CONFIG_PATH`. The exported constant above is the default
+ * for documentation and onboarding flows. Internal load functions go
+ * through `resolveUserConfigPath()` so the override takes effect.
+ */
+export function resolveUserConfigPath(): string {
+	return process.env.CODECARTO_USER_CONFIG_PATH ?? USER_CONFIG_PATH;
+}
 
 const DEFAULT_CONFIG: CodecartoConfig = {
 	orchestrator: {
 		llm_steer_next_phase: false,
 	},
+	library: {
+		path: null,
+		namespace: null,
+		publish_confirm: true,
+	},
 };
 
 type RawConfig = {
 	orchestrator?: Partial<{ llm_steer_next_phase: unknown }>;
+	library?: Partial<{ path: unknown; namespace: unknown; publish_confirm: unknown }>;
 };
 
 export async function loadCodecartoConfig(workspaceDir: PathLike): Promise<CodecartoConfig> {
-	const configPath = join(workspaceDir as string, CONFIG_RELATIVE_PATH);
-	if (!(await pathExists(configPath))) return cloneDefault();
+	const userRaw = await loadRawIfExists(resolveUserConfigPath());
+	const workspaceRaw = await loadRawIfExists(join(workspaceDir as string, CONFIG_RELATIVE_PATH));
+	return mergeLayered([userRaw, workspaceRaw]);
+}
+
+/**
+ * Read the user-global config directly. Exposed so wrappers can show
+ * "your library is at <path>" in onboarding flows without having to
+ * load a workspace first.
+ */
+export async function loadUserConfig(): Promise<CodecartoConfig> {
+	const userRaw = await loadRawIfExists(resolveUserConfigPath());
+	return mergeLayered([userRaw]);
+}
+
+async function loadRawIfExists(path: string): Promise<RawConfig | null> {
+	if (!(await pathExists(path))) return null;
 	try {
-		const raw = await loadYamlFile<RawConfig>(configPath);
-		return mergeConfig(raw);
+		return await loadYamlFile<RawConfig>(path);
 	} catch {
-		// Malformed YAML: fall back to defaults rather than failing the
-		// command. The user can fix it; a broken config shouldn't block work.
-		return cloneDefault();
+		return null;
 	}
 }
 
+function mergeLayered(layers: (RawConfig | null | undefined)[]): CodecartoConfig {
+	let merged = cloneDefault();
+	for (const layer of layers) merged = applyRaw(merged, layer);
+	return merged;
+}
+
+/**
+ * Apply one raw config layer over an existing config. Public so tests can
+ * exercise layering without filesystem fixtures, and so wrappers can mock
+ * a layer in memory (e.g. "what if library_path were X").
+ */
 export function mergeConfig(raw: RawConfig | null | undefined): CodecartoConfig {
-	const merged = cloneDefault();
-	if (!raw || typeof raw !== "object") return merged;
+	return applyRaw(cloneDefault(), raw);
+}
+
+function applyRaw(base: CodecartoConfig, raw: RawConfig | null | undefined): CodecartoConfig {
+	if (!raw || typeof raw !== "object") return base;
+	const out: CodecartoConfig = {
+		orchestrator: { ...base.orchestrator },
+		library: { ...base.library },
+	};
+
 	const o = raw.orchestrator;
 	if (o && typeof o === "object") {
 		if (typeof o.llm_steer_next_phase === "boolean") {
-			merged.orchestrator.llm_steer_next_phase = o.llm_steer_next_phase;
+			out.orchestrator.llm_steer_next_phase = o.llm_steer_next_phase;
 		}
 	}
-	return merged;
+
+	const l = raw.library;
+	if (l && typeof l === "object") {
+		if (typeof l.path === "string" && l.path.trim() !== "") {
+			out.library.path = resolve(expandTilde(l.path.trim()));
+		}
+		if (typeof l.namespace === "string" && l.namespace.trim() !== "") {
+			out.library.namespace = l.namespace.trim();
+		}
+		if (typeof l.publish_confirm === "boolean") {
+			out.library.publish_confirm = l.publish_confirm;
+		}
+	}
+
+	return out;
 }
 
 function cloneDefault(): CodecartoConfig {
 	return {
 		orchestrator: { ...DEFAULT_CONFIG.orchestrator },
+		library: { ...DEFAULT_CONFIG.library },
 	};
 }

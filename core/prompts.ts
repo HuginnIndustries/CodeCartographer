@@ -32,7 +32,24 @@ export function collectRoutedCarryForward(state: WorkspaceState, targetPhaseId: 
 	return routed;
 }
 
-export async function buildPhasePrompt(state: WorkspaceState, phase: PipelinePhase, forced: boolean): Promise<string> {
+export interface BuildPhasePromptOptions {
+	/**
+	 * Set when the phase is being run inside `/codecarto-next --auto` (or any
+	 * other non-interactive driver). Suppresses interactive hooks that would
+	 * otherwise pause the sub-agent to ask the user a question — those hooks
+	 * are the dominant cause of the auto loop wedging at `reimplementation-spec`
+	 * with a `MISSING` primary output. Each suppressed hook documents the
+	 * default it falls back to.
+	 */
+	auto?: boolean;
+}
+
+export async function buildPhasePrompt(
+	state: WorkspaceState,
+	phase: PipelinePhase,
+	forced: boolean,
+	options: BuildPhasePromptOptions = {},
+): Promise<string> {
 	const lines = [
 		`Read .codecarto/GUIDE.md and continue the CodeCartographer workflow for the phase \`${phase.id}\`.`,
 		`Work on this phase only. The analyzed source code is the repository outside .codecarto/.`,
@@ -75,11 +92,19 @@ export async function buildPhasePrompt(state: WorkspaceState, phase: PipelinePha
 
 	if (phase.id === "reimplementation-spec") {
 		lines.push("");
-		lines.push("Strategic Alignment Hook (run BEFORE producing the spec):");
-		lines.push("- Confirm with the user whether this spec should be language-agnostic or opinionated:");
-		lines.push("    - language-agnostic → use templates/reimplementation-spec.md (default).");
-		lines.push("    - opinionated (target stack locked) → use templates/reimplementation-spec-opinionated.md.");
-		lines.push("- Record the chosen variant in the spec front-matter and in your validation block.");
+		if (options.auto) {
+			lines.push("Strategic Alignment Hook (auto run — DO NOT ask the user):");
+			lines.push("- This phase is running inside `/codecarto-next --auto`. The user is not in the loop.");
+			lines.push("- Default the spec to LANGUAGE-AGNOSTIC: use templates/reimplementation-spec.md.");
+			lines.push("- Record `variant: language-agnostic` and `selection: auto-default` in the spec front-matter and in your validation block, so a later opinionated re-run is traceable.");
+			lines.push("- Do NOT block on the user. If you would otherwise pause to ask about target stack, project name, or scope cuts, instead produce the language-agnostic spec and capture each unresolved choice as an `open_questions` entry (`kind: needs-maintainer-decision`) for follow-up.");
+		} else {
+			lines.push("Strategic Alignment Hook (run BEFORE producing the spec):");
+			lines.push("- Confirm with the user whether this spec should be language-agnostic or opinionated:");
+			lines.push("    - language-agnostic → use templates/reimplementation-spec.md (default).");
+			lines.push("    - opinionated (target stack locked) → use templates/reimplementation-spec-opinionated.md.");
+			lines.push("- Record the chosen variant in the spec front-matter and in your validation block.");
+		}
 	}
 
 	lines.push("", "Rules:");

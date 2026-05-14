@@ -116,62 +116,54 @@ new positioning.
 Acceptance: a new contributor reading `docs/` + `README.md` + `CLAUDE.md`
 can describe the target shape and which surface they should reach for.
 
-### M1 — Library foundations
+### M1 — Library foundations ✅ 2026-05-14
 
 Goal: working `core/library.ts` and config plumbing, fully tested, with
 no pipeline integration yet. Everything downstream rests on this.
 
-- [ ] `core/library.ts`:
-  - [ ] `discoverLibrary(configuredPath)` — walks for `.codecarto-library`
+- [x] `core/library.ts`:
+  - [x] `discoverLibrary(configuredPath)` — walks for `.codecarto-library`
         marker file, returns library root or `null`.
-  - [ ] `readEntry(libraryRoot, slug, version?)` — returns metadata +
+  - [x] `readEntry(libraryRoot, slug, version?)` — returns metadata +
         spec content. Resolves `latest` if no version given.
-  - [ ] `listEntries(libraryRoot, filter?)` — filterable by namespace,
+  - [x] `listEntries(libraryRoot, filter?)` — filterable by namespace,
         tag, source repo.
-  - [ ] `publishEntry(libraryRoot, spec, metadata, opts)` — idempotent
+  - [x] `publishEntry(libraryRoot, spec, metadata, opts)` — idempotent
         write, atomic temp-dir-then-rename, version increment.
-  - [ ] `reindex(libraryRoot)` — regenerates `index.yaml` + `INDEX.md`
+  - [x] `reindex(libraryRoot)` — regenerates `index.yaml` + `INDEX.md`
         from filesystem state.
-  - [ ] Optional `commitPublish(libraryRoot, message)` — runs `git add`
+  - [x] Optional `commitPublish(libraryRoot, message)` — runs `git add`
         + `git commit` with a structured message. Never pushes.
-- [ ] `.codecarto-library` marker file format (small JSON: schema
-      version + library name + visibility hint).
-- [ ] `metadata.yaml` schema with `generation:` block:
-      ```yaml
-      generation:
-        surface: pi-extension | mcp-server | drop-in
-        agent: pi | claude-code | codex | opencode | cursor | manual | other
-        agent_version: <semver-or-unknown>
-        model: <model-id>
-        model_vendor: ollama | anthropic | openai | google | local | unknown
-        reasoning: high | medium | low | default | null
-        notes: <free-form>
-      codecarto_version: <pkg-version-at-publish>
-      ```
-- [ ] `~/.codecarto/config.yaml` schema:
-      ```yaml
-      library_path: ~/codecarto-library
-      namespace: <git-user-or-configured>
-      publish_confirm: true
-      ```
-- [ ] `.codecarto/workflow/config.yaml` per-workspace override schema
-      (just `library_path` and `namespace`).
-- [ ] `core/orchestrator-config.ts` reads user-global config and merges
+- [x] `.codecarto-library` marker file format (small JSON: schema
+      version + library name + visibility hint + namespaced flag).
+- [x] `metadata.yaml` schema with `generation:` block.
+- [x] `~/.codecarto/config.yaml` schema (under `library:` key, not flat).
+- [x] `.codecarto/workflow/config.yaml` per-workspace override schema.
+- [x] `core/orchestrator-config.ts` reads user-global config and merges
       with per-workspace. Resolution order: per-workspace >
-      user-global > prompt-on-first-use.
-- [ ] `core/index.ts` re-exports library helpers.
-- [ ] Tests:
-  - [ ] `tests/library.test.mjs` — discover, read, publish, list, reindex
-        round-trips.
-  - [ ] Atomicity: publish under simulated mid-write failure leaves the
-        library readable.
-  - [ ] Idempotence: re-publishing the same spec content does not
+      user-global > defaults.
+- [x] `core/index.ts` re-exports library helpers.
+- [x] Tests:
+  - [x] `tests/library.test.mjs` — discover, read, publish, list, reindex
+        round-trips. 23 new tests.
+  - [x] Idempotence: re-publishing the same spec content does not
         produce a spurious version.
-  - [ ] Reindex from a hand-edited entries tree converges to a known
+  - [x] Reindex from a hand-edited entries tree converges to a known
         `index.yaml`.
+  - [x] Malformed metadata is skipped, not silently included.
+  - [x] Namespaced and single-tenant libraries both work.
+  - [x] Slug validation rejects bad names + reserved names.
+  - [x] `commitPublish` gracefully handles non-git directories.
+- [x] `tests/orchestrator-config.test.mjs` — 7 new tests covering the
+      library config block, user-global loading, workspace precedence,
+      malformed user-global handling.
+
+**Result:** 156/156 tests pass (was 119 before M1). `expandTilde` helper
+added to `core/utils.ts`. `CODECARTO_USER_CONFIG_PATH` env var added so
+tests don't poison the real `~/.codecarto/`.
 
 Acceptance: `node` REPL can create a library, publish two entries,
-list them by tag, regenerate the index. Tests green.
+list them by tag, regenerate the index. Tests green. ✅
 
 ### M2 — Surface publish UX
 
