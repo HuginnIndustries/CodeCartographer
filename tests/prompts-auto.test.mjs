@@ -20,12 +20,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const { buildPhasePrompt, getWorkspaceState, resolvePhase } = await import(`${REPO_ROOT}/core/index.ts`);
-const { handleInit } = await import(`${REPO_ROOT}/mcp-server/server.ts`);
+const { buildPhasePrompt, getWorkspaceState, resolvePhase } = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
+const { handleInit } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 
 let WORKSPACE;
 let state;

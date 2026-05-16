@@ -6,10 +6,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { decideAfterPhase } = await import(`${REPO_ROOT}/extensions/codecarto/auto-runner.ts`);
+const { decideAfterPhase } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/auto-runner.ts`).href);
 
 function makeValidation(overall, phaseId = "architecture") {
 	return {

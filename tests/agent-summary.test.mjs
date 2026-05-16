@@ -5,10 +5,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { buildPhaseSummary } = await import(`${REPO_ROOT}/extensions/codecarto/agent-summary.ts`);
+const { buildPhaseSummary } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/agent-summary.ts`).href);
 
 const baseInput = {
 	phaseId: "blueprint",

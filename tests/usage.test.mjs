@@ -6,12 +6,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { loadUsage, appendUsageRun, computeTotals, computePerPhaseTotals, USAGE_RELATIVE_PATH } = await import(
-	`${REPO_ROOT}/core/usage.ts`
-);
+const { loadUsage, appendUsageRun, computeTotals, computePerPhaseTotals, USAGE_RELATIVE_PATH } = await import(pathToFileURL(`${REPO_ROOT}/core/usage.ts`).href);
 
 async function makeWorkspace() {
 	const dir = await mkdtemp(join(tmpdir(), "codecarto-usage-"));

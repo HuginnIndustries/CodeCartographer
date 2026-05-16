@@ -5,12 +5,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { renderDashboard, escapeHtml, DASHBOARD_RELATIVE_PATH } = await import(
-	`${REPO_ROOT}/core/dashboard.ts`
-);
+const { renderDashboard, escapeHtml, DASHBOARD_RELATIVE_PATH } = await import(pathToFileURL(`${REPO_ROOT}/core/dashboard.ts`).href);
 
 // ----------------------------------------------------------------------------
 // Helpers — fixture builders

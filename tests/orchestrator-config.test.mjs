@@ -7,12 +7,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { loadCodecartoConfig, loadUserConfig, mergeConfig, CONFIG_RELATIVE_PATH } = await import(
-	`${REPO_ROOT}/core/orchestrator-config.ts`
-);
+const { loadCodecartoConfig, loadUserConfig, mergeConfig, CONFIG_RELATIVE_PATH } = await import(pathToFileURL(`${REPO_ROOT}/core/orchestrator-config.ts`).href);
 
 async function makeWorkspace(configContent) {
 	const dir = await mkdtemp(join(tmpdir(), "codecarto-config-"));

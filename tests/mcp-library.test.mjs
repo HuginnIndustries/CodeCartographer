@@ -8,16 +8,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const { handlePublish, handleLibraryList, handleLibraryReindex } = await import(
-	`${REPO_ROOT}/mcp-server/server.ts`
-);
-const { writeMarker, LIBRARY_INDEX_FILE, ENTRIES_DIR, METADATA_FILE, SPEC_FILE } = await import(
-	`${REPO_ROOT}/core/library.ts`
-);
+const { handlePublish, handleLibraryList, handleLibraryReindex } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
+const { writeMarker, LIBRARY_INDEX_FILE, ENTRIES_DIR, METADATA_FILE, SPEC_FILE } = await import(pathToFileURL(`${REPO_ROOT}/core/library.ts`).href);
 const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
 
 async function makeLib({ namespaced = true, name = "mcp-test-lib" } = {}) {

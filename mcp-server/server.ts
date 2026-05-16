@@ -19,7 +19,7 @@ import {
 	ListToolsRequestSchema,
 	McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 
 import {
@@ -67,8 +67,6 @@ import {
 	validatePhaseOutput,
 	type WorkspaceState,
 } from "../core/index.ts";
-
-import { readFile } from "node:fs/promises";
 
 // ---------- input helpers ----------
 
@@ -387,12 +385,9 @@ async function resolveLibraryPath(args: { library_path?: unknown; cwd?: unknown 
 		if (!isAbsolute(cwd)) {
 			throw new McpError(ErrorCode.InvalidParams, `cwd must be absolute, got: ${cwd}`);
 		}
+		// loadCodecartoConfig merges user-global under per-workspace and tolerates
+		// a missing workspace file, so a single call covers both cases.
 		const workspaceDir = join(cwd, ".codecarto");
-		if (await pathExists(workspaceDir)) {
-			const config = await loadCodecartoConfig(workspaceDir);
-			if (config.library.path) return config.library.path;
-		}
-		// Fall through to user-global-only config if workspace has no override.
 		const config = await loadCodecartoConfig(workspaceDir);
 		if (config.library.path) return config.library.path;
 	}

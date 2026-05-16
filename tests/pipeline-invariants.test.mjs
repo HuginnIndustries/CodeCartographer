@@ -7,12 +7,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CODECARTO = join(REPO_ROOT, ".codecarto");
 
-const { parseSimpleYaml } = await import(`${REPO_ROOT}/core/yaml.ts`);
+const { parseSimpleYaml } = await import(pathToFileURL(`${REPO_ROOT}/core/yaml.ts`).href);
 
 async function loadPipelines() {
 	const pipelinesDir = join(CODECARTO, "workflow");
