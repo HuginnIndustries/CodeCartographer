@@ -26,6 +26,17 @@ The original implementation plan called for a standalone CLI. That role is now f
 
 Open future-facing items:
 
+### Forward-flow synthesis (in progress — see [`synthesis-roadmap.md`](synthesis-roadmap.md))
+
+A library + synthesis pipeline that turns CodeCartographer from analysis-only into analysis + synthesis: accumulate `reimplementation-spec.md` artifacts into a git-trackable library, then synthesize a `project-plan.md` from a vision plus selected library entries.
+
+- **M0 ✅ Docs + design freeze.** `docs/library-format.md` (experimental schema), surface-priority reframe in README + CLAUDE.md, `synthesis-roadmap.md` tracker.
+- **M1 ✅ Library foundations.** `core/library.ts` with publish / read / list / reindex / commit primitives. User-global `~/.codecarto/config.yaml` plumbing in `core/orchestrator-config.ts`. 23 new library tests + 7 new config tests (119 → 156).
+- **M2 (next) Surface publish UX.** Pi `/codecarto-publish` slash command + dashboard library state. MCP `codecarto_publish` / `codecarto_library_list` / `codecarto_library_reindex` tools. The Pi `tool_call` hook gains a configurable `library_path` allow-list — security-adjacent, will be reviewed carefully.
+- **M3** Synthesis pipeline phases: `vision-capture` → `goal-synthesis-propose` (markdown-checkbox confirmation gate) → `spec-merge` → `goal-synthesis-finalize`.
+- **M4** `pipeline-spec-mutate.yaml` — apply deltas to an existing spec and republish as a new library version.
+- **M5** Release polish.
+
 ### Validation hardening
 
 - Automated structural pre-checks (section presence, evidence-tag coverage, table completeness) before LLM self-assessment, so a structurally broken output fails fast without burning tokens on self-grading.

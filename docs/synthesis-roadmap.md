@@ -188,17 +188,27 @@ metadata captured automatically (Pi) or passed by host (MCP).
   - [ ] "N stale entries" hint for entries whose source repo HEAD has
         moved since analysis (best-effort — requires source_commit).
 
-#### M2b — MCP server
+#### M2b — MCP server ✅ 2026-05-14
 
-- [ ] `codecarto_publish` MCP tool — accepts optional `model_metadata`
-      argument that the host fills in if it can.
-- [ ] `codecarto_library_list` MCP tool — paginated listing with
-      filters (namespace, tag, slug, source repo).
-- [ ] `codecarto_library_reindex` MCP tool — explicit reindex for
-      hosts that want to bypass auto-regen.
-- [ ] If `model_metadata` not provided, leave `generation:` fields as
-      `unknown` and surface a "fill in before commit?" prompt back to
-      the host.
+- [x] `codecarto_publish` MCP tool — accepts optional `model_metadata`
+      argument that the host fills in if it can. Defaults all
+      generation fields to `unknown` when omitted; `surface` always
+      `mcp-server`. Library path resolves from explicit `library_path`
+      arg or from `cwd`'s config.yaml. Slug derives from `source_repo`
+      if not provided. `pipeline` defaults from `cwd`'s status.yaml.
+      Required: `source_repo` + `headline` + (`spec` or `spec_path`).
+- [x] `codecarto_library_list` MCP tool — listing with filters
+      (namespace, tag, slug, source_repo). Returns structuredContent
+      with `count` and full `entries[]` array.
+- [x] `codecarto_library_reindex` MCP tool — explicit reindex.
+- [x] When `model_metadata` is omitted, `generation:` fields write as
+      `unknown`. (The "fill in before commit?" prompt is host-side UX,
+      out of scope for the MCP transport itself.)
+- [x] Tests: `tests/mcp-library.test.mjs` — 18 new tests covering
+      derived-slug publish, idempotence, content-bump v2, generation
+      block (defaults and host-passed values), `spec_path` flow,
+      missing-field rejections, namespacing rules, list with filters,
+      reindex round-trips. Full test count: 156 → 174.
 
 #### M2c — Drop-in docs
 
