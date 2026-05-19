@@ -42,7 +42,7 @@ Pick the surface that matches your tooling. All three share the same `core/` and
 ```bash
 pi install npm:codecartographer-pi          # from the npm registry
 pi install /absolute/path/to/CodeCartographer  # from a local checkout
-pi install git:github.com/your-user/CodeCartographer  # from a git URL
+pi install git:github.com/HuginnIndustries/CodeCartographer  # from a git URL
 ```
 
 > **Don't** run `npm install codecartographer-pi` for the Pi use case. Plain `npm install` puts the package on disk but doesn't register it with Pi. Use `pi install npm:...` so Pi writes the package into its own `~/.pi/agent/settings.json`.
