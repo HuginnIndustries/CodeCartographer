@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="CodeCartographer logo" width="96" height="96">
+</p>
+
 # CodeCartographer
 
 [![CI](https://github.com/HuginnIndustries/CodeCartographer/actions/workflows/ci.yml/badge.svg)](https://github.com/HuginnIndustries/CodeCartographer/actions/workflows/ci.yml)

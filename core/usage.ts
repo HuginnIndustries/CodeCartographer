@@ -127,6 +127,21 @@ function isUsageRun(x: unknown): x is UsageRun {
 	return (
 		typeof r.timestamp === "string" &&
 		typeof r.phase === "string" &&
-		typeof r.status === "string"
+		(r.status === "completed" || r.status === "aborted" || r.status === "error") &&
+		isFiniteNumber(r.turn_count) &&
+		isFiniteNumber(r.tool_uses) &&
+		isFiniteNumber(r.duration_ms) &&
+		isUsageTokens(r.tokens) &&
+		(r.session_file === undefined || typeof r.session_file === "string")
 	);
+}
+
+function isUsageTokens(x: unknown): x is UsageTokens {
+	if (!x || typeof x !== "object") return false;
+	const t = x as Partial<UsageTokens>;
+	return isFiniteNumber(t.input) && isFiniteNumber(t.output) && isFiniteNumber(t.cache_write);
+}
+
+function isFiniteNumber(x: unknown): x is number {
+	return typeof x === "number" && Number.isFinite(x);
 }

@@ -157,10 +157,11 @@ export async function runSinglePhase(
 				tokens: activity.lifetimeUsage,
 				durationMs: (activity.completedAt ?? Date.now()) - activity.startedAt,
 				responseText: result.responseText,
+				sessionFile: result.sessionFile,
 			}),
 			display: true,
 		});
-		void recordUsage(state.workspaceDir, phase.id, status, activity);
+		void recordUsage(state.workspaceDir, phase.id, status, activity, result.sessionFile);
 		void writeDashboard(ctx.cwd, PACKAGE_VERSION);
 
 		return {
@@ -308,6 +309,14 @@ export interface AutoRunOptions {
 	strict: boolean;
 	llmSteerOverride?: boolean;
 	signal?: AbortSignal;
+	/**
+	 * Fired after each phase is auto-completed and `state` has advanced to the
+	 * next eligible phase. Lets the caller refresh UI that reflects pipeline
+	 * progress (the status widget, session name) mid-run instead of only after
+	 * the whole loop returns — otherwise the readout stays frozen at the
+	 * initial phase/progress until the auto run finishes.
+	 */
+	onPhaseAdvanced?: (state: WorkspaceState) => void;
 }
 
 export interface AutoRunResult {
@@ -450,6 +459,7 @@ export async function runAuto(
 			const { updatedState } = await autoCompletePhase(ctx, validation!);
 			state = updatedState;
 			phasesRun.push(phase.id);
+			options.onPhaseAdvanced?.(state);
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
 			return finish({
@@ -544,6 +554,7 @@ async function recordUsage(
 	phaseId: string,
 	status: UsageRunStatus,
 	activity: PhaseActivity,
+	sessionFile?: string,
 ): Promise<void> {
 	try {
 		await appendUsageRun(workspaceDir, {
@@ -558,6 +569,7 @@ async function recordUsage(
 				output: activity.lifetimeUsage.output,
 				cache_write: activity.lifetimeUsage.cacheWrite,
 			},
+			...(sessionFile ? { session_file: sessionFile } : {}),
 		});
 	} catch {
 		// Best-effort, matches the original recordUsage discipline.
