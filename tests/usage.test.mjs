@@ -123,3 +123,17 @@ test("loadUsage drops entries that lack required fields", async () => {
 		await cleanup();
 	}
 });
+
+test("loadUsage drops entries with non-numeric counters or malformed tokens", async () => {
+	const { workspaceDir, cleanup } = await makeWorkspace();
+	try {
+		const path = join(workspaceDir, USAGE_RELATIVE_PATH);
+		const bad = `version: 1\nruns:\n  -\n    timestamp: '2026-05-08T13:00:00.000Z'\n    phase: 'blueprint'\n    status: 'completed'\n    turn_count: '<img src=x onerror=alert(1)>'\n    tool_uses: 0\n    duration_ms: 100\n    tokens:\n      input: 0\n      output: 0\n      cache_write: 0\n  -\n    timestamp: '2026-05-08T14:00:00.000Z'\n    phase: 'contracts'\n    status: 'completed'\n    turn_count: 1\n    tool_uses: 2\n    duration_ms: 300\n    tokens:\n      input: 10\n      output: 20\n      cache_write: 0\n`;
+		await writeFile(path, bad, "utf8");
+		const u = await loadUsage(workspaceDir);
+		assert.equal(u.runs.length, 1);
+		assert.equal(u.runs[0].phase, "contracts");
+	} finally {
+		await cleanup();
+	}
+});

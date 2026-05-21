@@ -83,6 +83,18 @@ test("DASHBOARD_RELATIVE_PATH is at the workspace root, not under workflow/", ()
 	assert.equal(DASHBOARD_RELATIVE_PATH, "dashboard.html");
 });
 
+
+
+test("embedded dashboard script preserves escaped search/export literals and parseable JSON data", () => {
+	const html = renderDashboard(emptyInputs());
+	assert.ok(html.includes("split(/\\s+/).filter(Boolean)"));
+	assert.ok(html.includes("JSON.stringify(JSON.parse(raw), null, 2) + '\\n'"));
+	const raw = html.match(/<script id="cc-dashboard-data" type="application\/json">([\s\S]*?)<\/script>/)?.[1];
+	assert.ok(raw, "dashboard JSON script should exist");
+	const parsed = JSON.parse(raw);
+	assert.equal(parsed.project, "test-project");
+});
+
 test("empty-state render: no runs / no closeouts produces explicit markers + no broken links", () => {
 	const html = renderDashboard(emptyInputs());
 	assert.match(html, /No phase runs recorded yet\./);
@@ -130,7 +142,7 @@ test("full-state render: completed phases get output links, owner note with HTML
 
 	// contracts primary is missing → no link, "missing" tag instead
 	assert.doesNotMatch(html, /href="findings\/contracts\/contracts\.md"/);
-	assert.match(html, /primary \(missing\)/);
+	assert.match(html, /primary missing/);
 });
 
 test("carry-forward entries render with the target_phase pill", () => {
@@ -190,8 +202,10 @@ test("usage panel: totals roll up across runs; per-phase breakdown row count mat
 	// Cumulative token total (1000+500+500+250+2000+1000 = 5250 → "5.3k")
 	assert.match(html, /5\.3k/);
 	// Per-phase breakdown row count: 2 phases (architecture + contracts)
-	const phaseRows = html.split("<tbody>")[1]?.split("</tbody>")[0]?.match(/<tr>/g) ?? [];
-	assert.equal(phaseRows.length, 2, "expected one tbody row per phase in the per-phase usage table");
+	const usageSection = html.split('<section class="cc-card cc-usage"')[1]?.split('</section>')[0] ?? "";
+	const usageTbody = usageSection.split("<tbody>")[1]?.split("</tbody>")[0] ?? "";
+	const phaseRows = usageTbody.match(/<tr/g) ?? [];
+	assert.equal(phaseRows.length, 3, "expected one tbody row per pipeline phase in the per-phase usage table");
 });
 
 test("activity timeline shows newest 10 visible; older runs collapsed under <details>", () => {
@@ -246,7 +260,7 @@ test("narration section appears only when narration is provided; staleness count
 			phaseCountAtGeneration: 2,
 		},
 	});
-	assert.match(html3, /· current\./);
+	assert.match(html3, />current<\/span>/);
 });
 
 test("closeouts list is sorted reverse-chronologically and renders relative-path links", () => {
@@ -263,8 +277,41 @@ test("closeouts list is sorted reverse-chronologically and renders relative-path
 	assert.match(html, /href="closeouts\/2026-05-08-init\.md"/);
 
 	// Order check: the position of the 05-12 entry must be before 05-10 in the rendered output
-	const idx12 = html.indexOf("2026-05-12-contracts.md");
-	const idx10 = html.indexOf("2026-05-10-architecture.md");
-	const idx08 = html.indexOf("2026-05-08-init.md");
+	const closeoutSection = html.split('<section class="cc-card cc-closeouts"')[1]?.split('</section>')[0] ?? "";
+	const idx12 = closeoutSection.indexOf("2026-05-12-contracts.md");
+	const idx10 = closeoutSection.indexOf("2026-05-10-architecture.md");
+	const idx08 = closeoutSection.indexOf("2026-05-08-init.md");
 	assert.ok(idx12 > 0 && idx10 > idx12 && idx08 > idx10, "closeouts must render reverse-chronologically");
+});
+
+test("closeout rows include direct primary result links when outputs exist", () => {
+	const phaseOrder = ["architecture", "contracts"];
+	const closeouts = [
+		{ date: "2026-05-12", phaseOrModule: "contracts", fileName: "2026-05-12-contracts.md", summary: "Contracts complete." },
+	];
+	const outputsPresent = new Map([
+		["contracts", { primary: { path: "findings/contracts/contracts.md", exists: true }, secondary: [] }],
+	]);
+	const html = renderDashboard({ ...emptyInputs(phaseOrder), closeouts, outputsPresent });
+	assert.match(html, /href="closeouts\/2026-05-12-contracts\.md"/);
+	assert.match(html, /href="findings\/contracts\/contracts\.md">primary result<\/a>/);
+	assert.match(html, /Contracts complete\./);
+});
+
+test("activity timeline renders session transcript links safely", () => {
+	const usage = makeUsage([
+		{ timestamp: "2026-05-13T10:00:00.000Z", phase: "architecture", status: "completed", turn_count: 1, tool_uses: 2, duration_ms: 1000, tokens: { input: 10, output: 5, cache_write: 0 }, session_file: "sessions/phase architecture.html" },
+	]);
+	const html = renderDashboard({ ...emptyInputs(["architecture"]), usage });
+	assert.match(html, /href="sessions\/phase%20architecture\.html">session<\/a>/);
+});
+
+test("absolute or parent-relative session files are not rendered as unsafe links", () => {
+	const usage = makeUsage([
+		{ timestamp: "2026-05-13T10:00:00.000Z", phase: "architecture", status: "completed", turn_count: 1, tool_uses: 2, duration_ms: 1000, tokens: { input: 10, output: 5, cache_write: 0 }, session_file: "/home/james/.pi/agent/sessions/private.html" },
+		{ timestamp: "2026-05-13T11:00:00.000Z", phase: "contracts", status: "completed", turn_count: 1, tool_uses: 2, duration_ms: 1000, tokens: { input: 10, output: 5, cache_write: 0 }, session_file: "../outside.html" },
+	]);
+	const html = renderDashboard({ ...emptyInputs(["architecture", "contracts"]), usage });
+	assert.doesNotMatch(html, /href="\/home\/james/);
+	assert.doesNotMatch(html, /href="\.\.\/outside\.html"/);
 });

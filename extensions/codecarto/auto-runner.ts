@@ -157,10 +157,11 @@ export async function runSinglePhase(
 				tokens: activity.lifetimeUsage,
 				durationMs: (activity.completedAt ?? Date.now()) - activity.startedAt,
 				responseText: result.responseText,
+				sessionFile: result.sessionFile,
 			}),
 			display: true,
 		});
-		void recordUsage(state.workspaceDir, phase.id, status, activity);
+		void recordUsage(state.workspaceDir, phase.id, status, activity, result.sessionFile);
 		void writeDashboard(ctx.cwd, PACKAGE_VERSION);
 
 		return {
@@ -544,6 +545,7 @@ async function recordUsage(
 	phaseId: string,
 	status: UsageRunStatus,
 	activity: PhaseActivity,
+	sessionFile?: string,
 ): Promise<void> {
 	try {
 		await appendUsageRun(workspaceDir, {
@@ -558,6 +560,7 @@ async function recordUsage(
 				output: activity.lifetimeUsage.output,
 				cache_write: activity.lifetimeUsage.cacheWrite,
 			},
+			...(sessionFile ? { session_file: sessionFile } : {}),
 		});
 	} catch {
 		// Best-effort, matches the original recordUsage discipline.

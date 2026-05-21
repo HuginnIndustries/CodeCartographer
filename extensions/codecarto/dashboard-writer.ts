@@ -71,9 +71,30 @@ async function listCloseouts(workspaceDir: string): Promise<DashboardCloseoutEnt
 	for (const name of entries) {
 		const m = CLOSEOUT_FILENAME_RE.exec(name);
 		if (!m) continue;
-		out.push({ date: m[1], phaseOrModule: m[2], fileName: name });
+		out.push({ date: m[1], phaseOrModule: m[2], fileName: name, summary: await readCloseoutSummary(join(dir, name)) });
 	}
 	return out;
+}
+
+async function readCloseoutSummary(path: string): Promise<string | undefined> {
+	try {
+		const raw = await readFile(path, "utf8");
+		const lines = raw.split(/\r?\n/);
+		const summaryStart = lines.findIndex((line) => /^##\s+Summary\s*$/i.test(line.trim()));
+		if (summaryStart === -1) return undefined;
+		const body: string[] = [];
+		for (const line of lines.slice(summaryStart + 1)) {
+			if (/^##\s+/.test(line.trim())) break;
+			const trimmed = line.trim();
+			if (!trimmed || trimmed === "-") continue;
+			body.push(trimmed.replace(/^[-*]\s+/, ""));
+			if (body.join(" ").length > 280) break;
+		}
+		const summary = body.join(" ").trim();
+		return summary ? `${summary.slice(0, 280)}${summary.length > 280 ? "…" : ""}` : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 async function buildOutputsPresent(
