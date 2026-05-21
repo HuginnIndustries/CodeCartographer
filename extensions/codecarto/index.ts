@@ -371,7 +371,13 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const state = await ensureWorkspaceState(ctx);
 			if (!state) return;
 
-			const validation = await validatePhaseOutput(state, args.trim() || undefined);
+			const validation = await validatePhaseOutput(state, args.trim() || undefined).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)));
+			if (validation instanceof Error) {
+				lastFeedbackLines = [validation.message];
+				setUiState(ctx, state, lastFeedbackLines);
+				ctx.ui.notify(validation.message, "error");
+				return;
+			}
 			lastFeedbackLines = buildValidationSummary(validation);
 			setUiState(ctx, state, lastFeedbackLines);
 
@@ -386,7 +392,13 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const currentState = await ensureWorkspaceState(ctx);
 			if (!currentState) return;
 
-			const validation = await validatePhaseOutput(currentState, args.trim() || undefined);
+			const validation = await validatePhaseOutput(currentState, args.trim() || undefined).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)));
+			if (validation instanceof Error) {
+				lastFeedbackLines = [validation.message];
+				setUiState(ctx, currentState, lastFeedbackLines);
+				ctx.ui.notify(validation.message, "error");
+				return;
+			}
 			if (validation.overall === "FAIL" || validation.overall === "MISSING") {
 				lastFeedbackLines = buildValidationSummary(validation);
 				setUiState(ctx, currentState, lastFeedbackLines);
