@@ -5,10 +5,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { parseNextFlags } = await import(`${REPO_ROOT}/extensions/codecarto/next-flags.ts`);
+const { parseNextFlags } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/next-flags.ts`).href);
 
 test("empty args yield no override and no unknowns", () => {
 	const r = parseNextFlags("");

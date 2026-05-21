@@ -6,13 +6,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CODECARTO = join(REPO_ROOT, ".codecarto");
 
-const { parseSimpleYaml } = await import(`${REPO_ROOT}/core/yaml.ts`);
-const { PIPELINE_ALIASES, DEFAULT_PIPELINE_PATH } = await import(`${REPO_ROOT}/core/pipeline.ts`);
+const { parseSimpleYaml } = await import(pathToFileURL(`${REPO_ROOT}/core/yaml.ts`).href);
+const { PIPELINE_ALIASES, DEFAULT_PIPELINE_PATH } = await import(pathToFileURL(`${REPO_ROOT}/core/pipeline.ts`).href);
 
 const statusYaml = await readFile(join(CODECARTO, "workflow", "status.yaml"), "utf8");
 const status = parseSimpleYaml(statusYaml);

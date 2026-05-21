@@ -4,6 +4,133 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- **MCP library tools.** Three new tools on the MCP server expose the
+  `core/library.ts` primitives to any MCP-capable host (Claude Code, Codex,
+  opencode, Cursor, Claude Desktop):
+  - `codecarto_publish` — publish a `reimplementation-spec.md` to a library
+    with content-hash idempotence. Accepts inline `spec` or absolute
+    `spec_path`. Derives the slug from `source_repo` if not provided. Defaults
+    `pipeline` and `namespace` from `cwd`'s `status.yaml` / `config.yaml` when
+    available. Accepts an optional `model_metadata` object so the host can
+    record which agent + model produced the spec; omitted fields default to
+    `unknown` and `generation.surface` is always `mcp-server`. Required:
+    `source_repo`, `headline`, and either `spec` or `spec_path`.
+  - `codecarto_library_list` — list library entries with optional filters
+    (`namespace`, `tag`, `slug`, `source_repo`). Returns the full
+    `LibraryIndexEntry` array in `structuredContent`.
+  - `codecarto_library_reindex` — regenerate `index.yaml` + `INDEX.md`
+    explicitly (useful after manual edits or to resolve a git merge conflict
+    on `index.yaml`).
+  All three tools resolve the library either from an explicit absolute
+  `library_path` argument or from `library.path` in the workspace's or
+  user-global `config.yaml`. 18 new tests in `tests/mcp-library.test.mjs`
+  cover derived-slug publish, idempotence, content-bump v2, the `generation:`
+  block (defaults + host-passed values), `spec_path` flow, missing-field
+  rejections, namespacing rules, filtered listing, and reindex round-trips.
+  Test count: 156 → 174.
+- **Library format spec.** New `docs/library-format.md` documents the on-disk
+  contract for the upcoming synthesis library: `.codecarto-library` marker file,
+  versioned namespaced/single-tenant entry layout, `metadata.yaml` schema with
+  `generation:` block (surface / agent / agent_version / model / model_vendor /
+  reasoning), derived `index.yaml` + `INDEX.md`, content-hash-based version
+  increments. Marked **experimental, may break before v2**.
+- **`core/library.ts` (~840 LOC).** Library helpers used by both Pi and MCP
+  wrappers — `discoverLibrary`, `readMarker` / `writeMarker`, `publishEntry`
+  (content-hash idempotent, atomic temp-dir-then-rename, namespacing enforced
+  per marker), `readEntry` (latest or specific version), `listEntries` (filter
+  by namespace / tag / slug / source_repo), `reindex` (regenerates `index.yaml`
+  + `INDEX.md` from filesystem state, sorted by `(namespace, slug)`),
+  `commitPublish` (optional git commit, non-fatal on missing git). Cross-platform
+  `latest` pointer is a regular file (not a symlink) containing the version
+  directory name. Slug validation rejects bad names and reserved names
+  (`latest`, `index`, `entries`).
+- **Library config block in `core/orchestrator-config.ts`.** `CodecartoConfig`
+  gains a `library:` section (`path`, `namespace`, `publish_confirm`). Two
+  config layers now load: user-global at `~/.codecarto/config.yaml` (new) and
+  per-workspace at `.codecarto/workflow/config.yaml` (existing). Resolution
+  order is per-workspace > user-global > defaults. Library `path` values are
+  tilde-expanded and resolved to absolute paths automatically. The existing
+  `orchestrator.llm_steer_next_phase` toggle is unchanged. New
+  `loadUserConfig()` reads user-global directly for onboarding flows.
+- **`expandTilde` helper in `core/utils.ts`.** Expands a leading `~` or `~/`
+  to the user's home directory. Used by the config loader; promoted to
+  `core/utils.ts` so future user-facing path inputs can normalize the same way.
+- **23 library tests** in `tests/library.test.mjs` covering marker round-trips,
+  publish v1/v2 paths, content-hash idempotence, `forceNewVersion` override,
+  slug validation, namespaced vs. single-tenant rules, `readEntry` latest +
+  specific version, `listEntries` filters, reindex from a hand-built tree,
+  malformed-metadata rejection, and `commitPublish` in a non-git directory.
+  Plus **7 new orchestrator-config tests** for the library block, user-global
+  loading, workspace precedence, and tilde expansion. Test count: 119 → 156.
+- **Surface-priority reframe in README + CLAUDE.md.** README install section now
+  leads with Pi (recommended) → MCP (for other coding agents) → drop-in template
+  (one-off / evaluation), with explicit "when to use this" framing per surface
+  and a limitation note that library + synthesis workflows require Pi or MCP.
+  CLAUDE.md keeps the code-architecture "three surfaces, byte-identical phase
+  prompts" invariant intact and adds a `Surface priority` subsection
+  documenting the user-facing ordering for new-feature UX work. The "At a
+  glance" table and "Compatible environments" matrix are updated to match.
+- **Synthesis implementation tracker.** `docs/synthesis-roadmap.md` lays out
+  five milestones (M0 docs → M1 library foundations → M2 surface publish UX →
+  M3 synthesis phases → M4 spec-mutate → M5 release polish) with checkboxes,
+  dependencies, acceptance criteria, and risk notes. The original
+  `docs/design-synthesis-phases.md` is kept as the historical record of the
+  pre-revision design with a pointer at the top to the roadmap.
+
+### Fixed
+
+- **`/codecarto-next --auto` no longer wedges at `reimplementation-spec`.** The Strategic Alignment Hook (which asks the user whether the spec should be language-agnostic or opinionated) is now suppressed under `--auto`. The sub-agent defaults to **language-agnostic** (using `templates/reimplementation-spec.md`), tags the spec front-matter with `selection: auto-default` for later traceability, and captures any unresolved stack/name/scope choices as `open_questions` entries rather than blocking the run. Interactive `/codecarto-next` and `/codecarto-phase reimplementation-spec` paths still prompt the user as before. The fix threads a new `BuildPhasePromptOptions.auto` flag through `buildPhasePrompt` (in `core/prompts.ts`), propagated from `runAuto` → `runSinglePhase` → `buildPhasePrompt`; the MCP server byte-identical-prompt invariant is preserved (MCP still calls without the flag).
+
+### Planned (synthesis + library upgrade — see `docs/synthesis-roadmap.md`)
+
+The next release adds **forward-flow synthesis** to CodeCartographer: take
+N existing reimplementation specs from a shared library plus a user-written
+vision, and produce a `project-plan.md` for a new build. Three concurrent
+shifts make this a coherent release rather than a single feature:
+
+- **Surface priority reframe.** README + CLAUDE.md restructured to lead
+  with the Pi extension as the recommended user surface, then MCP for
+  other coding agents (Claude Code, Codex, opencode, Cursor, etc.), then
+  drop-in template for one-off evaluation. The "three surfaces, byte-identical
+  phase prompts" architecture invariant is preserved — the change is in
+  user-facing framing and where new-feature UX work lands first. No
+  behavior change for existing users.
+- **Library format (experimental).** A new `docs/library-format.md`
+  specifies an on-disk format for accumulating `reimplementation-spec.md`
+  artifacts across analysis runs in a git-trackable directory: marker
+  file, namespaced or single-tenant entry layout, per-version
+  `metadata.yaml` (with a `generation:` block capturing surface / agent /
+  agent_version / model / model_vendor / reasoning), derived `index.yaml`
+  + `INDEX.md`, idempotent content-hash-based version increments. Schema
+  is marked **experimental, may break before v2** until the first external
+  consumer appears.
+- **Synthesis pipeline.** A new `pipeline-synthesis.yaml` with three new
+  phases — `vision-capture` (interactive vision normalizer),
+  `goal-synthesis-propose` (LLM shortlist of library entries, user
+  confirms via markdown checkboxes), and `goal-synthesis-finalize` (the
+  project plan). A `spec-merge` phase between propose and finalize
+  produces a debuggable intermediate. A separate `pipeline-spec-mutate.yaml`
+  applies deltas to an existing spec and republishes as a new library
+  version.
+
+The full implementation tracker lives in
+[`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md). M0 (docs +
+design freeze) ✅ and M1 (library helpers in `core/library.ts`) ✅
+are complete (see the `### Added` block above for what shipped);
+M2 (surface publish UX — Pi + MCP) through M5 (release polish) follow.
+
+### Notes
+
+- Library and synthesis workflows require Pi or MCP at runtime —
+  drop-in users still get full analysis-side functionality but cannot
+  publish or synthesize without an executable surface.
+- The Pi extension's `tool_call` hook will gain a configurable
+  `library_path` allow-list entry as part of M2. This is the only
+  security-adjacent change in the upgrade and will be reviewed
+  carefully when it lands.
+
 ## [0.8.0] — 2026-05-13
 
 ### Added

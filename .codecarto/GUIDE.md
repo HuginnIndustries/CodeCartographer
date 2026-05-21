@@ -232,6 +232,8 @@ Before starting `reimplementation-spec` (or any synthesis phase), confirm with t
 
 This conversation produces inputs the synthesis phase actually needs (locked target stack, locked project name, locked scope cuts) and selects the right template. If the answer is "opinionated," use `templates/reimplementation-spec-opinionated.md` instead of the default. Skipping the hook produces a generic spec when the user wanted a specific one — the most informative friction the framework has produced to date. A two-question pre-flight is cheap.
 
+**Behavior under `/codecarto-next --auto`:** the auto runner suppresses this hook to keep the loop moving. The spec defaults to **language-agnostic** and is tagged `selection: auto-default` in its front-matter; any choice the hook would otherwise have prompted for (target stack, project name, scope cuts) is captured as an `open_questions` entry on the phase rather than blocking the run. Users who want an opinionated spec should run `reimplementation-spec` interactively (via `/codecarto-phase reimplementation-spec` or by stopping `--auto` before the synthesis phase).
+
 ## Guardrails
 
 These rules cannot be enforced by the template — they rely on the LLM following instructions. A future code-backed implementation should enforce them programmatically.

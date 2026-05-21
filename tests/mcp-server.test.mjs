@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -23,8 +23,8 @@ const {
 	handleValidate,
 	handleComplete,
 	handleSkill,
-} = await import(`${REPO_ROOT}/mcp-server/server.ts`);
-const { buildPhasePrompt, getNextEligiblePhase, getWorkspaceState } = await import(`${REPO_ROOT}/core/index.ts`);
+} = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
+const { buildPhasePrompt, getNextEligiblePhase, getWorkspaceState } = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
 
 let WORKSPACE;

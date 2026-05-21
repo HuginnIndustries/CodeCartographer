@@ -55,6 +55,14 @@ import {
 export interface RunSinglePhaseOptions {
 	llmSteerEnabled: boolean;
 	signal?: AbortSignal;
+	/**
+	 * True when this phase is being driven by `/codecarto-next --auto`. The flag
+	 * propagates into `buildPhasePrompt` so interactive hooks (notably the
+	 * `reimplementation-spec` Strategic Alignment Hook) suppress their user-
+	 * facing question and fall back to a documented default. The one-shot
+	 * `/codecarto-next` path leaves this unset and the prompt is unchanged.
+	 */
+	auto?: boolean;
 }
 
 export interface SinglePhaseResult {
@@ -81,7 +89,7 @@ export async function runSinglePhase(
 	phase: PipelinePhase,
 	options: RunSinglePhaseOptions,
 ): Promise<SinglePhaseResult> {
-	let prompt = await buildPhasePrompt(state, phase, false);
+	let prompt = await buildPhasePrompt(state, phase, false, { auto: options.auto === true });
 
 	if (options.llmSteerEnabled) {
 		if (ctx.hasUI) ctx.ui.notify(`Customizing ${phase.id} prompt via LLM rewriter…`, "info");
@@ -400,6 +408,7 @@ export async function runAuto(
 		const phaseResult = await runSinglePhase(ctx, pi, state, phase, {
 			llmSteerEnabled,
 			signal: options.signal,
+			auto: true,
 		});
 
 		// Accumulate tokens whether the phase succeeded, was aborted, or errored.

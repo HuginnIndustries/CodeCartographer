@@ -19,7 +19,7 @@ import {
 	ListToolsRequestSchema,
 	McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 
 import {
@@ -32,19 +32,32 @@ import {
 	createEmptyStatus,
 	dateOnly,
 	DEFAULT_PIPELINE_PATH,
+	deriveSlug,
+	discoverLibrary,
 	ensureCloseoutStub,
+	type EntryGeneration,
+	type GenerationReasoning,
+	type GenerationSurface,
 	getNextEligiblePhase,
 	getPipelineLabel,
 	getWorkspaceState,
+	isValidSlug,
+	type LibraryIndexEntry,
+	type LibraryVisibility,
+	listEntries,
 	listSkillNames,
+	loadCodecartoConfig,
 	loadYamlFile,
 	normalizeForComparison,
 	normalizeStatus,
 	type OpenQuestionEntry,
+	PACKAGE_VERSION,
 	packagedWorkspaceDir,
 	pathExists,
 	PIPELINE_ALIASES,
 	type PipelineFile,
+	publishEntry,
+	reindex as libraryReindex,
 	resolvePhase,
 	resolvePipelineChoice,
 	type StatusFile,
@@ -355,6 +368,281 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 	return textResult(prompt, { skill: args.name });
 }
 
+// ---------- library helpers ----------
+
+async function resolveLibraryPath(args: { library_path?: unknown; cwd?: unknown }): Promise<string> {
+	const explicit = typeof args.library_path === "string" && args.library_path.trim() !== ""
+		? args.library_path.trim()
+		: null;
+	if (explicit) {
+		if (!isAbsolute(explicit)) {
+			throw new McpError(ErrorCode.InvalidParams, `library_path must be absolute, got: ${explicit}`);
+		}
+		return explicit;
+	}
+	if (typeof args.cwd === "string" && args.cwd.trim() !== "") {
+		const cwd = args.cwd.trim();
+		if (!isAbsolute(cwd)) {
+			throw new McpError(ErrorCode.InvalidParams, `cwd must be absolute, got: ${cwd}`);
+		}
+		// loadCodecartoConfig merges user-global under per-workspace and tolerates
+		// a missing workspace file, so a single call covers both cases.
+		const workspaceDir = join(cwd, ".codecarto");
+		const config = await loadCodecartoConfig(workspaceDir);
+		if (config.library.path) return config.library.path;
+	}
+	throw new McpError(
+		ErrorCode.InvalidParams,
+		"library_path is required (pass it explicitly, or pass cwd and configure library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml).",
+	);
+}
+
+function asStringArray(value: unknown, fieldName: string): string[] {
+	if (!Array.isArray(value)) {
+		throw new McpError(ErrorCode.InvalidParams, `${fieldName} must be an array of strings`);
+	}
+	const out: string[] = [];
+	for (const v of value) {
+		if (typeof v !== "string") {
+			throw new McpError(ErrorCode.InvalidParams, `${fieldName} must contain only strings`);
+		}
+		out.push(v);
+	}
+	return out;
+}
+
+const ALLOWED_REASONING: GenerationReasoning[] = ["high", "medium", "low", "default", "unknown"];
+
+function buildGenerationFromArg(model_metadata: unknown): EntryGeneration {
+	const surface: GenerationSurface = "mcp-server";
+	const defaults: EntryGeneration = {
+		surface,
+		agent: "unknown",
+		agent_version: "unknown",
+		model: "unknown",
+		model_vendor: "unknown",
+		reasoning: "unknown",
+		notes: "",
+	};
+	if (model_metadata === undefined || model_metadata === null) return defaults;
+	if (typeof model_metadata !== "object") {
+		throw new McpError(ErrorCode.InvalidParams, "model_metadata must be an object");
+	}
+	const m = model_metadata as Record<string, unknown>;
+	const out = { ...defaults };
+	if (typeof m.agent === "string") out.agent = m.agent;
+	if (typeof m.agent_version === "string") out.agent_version = m.agent_version;
+	if (typeof m.model === "string") out.model = m.model;
+	if (typeof m.model_vendor === "string") out.model_vendor = m.model_vendor;
+	if (typeof m.reasoning === "string" && (ALLOWED_REASONING as string[]).includes(m.reasoning)) {
+		out.reasoning = m.reasoning as GenerationReasoning;
+	}
+	if (typeof m.notes === "string") out.notes = m.notes;
+	return out;
+}
+
+async function readSpecArg(args: { spec?: unknown; spec_path?: unknown }): Promise<string> {
+	if (typeof args.spec === "string" && args.spec.length > 0) return args.spec;
+	if (typeof args.spec_path === "string" && args.spec_path.length > 0) {
+		if (!isAbsolute(args.spec_path)) {
+			throw new McpError(ErrorCode.InvalidParams, `spec_path must be absolute, got: ${args.spec_path}`);
+		}
+		if (!(await pathExists(args.spec_path))) {
+			throw new McpError(ErrorCode.InvalidParams, `spec_path does not exist: ${args.spec_path}`);
+		}
+		return readFile(args.spec_path, "utf8");
+	}
+	throw new McpError(ErrorCode.InvalidParams, "Either spec (inline content) or spec_path (absolute file path) is required");
+}
+
+async function resolveDefaultsFromWorkspace(
+	cwd: unknown,
+	overrides: { pipeline?: unknown; namespace?: unknown },
+): Promise<{ pipeline: string; namespace: string | null }> {
+	let pipeline = typeof overrides.pipeline === "string" && overrides.pipeline.trim() !== ""
+		? overrides.pipeline.trim()
+		: "unknown";
+	let namespace: string | null = typeof overrides.namespace === "string" && overrides.namespace.trim() !== ""
+		? overrides.namespace.trim()
+		: null;
+
+	if (typeof cwd === "string" && cwd.trim() !== "" && isAbsolute(cwd)) {
+		const workspaceDir = join(cwd.trim(), ".codecarto");
+		if (await pathExists(workspaceDir)) {
+			if (pipeline === "unknown") {
+				try {
+					const state = await getWorkspaceState(cwd.trim());
+					if (state?.status.pipeline) pipeline = state.status.pipeline;
+				} catch {
+					// ignore — pipeline stays "unknown"
+				}
+			}
+			if (!namespace) {
+				const config = await loadCodecartoConfig(workspaceDir);
+				if (config.library.namespace) namespace = config.library.namespace;
+			}
+		}
+	}
+
+	return { pipeline, namespace };
+}
+
+// ---------- library handlers ----------
+
+export async function handlePublish(args: Record<string, unknown>) {
+	const libraryPath = await resolveLibraryPath(args);
+	const marker = await discoverLibrary(libraryPath);
+	if (!marker) {
+		throw new McpError(
+			ErrorCode.InvalidParams,
+			`No CodeCartographer library at ${libraryPath} (missing .codecarto-library marker). Create one before publishing.`,
+		);
+	}
+
+	const spec = await readSpecArg(args);
+	if (typeof args.source_repo !== "string" || args.source_repo.trim() === "") {
+		throw new McpError(ErrorCode.InvalidParams, "source_repo is required");
+	}
+	if (typeof args.headline !== "string" || args.headline.trim() === "") {
+		throw new McpError(ErrorCode.InvalidParams, "headline is required");
+	}
+	const tags = asStringArray(args.tags ?? [], "tags");
+	const capabilities = asStringArray(args.capabilities ?? [], "capabilities");
+
+	const sourceRepo = args.source_repo.trim();
+	const slugInput = typeof args.slug === "string" && args.slug.trim() !== "" ? args.slug.trim() : null;
+	const slug = slugInput ?? deriveSlug(sourceRepo);
+	if (!isValidSlug(slug)) {
+		throw new McpError(
+			ErrorCode.InvalidParams,
+			`Resolved slug "${slug}" is invalid. Provide an explicit slug (lowercase ASCII, starts with a letter, max 64 chars).`,
+		);
+	}
+
+	const defaults = await resolveDefaultsFromWorkspace(args.cwd, {
+		pipeline: args.pipeline,
+		namespace: args.namespace,
+	});
+
+	const namespace = marker.namespaced
+		? (typeof args.namespace === "string" && args.namespace.trim() !== ""
+			? args.namespace.trim()
+			: defaults.namespace ?? undefined)
+		: undefined;
+
+	if (marker.namespaced && !namespace) {
+		throw new McpError(
+			ErrorCode.InvalidParams,
+			"Library is namespaced — namespace argument is required (or set library.namespace in config.yaml).",
+		);
+	}
+
+	const generation = buildGenerationFromArg(args.model_metadata);
+	const confidentiality: LibraryVisibility | undefined =
+		args.confidentiality === "internal" || args.confidentiality === "shared" || args.confidentiality === "public"
+			? args.confidentiality
+			: undefined;
+
+	const analyzedAt = typeof args.analyzed_at === "string" && args.analyzed_at !== ""
+		? args.analyzed_at
+		: new Date().toISOString();
+
+	const result = await publishEntry(
+		libraryPath,
+		spec,
+		{
+			slug,
+			namespace: namespace ?? undefined,
+			source_repo: sourceRepo,
+			source_commit: typeof args.source_commit === "string" ? args.source_commit : undefined,
+			source_branch: typeof args.source_branch === "string" ? args.source_branch : undefined,
+			source_dirty: typeof args.source_dirty === "boolean" ? args.source_dirty : undefined,
+			analyzed_at: analyzedAt,
+			pipeline: defaults.pipeline,
+			codecarto_version: PACKAGE_VERSION,
+			headline: args.headline.trim(),
+			tags,
+			capabilities,
+			confidentiality,
+			generation,
+		},
+		{ forceNewVersion: args.force_new_version === true },
+	);
+
+	const lines = [
+		`Published ${result.namespace ? `${result.namespace}/` : ""}${result.slug} v${result.version} to ${libraryPath}`,
+		result.isNewVersion ? `New version: v${result.version}` : `Metadata-only update (content hash matched v${result.version}).`,
+		`Entry directory: ${result.versionDir}`,
+	];
+	return textResult(lines.join("\n"), {
+		libraryPath,
+		slug: result.slug,
+		namespace: result.namespace ?? null,
+		version: result.version,
+		isNewVersion: result.isNewVersion,
+		versionDir: result.versionDir,
+	});
+}
+
+export async function handleLibraryList(args: Record<string, unknown>) {
+	const libraryPath = await resolveLibraryPath(args);
+	const marker = await discoverLibrary(libraryPath);
+	if (!marker) {
+		throw new McpError(
+			ErrorCode.InvalidParams,
+			`No CodeCartographer library at ${libraryPath} (missing .codecarto-library marker).`,
+		);
+	}
+
+	const filter: { namespace?: string; tag?: string; slug?: string; source_repo?: string } = {};
+	if (typeof args.namespace === "string" && args.namespace !== "") filter.namespace = args.namespace;
+	if (typeof args.tag === "string" && args.tag !== "") filter.tag = args.tag;
+	if (typeof args.slug === "string" && args.slug !== "") filter.slug = args.slug;
+	if (typeof args.source_repo === "string" && args.source_repo !== "") filter.source_repo = args.source_repo;
+
+	const entries = await listEntries(libraryPath, filter);
+	const summary = entries.length === 0
+		? `No entries match the filter in ${libraryPath}.`
+		: [
+			`${entries.length} ${entries.length === 1 ? "entry" : "entries"} in ${libraryPath}:`,
+			...entries.map((e: LibraryIndexEntry) => {
+				const ns = e.namespace ? `${e.namespace}/` : "";
+				const tags = e.tags.length > 0 ? ` [${e.tags.slice(0, 4).join(", ")}${e.tags.length > 4 ? ", ..." : ""}]` : "";
+				return `  ${ns}${e.slug} v${e.latest_version} — ${e.headline}${tags}`;
+			}),
+		].join("\n");
+
+	return textResult(summary, {
+		libraryPath,
+		libraryName: marker.name,
+		namespaced: marker.namespaced,
+		count: entries.length,
+		entries,
+	});
+}
+
+export async function handleLibraryReindex(args: Record<string, unknown>) {
+	const libraryPath = await resolveLibraryPath(args);
+	const marker = await discoverLibrary(libraryPath);
+	if (!marker) {
+		throw new McpError(
+			ErrorCode.InvalidParams,
+			`No CodeCartographer library at ${libraryPath} (missing .codecarto-library marker).`,
+		);
+	}
+	const index = await libraryReindex(libraryPath);
+	const namespaces = index.namespaces.length > 0 ? index.namespaces.join(", ") : "(none)";
+	return textResult(
+		`Reindexed ${libraryPath}: ${index.entry_count} ${index.entry_count === 1 ? "entry" : "entries"} across namespaces [${namespaces}].`,
+		{
+			libraryPath,
+			libraryName: index.library_name,
+			entry_count: index.entry_count,
+			namespaces: index.namespaces,
+		},
+	);
+}
+
 // ---------- tool registry ----------
 
 const TOOLS = [
@@ -368,7 +656,7 @@ const TOOLS = [
 				cwd: { type: "string", description: "Absolute path to the target repository." },
 				pipeline: {
 					type: "string",
-					description: `Pipeline alias (one of ${Object.keys(PIPELINE_ALIASES).join(", ")}) or workflow/*.yaml path. Defaults to the framework's default pipeline.`,
+					description: `Pipeline alias or workflow/*.yaml path. Defaults to the framework's default pipeline.`,
 				},
 				force: {
 					type: "boolean",
@@ -449,6 +737,73 @@ const TOOLS = [
 			required: ["cwd", "name"],
 		},
 	},
+	{
+		name: "codecarto_publish",
+		description:
+			"Publish a reimplementation-spec to a CodeCartographer library. Identified by library_path (absolute) or cwd's config.yaml. Content-hash idempotent — re-publishing identical spec bytes updates metadata in place rather than bumping the version. Required: source_repo, headline, and either spec (inline) or spec_path (absolute file). Slug derives from source_repo if not provided. If the library is namespaced, namespace is required (or pass cwd to inherit from config). Generation context (agent, model, vendor, reasoning) is passed via model_metadata so the host can record provenance; omitted fields default to 'unknown'.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				library_path: { type: "string", description: "Absolute path to the library directory." },
+				cwd: { type: "string", description: "Absolute path to a workspace. Used to read defaults from config.yaml and status.yaml." },
+				spec: { type: "string", description: "Inline spec markdown content (mutually exclusive with spec_path)." },
+				spec_path: { type: "string", description: "Absolute path to a file containing the spec markdown (mutually exclusive with spec)." },
+				slug: { type: "string", description: "Entry slug. Derived from source_repo if omitted." },
+				namespace: { type: "string", description: "Namespace under entries/. Required for namespaced libraries." },
+				source_repo: { type: "string", description: "URL or path to the analyzed repository." },
+				source_commit: { type: "string" },
+				source_branch: { type: "string" },
+				source_dirty: { type: "boolean" },
+				analyzed_at: { type: "string", description: "ISO 8601 UTC timestamp. Defaults to now." },
+				pipeline: { type: "string", description: "Pipeline used. Inherited from cwd's status.yaml if available." },
+				headline: { type: "string" },
+				tags: { type: "array", items: { type: "string" } },
+				capabilities: { type: "array", items: { type: "string" } },
+				confidentiality: { type: "string", enum: ["internal", "shared", "public"] },
+				model_metadata: {
+					type: "object",
+					properties: {
+						agent: { type: "string" },
+						agent_version: { type: "string" },
+						model: { type: "string" },
+						model_vendor: { type: "string" },
+						reasoning: { type: "string", enum: ["high", "medium", "low", "default", "unknown"] },
+						notes: { type: "string" },
+					},
+				},
+				force_new_version: { type: "boolean" },
+			},
+			required: ["source_repo", "headline"],
+		},
+	},
+	{
+		name: "codecarto_library_list",
+		description:
+			"List entries in a CodeCartographer library, optionally filtered by namespace, tag, slug, or source_repo. The library is identified by library_path (absolute) or by cwd's config.yaml.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				library_path: { type: "string" },
+				cwd: { type: "string" },
+				namespace: { type: "string" },
+				tag: { type: "string" },
+				slug: { type: "string" },
+				source_repo: { type: "string" },
+			},
+		},
+	},
+	{
+		name: "codecarto_library_reindex",
+		description:
+			"Regenerate index.yaml and INDEX.md for a CodeCartographer library from filesystem state. Use after manual edits or to resolve a git merge conflict on index.yaml.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				library_path: { type: "string" },
+				cwd: { type: "string" },
+			},
+		},
+	},
 ] as const;
 
 const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
@@ -459,6 +814,9 @@ const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 	codecarto_validate: handleValidate,
 	codecarto_complete: handleComplete,
 	codecarto_skill: handleSkill,
+	codecarto_publish: handlePublish,
+	codecarto_library_list: handleLibraryList,
+	codecarto_library_reindex: handleLibraryReindex,
 };
 
 // ---------- server bootstrap ----------
