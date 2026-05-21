@@ -26,6 +26,7 @@
   "files": [
     ".codecarto/**/*",
     "dist/**/*",
+    "assets/logo.svg",
     "README.md",
     "LICENSE"
   ],
