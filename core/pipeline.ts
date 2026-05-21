@@ -47,10 +47,22 @@ export function getNextEligiblePhase(state: WorkspaceState): PipelinePhase | nul
 
 export function resolvePhase(state: WorkspaceState, phaseId?: string): PipelinePhase | null {
 	const trimmed = phaseId?.trim();
-	if (trimmed) {
-		return getPhaseMap(state.pipeline).get(trimmed) ?? null;
+	if (!trimmed) return getNextEligiblePhase(state);
+
+	const exact = getPhaseMap(state.pipeline).get(trimmed);
+	if (exact) return exact;
+
+	// Fall back to matching the primary_output filename. Validation errors
+	// surface that path (e.g. "Missing primary output: .codecarto/findings/
+	// protocols/protocols-and-state.md"), so users naturally paste it back as
+	// the phase argument. Accept the basename with or without the .md suffix.
+	const wanted = basename(trimmed, ".md");
+	for (const phase of state.pipeline.phases) {
+		if (phase.primary_output && basename(phase.primary_output, ".md") === wanted) {
+			return phase;
+		}
 	}
-	return getNextEligiblePhase(state);
+	return null;
 }
 
 export function resolvePipelineChoice(input: string): string | null {
