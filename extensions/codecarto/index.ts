@@ -279,6 +279,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					strict: flags.strict,
 					llmSteerOverride: flags.llmSteerOverride,
 					signal: ctx.signal,
+					onPhaseAdvanced: (advancedState) => {
+						// Refresh the status widget + session name between phases so
+						// the readout tracks progress live instead of staying frozen
+						// at the initial phase until the whole auto run finishes.
+						setUiState(ctx, advancedState, [`Auto pipeline${flags.strict ? " (strict)" : ""} running…`]);
+						const phaseId = getNextEligiblePhase(advancedState)?.id ?? advancedState.status.current_phase;
+						if (phaseId) pi.setSessionName(`CodeCartographer: ${phaseId}`);
+					},
 				});
 				const availableSkills = await listSkillNames(state.workspaceDir).catch(() => [] as string[]);
 				pi.sendMessage({
