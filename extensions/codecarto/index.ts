@@ -100,6 +100,7 @@ function setUiState(ctx: ExtensionContext | ExtensionCommandContext, state: Work
 
 export default function codeCartographerExtension(pi: ExtensionAPI) {
 	let lastFeedbackLines: string[] = [];
+	let codecartoModeActive = false;
 
 	const readWorkspaceState = async (ctx: ExtensionContext | ExtensionCommandContext, notifyOnError: boolean = true): Promise<WorkspaceState | null> => {
 		try {
@@ -114,6 +115,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	};
 
 	const refreshWorkspaceUi = async (ctx: ExtensionContext | ExtensionCommandContext, extraLines?: string[]): Promise<WorkspaceState | null> => {
+		if (!codecartoModeActive) {
+			setUiState(ctx, null);
+			return null;
+		}
 		const state = await readWorkspaceState(ctx, false);
 		setUiState(ctx, state, extraLines ?? lastFeedbackLines);
 		if (state) {
@@ -124,6 +129,11 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	};
 
 	const ensureWorkspaceState = async (ctx: ExtensionCommandContext): Promise<WorkspaceState | null> => {
+		if (!codecartoModeActive) {
+			setUiState(ctx, null);
+			ctx.ui.notify("CodeCartographer is not active in this session. Run /codecarto-init first.", "warning");
+			return null;
+		}
 		const state = await readWorkspaceState(ctx);
 		if (state) return state;
 		const hasWorkspace = await pathExists(join(ctx.cwd, ".codecarto", "workflow", "status.yaml"));
@@ -132,9 +142,9 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		const state = await refreshWorkspaceUi(ctx);
-		if (!state) return;
-		pi.setActiveTools(SAFE_TOOL_NAMES);
+		codecartoModeActive = false;
+		lastFeedbackLines = [];
+		setUiState(ctx, null);
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -148,6 +158,8 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		if (!codecartoModeActive) return undefined;
+
 		const workspaceDir = join(ctx.cwd, ".codecarto");
 		if (!(await pathExists(workspaceDir))) return undefined;
 
@@ -228,12 +240,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			normalizedStatus.last_updated = new Date().toISOString();
 			await writeFile(rawStatusPath, `${stringifySimpleYaml(normalizedStatus)}\n`, "utf8");
 
+			codecartoModeActive = true;
 			lastFeedbackLines = [`Initialized workspace with pipeline: ${getPipelineLabel(selectedPipelinePath)}`];
 			ctx.ui.notify(`Initialized CodeCartographer (${getPipelineLabel(selectedPipelinePath)})`, "info");
-			await ctx.reload();
 			// Render the initial dashboard (empty usage, all phases pending) so
 			// the user sees the file exist immediately after /codecarto-init.
 			void writeDashboard(ctx.cwd, PACKAGE_VERSION);
+			await refreshWorkspaceUi(ctx, lastFeedbackLines);
+			pi.setActiveTools(SAFE_TOOL_NAMES);
 			return;
 		},
 	});

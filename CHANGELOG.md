@@ -86,13 +86,14 @@ All notable changes to this project are documented here. The format is based on 
 
 - **`/codecarto-next --auto` no longer wedges at `reimplementation-spec`.** The Strategic Alignment Hook (which asks the user whether the spec should be language-agnostic or opinionated) is now suppressed under `--auto`. The sub-agent defaults to **language-agnostic** (using `templates/reimplementation-spec.md`), tags the spec front-matter with `selection: auto-default` for later traceability, and captures any unresolved stack/name/scope choices as `open_questions` entries rather than blocking the run. Interactive `/codecarto-next` and `/codecarto-phase reimplementation-spec` paths still prompt the user as before. The fix threads a new `BuildPhasePromptOptions.auto` flag through `buildPhasePrompt` (in `core/prompts.ts`), propagated from `runAuto` → `runSinglePhase` → `buildPhasePrompt`; the MCP server byte-identical-prompt invariant is preserved (MCP still calls without the flag).
 - **Release smoke test now tracks the v0.9.0 MCP tool surface.** `scripts/smoke-mcp.mjs` expects the new library tools alongside the workflow tools and now exits non-zero on setup failures before the first TAP step.
+- **Pi overlay is no longer always-on for repositories that already contain `.codecarto/`.** The CodeCartographer status widget, session label, safe-tool mode, and read-only tool policy now activate only after `/codecarto-init` runs in the current Pi session instead of auto-enabling on `session_start` whenever `.codecarto/workflow/status.yaml` exists.
 
 ### Tests
 
-- Test count: **119 → 187**.
+- Test count: **119 → 190**.
 - Added coverage for library primitives, library config loading, MCP library tools,
-  phase resolution aliases, and the auto-mode `reimplementation-spec` prompt
-  behavior.
+  phase resolution aliases, the auto-mode `reimplementation-spec` prompt behavior,
+  and Pi overlay activation gating.
 
 ### Notes
 
