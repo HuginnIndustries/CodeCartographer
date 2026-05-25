@@ -223,7 +223,7 @@ Beyond the slash commands, the Pi extension layers on:
 
 ### Version history (Pi orchestration)
 
-The current parallel-sub-agent design landed in 0.2.0 and has been incrementally enriched: file-backed sessions (0.3.0), summary injection (0.4.0), opt-in LLM steering (0.5.0), usage tracking (0.6.0), HTML dashboard (0.7.0), end-to-end auto mode (0.8.0), and experimental library foundations plus MCP library tools (0.9.0). 0.1.x workspaces don't need migration — existing `.codecarto/` directories work unchanged. See `CHANGELOG.md` for details.
+The current parallel-sub-agent design landed in 0.2.0 and has been incrementally enriched: file-backed sessions (0.3.0), summary injection (0.4.0), opt-in LLM steering (0.5.0), usage tracking (0.6.0), HTML dashboard (0.7.0), end-to-end auto mode (0.8.0), experimental library foundations plus MCP library tools (0.9.0), and Pi overlay activation gating (0.9.1). 0.1.x workspaces don't need migration — existing `.codecarto/` directories work unchanged. See `CHANGELOG.md` for details.
 
 ---
 

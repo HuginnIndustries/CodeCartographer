@@ -2,7 +2,7 @@
 
 This document tracks future-facing work. For the current shipped surface, see [README.md](../README.md).
 
-## Where We Are (v0.9.0)
+## Where We Are (v0.9.1)
 
 Already shipped:
 
