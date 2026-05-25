@@ -2,7 +2,7 @@
 
 This document tracks future-facing work. For the current shipped surface, see [README.md](../README.md).
 
-## Where We Are (v0.6.0)
+## Where We Are (v0.9.0)
 
 Already shipped:
 
@@ -16,7 +16,7 @@ Already shipped:
   - **Phase-completion summary (0.4.0).** Markdown closeout block injected into the orchestrator's session via `pi.sendMessage` on every phase finish. No auto-trigger; user-controlled.
   - **LLM-steered seed prompt (0.5.0).** Opt-in via `orchestrator.llm_steer_next_phase` in `.codecarto/workflow/config.yaml` or `--llm-steer` per invocation. Reads the previous phase's closeout and customizes the next phase's seed prompt; falls back to the stock prompt on any failure.
   - **Local usage log (0.6.0).** Append-only `.usage.local.yaml` per workspace; `/codecarto-usage` renders cumulative + per-phase totals.
-- **MCP server** (`mcp-server/`): seven primitives exposed to any MCP host (Claude Code, Claude Desktop). Imports the same `core/` as the Pi extension, so phase prompts and validation are byte-identical. The phase-orchestration features above are Pi-only — the MCP path returns prompt text for the host to dispatch and never runs sub-agents itself.
+- **MCP server** (`mcp-server/`): workflow primitives exposed to any MCP host (Claude Code, Claude Desktop) plus experimental library publish / list / reindex tools. Imports the same `core/` as the Pi extension, so phase prompts and validation are byte-identical. The phase-orchestration features above are Pi-only — the MCP path returns prompt text for the host to dispatch and never runs sub-agents itself.
 - **Pipelines**: `architecture-only`, `lite`, `defect-scan`, `full`, `full-with-audit`, and `full-with-deep-audit` (default). The deep-audit variant splits the defect scan into a mechanical early pass and a semantic late pass.
 - **CI**: invariant tests (`tests/`) catch cross-wrapper drift between the template, Pi extension, and MCP server. Release pipeline is tag-driven (`v*` tag pushes only) — see `CONTRIBUTING.md` for the maintainer release process.
 
@@ -32,7 +32,8 @@ A library + synthesis pipeline that turns CodeCartographer from analysis-only in
 
 - **M0 ✅ Docs + design freeze.** `docs/library-format.md` (experimental schema), surface-priority reframe in README + CLAUDE.md, `synthesis-roadmap.md` tracker.
 - **M1 ✅ Library foundations.** `core/library.ts` with publish / read / list / reindex / commit primitives. User-global `~/.codecarto/config.yaml` plumbing in `core/orchestrator-config.ts`. 23 new library tests + 7 new config tests (119 → 156).
-- **M2 (next) Surface publish UX.** Pi `/codecarto-publish` slash command + dashboard library state. MCP `codecarto_publish` / `codecarto_library_list` / `codecarto_library_reindex` tools. The Pi `tool_call` hook gains a configurable `library_path` allow-list — security-adjacent, will be reviewed carefully.
+- **M2a ✅ MCP library tools.** `codecarto_publish` / `codecarto_library_list` / `codecarto_library_reindex` expose the library primitives to MCP-capable hosts.
+- **M2b (next) Pi publish UX.** Pi `/codecarto-publish` slash command + dashboard library state. The Pi `tool_call` hook gains a configurable `library_path` allow-list — security-adjacent, will be reviewed carefully.
 - **M3** Synthesis pipeline phases: `vision-capture` → `goal-synthesis-propose` (markdown-checkbox confirmation gate) → `spec-merge` → `goal-synthesis-finalize`.
 - **M4** `pipeline-spec-mutate.yaml` — apply deltas to an existing spec and republish as a new library version.
 - **M5** Release polish.

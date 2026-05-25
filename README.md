@@ -33,7 +33,7 @@
 | **Per-phase token tracking** | `/codecarto-usage` |
 | **Opt-in LLM steering** of the next phase's seed prompt | `/codecarto-next --llm-steer` |
 
-> **Coming soon — forward-flow synthesis.** A library + synthesis pipeline is in active design: accumulate `reimplementation-spec.md` artifacts from many repos into a git-trackable library, then synthesize a new `project-plan.md` from a vision plus selected library entries. See [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md) for the implementation tracker.
+> **Forward-flow synthesis is underway.** v0.9.0 adds the experimental library foundation and MCP publish/list/reindex tools for accumulating `reimplementation-spec.md` artifacts in a git-trackable library. The Pi publish UX and synthesis pipeline that turns selected library entries plus a vision into `project-plan.md` are still in progress. See [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md) for the implementation tracker.
 
 ---
 
@@ -65,7 +65,7 @@ pi -e /absolute/path/to/CodeCartographer/extensions/codecarto/index.ts
 
 ### MCP server (for other coding agents)
 
-Use this when your coding agent isn't Pi — Claude Code, Codex, opencode, Cursor, Claude Desktop, or anything else that speaks MCP. The host drives the conversation and runs the LLM; CodeCartographer provides phase prompts, validation, and (with the upcoming synthesis release) library operations.
+Use this when your coding agent isn't Pi — Claude Code, Codex, opencode, Cursor, Claude Desktop, or anything else that speaks MCP. The host drives the conversation and runs the LLM; CodeCartographer provides phase prompts, validation, and experimental library publish/list/reindex operations.
 
 ```bash
 npm install --global codecartographer-pi
@@ -93,7 +93,7 @@ cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
 
 Then in the LLM session: `Read .codecarto/GUIDE.md and begin the analysis.`
 
-> **Limitation.** Drop-in mode runs the analysis pipeline fully, but the upcoming library + synthesis workflows (publishing entries, reading them back, generating a project plan from a vision) require executable code and are only available on Pi and MCP. See [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md) for the planned scope.
+> **Limitation.** Drop-in mode runs the analysis pipeline fully, but library + synthesis workflows require executable code. Publishing and reading library entries are currently available through the MCP server; Pi publish UX and project-plan synthesis are still in progress. See [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md) for the planned scope.
 
 ---
 
@@ -223,13 +223,13 @@ Beyond the slash commands, the Pi extension layers on:
 
 ### Version history (Pi orchestration)
 
-The current parallel-sub-agent design landed in 0.2.0 and has been incrementally enriched: file-backed sessions (0.3.0), summary injection (0.4.0), opt-in LLM steering (0.5.0), usage tracking (0.6.0), HTML dashboard (0.7.0), and end-to-end auto mode (0.8.0). 0.1.x workspaces don't need migration — existing `.codecarto/` directories work unchanged. See `CHANGELOG.md` for details.
+The current parallel-sub-agent design landed in 0.2.0 and has been incrementally enriched: file-backed sessions (0.3.0), summary injection (0.4.0), opt-in LLM steering (0.5.0), usage tracking (0.6.0), HTML dashboard (0.7.0), end-to-end auto mode (0.8.0), and experimental library foundations plus MCP library tools (0.9.0). 0.1.x workspaces don't need migration — existing `.codecarto/` directories work unchanged. See `CHANGELOG.md` for details.
 
 ---
 
 ## MCP server
 
-The same framework is packaged as a [Model Context Protocol](https://modelcontextprotocol.io) server. The MCP path returns prompt text for the host to dispatch and never runs sub-agents itself, so the Pi-only orchestration features (sub-agents, live widget, dashboard, usage tracking) don't apply — but phase prompts and validation are byte-identical with the Pi path because both import the same `core/`.
+The same framework is packaged as a [Model Context Protocol](https://modelcontextprotocol.io) server. The MCP path returns prompt text for the host to dispatch and never runs sub-agents itself, so the Pi-only orchestration features (sub-agents, live widget, dashboard, usage tracking) don't apply — but phase prompts and validation are byte-identical with the Pi path because both import the same `core/`. v0.9.0 also exposes experimental library tools so MCP-capable hosts can publish, list, and reindex reusable `reimplementation-spec.md` artifacts.
 
 Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/specification/2025-11-25) via `@modelcontextprotocol/sdk` ≥ 1.29.0. The negotiated `protocolVersion` reflects whatever the connecting client requests; the server accepts every revision the SDK supports (currently `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`, `2024-10-07`).
 
@@ -242,8 +242,11 @@ Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/spec
 | `codecarto_validate` | `/codecarto-validate` |
 | `codecarto_complete` | `/codecarto-complete` |
 | `codecarto_skill` | `/codecarto-skill` |
+| `codecarto_publish` | MCP-only library publish |
+| `codecarto_library_list` | MCP-only library listing |
+| `codecarto_library_reindex` | MCP-only library reindex |
 
-Each tool accepts an absolute `cwd` for the target repository. `codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation).
+Each workflow tool accepts an absolute `cwd` for the target repository. `codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation). The library tools accept an explicit absolute `library_path` or resolve `library.path` from `.codecarto/workflow/config.yaml` / `~/.codecarto/config.yaml`. The library schema is experimental and may break before v2.
 
 ---
 
@@ -398,7 +401,7 @@ core/                        # Pipeline state machine, validators, prompt assemb
                              # dashboard renderer, usage log, orchestrator config.
 extensions/codecarto/        # Pi extension surface (slash commands, widget,
                              # tool gating, dashboard writer + narrator).
-mcp-server/                  # MCP server surface (seven tools mirroring Pi commands).
+mcp-server/                  # MCP server surface (workflow tools + experimental library tools).
 tests/                       # Invariant tests catching cross-wrapper drift.
 docs/                        # Roadmap, design notes.
 ```

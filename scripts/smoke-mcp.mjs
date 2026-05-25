@@ -85,8 +85,11 @@ async function setupFixture() {
 const EXPECTED_TOOLS = [
 	"codecarto_complete",
 	"codecarto_init",
+	"codecarto_library_list",
+	"codecarto_library_reindex",
 	"codecarto_next",
 	"codecarto_phase",
+	"codecarto_publish",
 	"codecarto_skill",
 	"codecarto_status",
 	"codecarto_validate",
@@ -138,7 +141,7 @@ async function main() {
 		]);
 	});
 
-	await step("tools/list: returns the seven documented tools", async () => {
+	await step("tools/list: returns the documented workflow and library tools", async () => {
 		const { tools } = await client.listTools();
 		const names = tools.map((t) => t.name).sort();
 		assert.deepEqual(names, EXPECTED_TOOLS);
@@ -210,8 +213,11 @@ async function main() {
 
 try {
 	await main();
-} catch {
-	// step() already logged; non-zero exit code already set.
+} catch (err) {
+	// setup failures happen before step() can mark the run failed.
+	console.error("not ok - smoke setup or uncaught failure");
+	console.error(err?.stack ?? err?.message ?? err);
+	process.exitCode ||= 1;
 } finally {
 	await cleanup();
 }
