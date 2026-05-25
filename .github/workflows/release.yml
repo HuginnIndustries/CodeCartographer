@@ -50,6 +50,15 @@ jobs:
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
       - name: Smoke test the packed tarball
         run: node scripts/smoke-mcp.mjs --tarball "${{ steps.pack.outputs.tarball }}"
+      - name: Verify npm authentication
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN secret is empty or unavailable to this workflow run" >&2
+            exit 1
+          fi
+          npm whoami --registry https://registry.npmjs.org/
       - name: Publish to npm (idempotent)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -58,7 +67,7 @@ jobs:
           if npm view "codecartographer-pi@$VERSION" version >/dev/null 2>&1; then
             echo "codecartographer-pi@$VERSION is already on the npm registry; skipping publish"
           else
-            npm publish --provenance --access public
+            npm publish --registry https://registry.npmjs.org/ --provenance --access public
           fi
       - name: Extract release notes from CHANGELOG
         id: notes

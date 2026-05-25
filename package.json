@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "bin": {
-    "codecarto-mcp": "./dist/mcp-server/bin.mjs"
+    "codecarto-mcp": "dist/mcp-server/bin.mjs"
   },
   "scripts": {
     "build": "tsc",
