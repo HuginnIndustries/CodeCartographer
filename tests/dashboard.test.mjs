@@ -140,12 +140,34 @@ test("full-state render: completed phases get output links, owner note with HTML
 	// architecture is complete → its output link is rendered
 	assert.match(html, /href="findings\/architecture\/architecture\.md"/);
 
-	// contracts primary is missing → no link, "missing" tag instead
-	assert.doesNotMatch(html, /href="findings\/contracts\/contracts\.md"/);
-	assert.match(html, /primary missing/);
-});
+		// contracts primary is missing → no link, "missing" tag instead
+		assert.doesNotMatch(html, /href="findings\/contracts\/contracts\.md"/);
+		assert.match(html, /primary missing/);
+	});
 
-test("carry-forward entries render with the target_phase pill", () => {
+	test("health panel elevates missing primary outputs and completed pipeline labels", () => {
+		const phaseOrder = ["architecture", "contracts"];
+		const status = makeStatus(phaseOrder, {
+			architecture: { status: "complete", owner_notes: [], outputs_present: [], open_questions: [], carry_forward: [] },
+			contracts: { status: "complete", owner_notes: [], outputs_present: [], open_questions: [], carry_forward: [] },
+		});
+		status.current_phase = "complete";
+		const html = renderDashboard({
+			...emptyInputs(phaseOrder),
+			status,
+			outputsPresent: new Map([
+				["architecture", { primary: { path: "findings/architecture/architecture.md", exists: true }, secondary: [] }],
+				["contracts", { primary: { path: "findings/contracts/contracts.md", exists: false }, secondary: [] }],
+			]),
+		});
+
+		assert.match(html, /Pipeline complete/);
+		assert.match(html, /attention required/);
+		assert.match(html, /Required primary output is missing/);
+		assert.match(html, /findings\/contracts\/contracts\.md/);
+	});
+
+	test("carry-forward entries render with the target_phase pill", () => {
 	const phaseOrder = ["architecture", "contracts"];
 	const status = makeStatus(phaseOrder, {
 		architecture: {

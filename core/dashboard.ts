@@ -55,6 +55,7 @@ export function renderDashboard(inputs: DashboardInputs): string {
 		`<div class="cc-main">`,
 		renderHeader(inputs),
 		renderStalenessWarning(inputs),
+		renderHealthPanel(inputs),
 		inputs.narration ? renderNarration(inputs.narration, completedPhaseCount(inputs.status)) : "",
 		renderKeyResults(inputs),
 		renderProgressBar(inputs.pipeline, inputs.status),
@@ -129,7 +130,7 @@ function renderHeader(inputs: DashboardInputs): string {
 	const { status, pipeline, packageVersion, generatedAt } = inputs;
 	const projectName = status.project_name || "(unnamed project)";
 	const pipelineLabel = pipeline.workflow_name || status.pipeline;
-	const currentPhase = status.current_phase || "—";
+	const currentPhase = displayCurrentPhase(status);
 	const totals = computeTotals(inputs.usage);
 	const completed = completedPhaseCount(status);
 	const total = pipeline.phase_order.length;
@@ -146,7 +147,7 @@ function renderHeader(inputs: DashboardInputs): string {
 		renderStat("Pipeline", pipelineLabel),
 		renderStat("Current phase", currentPhase),
 		renderStat("Progress", `${completed}/${total} phases`),
-		renderStat("Recorded tokens", formatTokenCount(totals.tokens.input + totals.tokens.output)),
+		renderStat("Recorded tokens", formatTokensForDashboard(inputs.usage)),
 		renderStat("Tool uses", String(totals.tool_uses)),
 		renderStat("Package", `v${packageVersion}`),
 		`</div>`,
@@ -171,6 +172,72 @@ function renderStat(label: string, value: string): string {
 function renderStalenessWarning(inputs: DashboardInputs): string {
 	if (!inputs.status.last_updated || inputs.status.last_updated <= inputs.generatedAt) return "";
 	return `<section class="cc-warning" data-section><strong>Dashboard may be stale.</strong> Status was updated at ${escapeHtml(inputs.status.last_updated)} after this dashboard was generated at ${escapeHtml(inputs.generatedAt)}. Regenerate with <code>/codecarto-dashboard</code>.</section>`;
+}
+
+type DashboardIssue = { severity: "blocker" | "warning"; phaseId: string; title: string; detail: string; path?: string };
+
+function renderHealthPanel(inputs: DashboardInputs): string {
+	const { status, pipeline, usage } = inputs;
+	const completed = completedPhaseCount(status);
+	const total = pipeline.phase_order.length;
+	const totals = computeTotals(usage);
+	const issues = collectDashboardIssues(inputs);
+	const openQuestionCount = countOpenQuestions(status);
+	const carryForwardCount = countCarryForward(status);
+	const health = issues.some((i) => i.severity === "blocker") ? "attention required" : issues.length ? "review recommended" : completed === total ? "complete" : "on track";
+	const healthClass = issues.some((i) => i.severity === "blocker") ? "bad" : issues.length ? "warn" : "ok";
+	const tokenText = usageHasTokenAccounting(usage) ? formatTokenCount(totals.tokens.input + totals.tokens.output) : usage.runs.length ? "unavailable" : "0";
+	const issueMarkup = issues.length
+		? `<div class="cc-health-issues">${issues.map(renderDashboardIssue).join("\n")}</div>`
+		: `<p class="cc-health-ok">No blocking artifact gaps detected.</p>`;
+
+	return [
+		`<section class="cc-card cc-health cc-health-${healthClass}" aria-label="Dashboard health" data-section data-search-text="health status blockers missing artifacts open questions">`,
+		`<div class="cc-health-hero">`,
+		`<div><div class="cc-eyebrow">Pipeline health</div><h2>${escapeHtml(health)}</h2><p>${escapeHtml(status.current_phase && status.current_phase !== "complete" ? `Current phase: ${status.current_phase}` : "Pipeline complete — all phases have finished.")}</p></div>`,
+		`<div class="cc-health-ring" aria-label="${completed} of ${total} phases complete"><strong>${completed}/${total}</strong><span>phases</span></div>`,
+		`</div>`,
+		`<div class="cc-health-grid">`,
+		renderHealthMetric("Artifacts needing attention", String(issues.length), issues.length ? "bad" : "ok"),
+		renderHealthMetric("Open questions", String(openQuestionCount), openQuestionCount ? "warn" : "ok"),
+		renderHealthMetric("Carry-forward items", String(carryForwardCount), carryForwardCount ? "warn" : "ok"),
+		renderHealthMetric("Tool uses", String(totals.tool_uses), "neutral"),
+		renderHealthMetric("Runtime", formatMillis(totals.duration_ms), "neutral"),
+		renderHealthMetric("Tokens", tokenText, tokenText === "unavailable" ? "warn" : "neutral"),
+		`</div>`,
+		issueMarkup,
+		`</section>`,
+	].join("\n");
+}
+
+function renderHealthMetric(label: string, value: string, tone: "ok" | "warn" | "bad" | "neutral"): string {
+	return `<div class="cc-health-metric cc-tone-${tone}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function renderDashboardIssue(issue: DashboardIssue): string {
+	const path = issue.path ? `<code>${escapeHtml(issue.path)}</code>` : "";
+	return `<article class="cc-health-issue cc-issue-${issue.severity}"><div><span class="cc-pill ${issue.severity === "blocker" ? "cc-pill-bad" : ""}">${escapeHtml(issue.severity)}</span><a href="#${phaseAnchor(issue.phaseId)}">${escapeHtml(issue.phaseId)}</a></div><strong>${escapeHtml(issue.title)}</strong><p>${escapeHtml(issue.detail)} ${path}</p></article>`;
+}
+
+function collectDashboardIssues(inputs: DashboardInputs): DashboardIssue[] {
+	const out: DashboardIssue[] = [];
+	for (const phaseId of inputs.pipeline.phase_order) {
+		const phase = getPhase(inputs.pipeline, phaseId);
+		if (!phase?.primary_output) continue;
+		const state = phaseRenderState(inputs.status, phaseId);
+		const primary = inputs.outputsPresent.get(phaseId)?.primary;
+		const shouldExist = state === "complete" || state === "current" || state === "running";
+		if (shouldExist && primary?.exists === false) {
+			out.push({
+				severity: state === "complete" || state === "current" ? "blocker" : "warning",
+				phaseId,
+				title: "Required primary output is missing",
+				detail: state === "complete" ? "Phase is marked complete but the dashboard cannot find its primary artifact at" : "This phase is active or ready, but its required artifact is not present at",
+				path: phase.primary_output,
+			});
+		}
+	}
+	return out;
 }
 
 function renderNarration(narration: DashboardNarration, currentCompletedCount: number): string {
@@ -357,41 +424,77 @@ function renderPhaseOwnerNotes(phaseState: StatusPhase | undefined): string {
 
 function renderPhaseLastRun(run: UsageRun | undefined): string {
 	if (!run) return `<div class="cc-phase-section"><h3>Last run</h3><p class="cc-muted">No usage record for this phase.</p></div>`;
-	const tokensTotal = (run.tokens?.input ?? 0) + (run.tokens?.output ?? 0);
+	const tokensTotal = formatRunTokens(run);
 	const sessionLink = run.session_file ? renderSafeLink(run.session_file, "transcript") : undefined;
 	const session = sessionLink ? `<dt>Session</dt><dd>${sessionLink}</dd>` : "";
-	return [`<div class="cc-phase-section">`, `<h3>Last run</h3>`, `<dl class="cc-run-meta">`, `<dt>Timestamp</dt><dd>${escapeHtml(run.timestamp)}</dd>`, `<dt>Status</dt><dd>${escapeHtml(run.status)}</dd>`, `<dt>Turns</dt><dd>${run.turn_count}</dd>`, `<dt>Tool uses</dt><dd>${run.tool_uses}</dd>`, `<dt>Tokens</dt><dd>${escapeHtml(formatTokenCount(tokensTotal))}</dd>`, `<dt>Duration</dt><dd>${escapeHtml(formatMillis(run.duration_ms))}</dd>`, session, `</dl>`, `</div>`].join("");
+	return [`<div class="cc-phase-section">`, `<h3>Last run</h3>`, `<dl class="cc-run-meta">`, `<dt>Timestamp</dt><dd>${escapeHtml(run.timestamp)}</dd>`, `<dt>Status</dt><dd>${escapeHtml(run.status)}</dd>`, `<dt>Turns</dt><dd>${run.turn_count}</dd>`, `<dt>Tool uses</dt><dd>${run.tool_uses}</dd>`, `<dt>Tokens</dt><dd>${escapeHtml(tokensTotal)}</dd>`, `<dt>Duration</dt><dd>${escapeHtml(formatMillis(run.duration_ms))}</dd>`, session, `</dl>`, `</div>`].join("");
 }
 
 function renderUsagePanel(inputs: DashboardInputs): string {
 	const { usage, pipeline, status } = inputs;
 	const totals = computeTotals(usage);
 	const perPhase = computePerPhaseTotals(usage);
+	const tokenAccounting = usageHasTokenAccounting(usage);
+	const maxTools = Math.max(1, ...[...perPhase.values()].map((t) => t.tool_uses));
+	const maxDuration = Math.max(1, ...[...perPhase.values()].map((t) => t.duration_ms));
 	const rows = pipeline.phase_order.map((phaseId) => {
 		const t = perPhase.get(phaseId);
 		if (!t) {
 			const complete = status.phases[phaseId]?.status === "complete";
-			return `<tr class="${complete ? "cc-usage-missing" : ""}"><td><a href="#${phaseAnchor(phaseId)}">${escapeHtml(phaseId)}</a></td><td>0</td><td>—</td><td>—</td><td>${complete ? "usage not recorded" : "not run"}</td></tr>`;
+			return `<tr class="${complete ? "cc-usage-missing" : ""}"><td><a href="#${phaseAnchor(phaseId)}">${escapeHtml(phaseId)}</a></td><td>0</td><td>—</td><td>—</td><td>—</td><td>${complete ? "usage not recorded" : "not run"}</td></tr>`;
 		}
 		const tokensTotal = t.tokens.input + t.tokens.output;
-		return `<tr><td><a href="#${phaseAnchor(phaseId)}">${escapeHtml(phaseId)}</a></td><td>${t.runs}</td><td>${escapeHtml(formatTokenCount(tokensTotal))}</td><td>${t.tool_uses}</td><td>${escapeHtml(formatMillis(t.duration_ms))}</td></tr>`;
+		return `<tr><td><a href="#${phaseAnchor(phaseId)}">${escapeHtml(phaseId)}</a></td><td>${t.runs}</td><td>${escapeHtml(tokenAccounting ? formatTokenCount(tokensTotal) : "unavailable")}</td><td>${renderUsageBar(t.tool_uses, maxTools, String(t.tool_uses))}</td><td>${renderUsageBar(t.duration_ms, maxDuration, formatMillis(t.duration_ms))}</td><td>${usagePhaseNote(phaseId, status)}</td></tr>`;
 	}).join("");
 
 	return [
 		`<section class="cc-card cc-usage" id="usage" aria-label="Token usage" data-section data-search-text="usage tokens tool duration">`,
 		`<div class="cc-section-head"><h2>Usage</h2><span>${totals.runs} runs</span></div>`,
-		usage.runs.length === 0 ? `<p class="cc-empty">No phase runs recorded yet.</p>` : `<dl class="cc-usage-totals">${renderUsageTotalsList(totals)}</dl>`,
+		usage.runs.length === 0 ? `<p class="cc-empty">No phase runs recorded yet.</p>` : `<dl class="cc-usage-totals">${renderUsageTotalsList(totals, tokenAccounting)}</dl>`,
+		renderUsageInsights(perPhase, status),
 		`<table class="cc-usage-table">`,
-		`<thead><tr><th>Phase</th><th>Runs</th><th>Tokens</th><th>Tools</th><th>Duration</th></tr></thead>`,
+		`<thead><tr><th>Phase</th><th>Runs</th><th>Tokens</th><th>Tools</th><th>Duration</th><th>State</th></tr></thead>`,
 		`<tbody>${rows}</tbody>`,
 		`</table>`,
 		`</section>`,
 	].join("\n");
 }
 
-function renderUsageTotalsList(totals: UsageTotals): string {
+function renderUsageTotalsList(totals: UsageTotals, tokenAccounting: boolean): string {
 	const tokensTotal = totals.tokens.input + totals.tokens.output;
-	return [`<dt>Total runs</dt><dd>${totals.runs}</dd>`, `<dt>Tokens (in / out / cache)</dt><dd>${escapeHtml(formatTokenCount(totals.tokens.input))} / ${escapeHtml(formatTokenCount(totals.tokens.output))} / ${escapeHtml(formatTokenCount(totals.tokens.cache_write))}</dd>`, `<dt>Total tokens</dt><dd>${escapeHtml(formatTokenCount(tokensTotal))}</dd>`, `<dt>Tool uses</dt><dd>${totals.tool_uses}</dd>`, `<dt>Total duration</dt><dd>${escapeHtml(formatMillis(totals.duration_ms))}</dd>`].join("");
+	const tokenDetail = tokenAccounting
+		? `${escapeHtml(formatTokenCount(totals.tokens.input))} / ${escapeHtml(formatTokenCount(totals.tokens.output))} / ${escapeHtml(formatTokenCount(totals.tokens.cache_write))}`
+		: `<span class="cc-muted">unavailable — host did not report token counts</span>`;
+	const tokenTotal = tokenAccounting ? escapeHtml(formatTokenCount(tokensTotal)) : `<span class="cc-muted">unavailable</span>`;
+	return [`<dt>Total runs</dt><dd>${totals.runs}</dd>`, `<dt>Tokens (in / out / cache)</dt><dd>${tokenDetail}</dd>`, `<dt>Total tokens</dt><dd>${tokenTotal}</dd>`, `<dt>Tool uses</dt><dd>${totals.tool_uses}</dd>`, `<dt>Total duration</dt><dd>${escapeHtml(formatMillis(totals.duration_ms))}</dd>`].join("");
+}
+
+function renderUsageInsights(perPhase: Map<string, UsageTotals>, status: NormalizedStatus): string {
+	if (perPhase.size === 0) return "";
+	const entries = [...perPhase.entries()];
+	const longest = entries.reduce((best, entry) => entry[1].duration_ms > best[1].duration_ms ? entry : best, entries[0]);
+	const mostTools = entries.reduce((best, entry) => entry[1].tool_uses > best[1].tool_uses ? entry : best, entries[0]);
+	const current = status.current_phase ? perPhase.get(status.current_phase) : undefined;
+	return [
+		`<div class="cc-usage-insights">`,
+		renderInsight("Longest phase", longest[0], formatMillis(longest[1].duration_ms)),
+		renderInsight("Most tool-heavy", mostTools[0], `${mostTools[1].tool_uses} tools`),
+		current && status.current_phase ? renderInsight("Current phase usage", status.current_phase, `${current.runs} run${current.runs === 1 ? "" : "s"} · ${formatMillis(current.duration_ms)}`) : "",
+		`</div>`,
+	].filter(Boolean).join("\n");
+}
+
+function renderInsight(label: string, phaseId: string, value: string): string {
+	return `<article class="cc-insight"><span>${escapeHtml(label)}</span><a href="#${phaseAnchor(phaseId)}">${escapeHtml(phaseId)}</a><strong>${escapeHtml(value)}</strong></article>`;
+}
+
+function renderUsageBar(value: number, max: number, label: string): string {
+	const pct = Math.max(3, Math.min(100, Math.round((value / max) * 100)));
+	return `<span class="cc-bar-cell"><span class="cc-bar" style="--cc-bar:${pct}%"></span><span>${escapeHtml(label)}</span></span>`;
+}
+
+function usagePhaseNote(phaseId: string, status: NormalizedStatus): string {
+	return escapeHtml(phaseRenderState(status, phaseId));
 }
 
 function renderActivityTimeline(runs: UsageRun[]): string {
@@ -399,18 +502,20 @@ function renderActivityTimeline(runs: UsageRun[]): string {
 	const sorted = [...runs].sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
 	const visible = sorted.slice(0, TIMELINE_VISIBLE_COUNT);
 	const overflow = sorted.slice(TIMELINE_VISIBLE_COUNT);
+	const hasSessionLinks = sorted.some((run) => Boolean(run.session_file && safeRelativeHref(run.session_file)));
 	const rowOf = (run: UsageRun) => {
-		const tokensTotal = (run.tokens?.input ?? 0) + (run.tokens?.output ?? 0);
+		const tokensTotal = formatRunTokens(run);
 		const sessionCell = run.session_file ? (renderSafeLink(run.session_file, "session") ?? "—") : "—";
-		return `<tr><td>${escapeHtml(run.timestamp)}</td><td><a href="#${phaseAnchor(run.phase)}">${escapeHtml(run.phase)}</a></td><td>${escapeHtml(run.status)}</td><td>${run.turn_count}</td><td>${run.tool_uses}</td><td>${escapeHtml(formatTokenCount(tokensTotal))}</td><td>${escapeHtml(formatMillis(run.duration_ms))}</td><td>${sessionCell}</td></tr>`;
+		return `<tr><td>${escapeHtml(run.timestamp)}</td><td><a href="#${phaseAnchor(run.phase)}">${escapeHtml(run.phase)}</a></td><td>${escapeHtml(run.status)}</td><td>${run.turn_count}</td><td>${run.tool_uses}</td><td>${escapeHtml(tokensTotal)}</td><td>${escapeHtml(formatMillis(run.duration_ms))}</td>${hasSessionLinks ? `<td>${sessionCell}</td>` : ""}</tr>`;
 	};
 	const overflowBlock = overflow.length === 0 ? "" : [`<details class="cc-timeline-older">`, `<summary>Older runs (${overflow.length})</summary>`, `<table class="cc-timeline-table">`, `<tbody>${overflow.map(rowOf).join("")}</tbody>`, `</table>`, `</details>`].join("\n");
-	return [`<section class="cc-card cc-timeline" aria-label="Activity timeline" data-section data-search-text="activity timeline sessions">`, `<div class="cc-section-head"><h2>Activity timeline</h2><span>newest first</span></div>`, `<table class="cc-timeline-table">`, `<thead><tr><th>When</th><th>Phase</th><th>Status</th><th>⟳</th><th>Tools</th><th>Tokens</th><th>Duration</th><th>Session</th></tr></thead>`, `<tbody>${visible.map(rowOf).join("")}</tbody>`, `</table>`, overflowBlock, `</section>`].join("\n");
+	return [`<section class="cc-card cc-timeline" aria-label="Activity timeline" data-section data-search-text="activity timeline sessions">`, `<div class="cc-section-head"><h2>Activity timeline</h2><span>newest first</span></div>`, `<table class="cc-timeline-table">`, `<thead><tr><th>When</th><th>Phase</th><th>Status</th><th>Turns</th><th>Tools</th><th>Tokens</th><th>Duration</th>${hasSessionLinks ? "<th>Session</th>" : ""}</tr></thead>`, `<tbody>${visible.map(rowOf).join("")}</tbody>`, `</table>`, overflowBlock, `</section>`].join("\n");
 }
 
 function renderOpenQuestionsRollup(status: NormalizedStatus): string {
 	const buckets: string[] = [];
 	const seen = new Set<string>();
+	const byKind = new Map<string, number>();
 	let total = 0;
 	for (const [phaseId, phaseState] of Object.entries(status.phases)) {
 		const questions: string[] = [];
@@ -418,6 +523,8 @@ function renderOpenQuestionsRollup(status: NormalizedStatus): string {
 			const key = `${q.kind ?? ""}|${q.description ?? ""}|${q.deferred_reason ?? ""}`;
 			if (seen.has(key)) continue;
 			seen.add(key);
+			const kind = String(q.kind ?? "unspecified");
+			byKind.set(kind, (byKind.get(kind) ?? 0) + 1);
 			questions.push(renderOpenQuestion(q));
 		}
 		if (questions.length === 0) continue;
@@ -425,7 +532,8 @@ function renderOpenQuestionsRollup(status: NormalizedStatus): string {
 		buckets.push(`<div class="cc-question-bucket"><h3>${escapeHtml(phaseId)} (${questions.length})</h3><a class="cc-pill cc-pill-target" href="#${phaseAnchor(phaseId)}">jump to phase</a><ul class="cc-question-list">${questions.join("")}</ul></div>`);
 	}
 	if (total === 0) return "";
-	return [`<section class="cc-card cc-rollup" aria-label="Open questions roll-up" data-section data-search-text="open questions">`, `<div class="cc-section-head"><h2>Open questions</h2><span>${total} unique</span></div>`, buckets.join("\n"), `</section>`].join("\n");
+	const kindSummary = [...byKind.entries()].sort((a, b) => b[1] - a[1]).map(([kind, count]) => `<span class="cc-kind-chip"><strong>${count}</strong>${escapeHtml(kind)}</span>`).join("");
+	return [`<section class="cc-card cc-rollup" aria-label="Open questions roll-up" data-section data-search-text="open questions">`, `<div class="cc-section-head"><h2>Open questions</h2><span>${total} unique</span></div>`, `<div class="cc-kind-summary">${kindSummary}</div>`, buckets.join("\n"), `</section>`].join("\n");
 }
 
 function renderCloseoutsList(inputs: DashboardInputs): string {
@@ -534,8 +642,36 @@ function phaseRenderState(status: NormalizedStatus, phaseId: string): "complete"
 	return "pending";
 }
 
+function displayCurrentPhase(status: NormalizedStatus): string {
+	return status.current_phase === "complete" ? "Pipeline complete" : status.current_phase || "—";
+}
+
 function completedPhaseCount(status: NormalizedStatus): number {
 	return Object.values(status.phases).filter((p) => p.status === "complete").length;
+}
+
+function countOpenQuestions(status: NormalizedStatus): number {
+	return Object.values(status.phases).reduce((sum, p) => sum + (p.open_questions?.length ?? 0), 0);
+}
+
+function countCarryForward(status: NormalizedStatus): number {
+	return Object.values(status.phases).reduce((sum, p) => sum + (p.carry_forward?.length ?? 0), 0);
+}
+
+function usageHasTokenAccounting(usage: UsageFile): boolean {
+	return usage.runs.some((run) => (run.tokens?.input ?? 0) > 0 || (run.tokens?.output ?? 0) > 0 || (run.tokens?.cache_write ?? 0) > 0);
+}
+
+function formatTokensForDashboard(usage: UsageFile): string {
+	const totals = computeTotals(usage);
+	if (usage.runs.length > 0 && !usageHasTokenAccounting(usage)) return "unavailable";
+	return formatTokenCount(totals.tokens.input + totals.tokens.output);
+}
+
+function formatRunTokens(run: UsageRun): string {
+	const total = (run.tokens?.input ?? 0) + (run.tokens?.output ?? 0);
+	const hasAccounting = total > 0 || (run.tokens?.cache_write ?? 0) > 0;
+	return hasAccounting ? formatTokenCount(total) : "unavailable";
 }
 
 function lastRunPerPhase(runs: UsageRun[]): Map<string, UsageRun> {
@@ -649,6 +785,24 @@ h2 { margin: 0; font-size: 18px; } h3 { margin: var(--s-2) 0 var(--s-1); color: 
 .cc-meta-details { margin-top: var(--s-3); } .cc-header-meta, .cc-run-meta, .cc-usage-totals { display: grid; grid-template-columns: max-content 1fr; gap: var(--s-1) var(--s-3); margin: var(--s-2) 0; } dt { color: var(--fg-dim); } dd { margin: 0; }
 .cc-card, .cc-warning { padding: var(--s-3); margin-bottom: var(--s-4); }
 .cc-warning { border-color: var(--status-running); background: color-mix(in srgb, var(--status-running) 9%, var(--bg-card)); }
+.cc-health { border-width: 1px; position: relative; overflow: hidden; }
+.cc-health::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 4px; background: var(--accent-2); }
+.cc-health-bad::before { background: var(--status-error); } .cc-health-warn::before { background: var(--status-running); } .cc-health-ok::before { background: var(--status-complete); }
+.cc-health-hero { display: flex; justify-content: space-between; align-items: center; gap: var(--s-3); margin-bottom: var(--s-3); }
+.cc-health-hero h2 { font-size: clamp(24px, 3vw, 38px); text-transform: capitalize; margin: 2px 0; }
+.cc-health-hero p { color: var(--fg-dim); margin: 0; }
+.cc-health-ring { width: 112px; height: 112px; border-radius: 999px; display: grid; place-items: center; align-content: center; background: radial-gradient(circle at center, var(--bg-card) 58%, transparent 59%), conic-gradient(var(--accent-3), var(--accent-2)); border: 1px solid var(--border); flex: 0 0 auto; }
+.cc-health-ring strong { font-size: 24px; line-height: 1; } .cc-health-ring span { color: var(--fg-dim); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.cc-health-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--s-2); margin-bottom: var(--s-3); }
+.cc-health-metric { padding: var(--s-2); border: 1px solid var(--border); border-radius: 14px; background: var(--bg); min-width: 0; }
+.cc-health-metric span { display: block; color: var(--fg-dim); font-size: 12px; } .cc-health-metric strong { display: block; margin-top: 2px; font-size: 18px; overflow-wrap: anywhere; }
+.cc-tone-ok strong { color: var(--status-complete); } .cc-tone-warn strong { color: var(--status-running); } .cc-tone-bad strong { color: var(--status-error); }
+.cc-health-issues { display: grid; gap: var(--s-2); }
+.cc-health-issue { padding: var(--s-2); border: 1px solid var(--border); border-radius: 14px; background: var(--bg); }
+.cc-health-issue div { display: flex; flex-wrap: wrap; gap: var(--s-1); align-items: center; margin-bottom: 2px; }
+.cc-health-issue strong { display: block; font-size: 15px; } .cc-health-issue p { color: var(--fg-dim); margin: 2px 0 0; }
+.cc-issue-blocker { border-color: color-mix(in srgb, var(--status-error) 55%, var(--border)); background: color-mix(in srgb, var(--status-error) 8%, var(--bg-card)); }
+.cc-health-ok { color: var(--status-complete); margin: 0; }
 .cc-section-head { display: flex; justify-content: space-between; gap: var(--s-2); align-items: baseline; padding-bottom: var(--s-2); margin-bottom: var(--s-2); border-bottom: 1px solid var(--border); }
 .cc-section-head span, .cc-muted, .cc-empty { color: var(--fg-dim); }
 .cc-narration pre { white-space: pre-wrap; word-wrap: break-word; margin: 0; font-family: inherit; }
@@ -679,6 +833,15 @@ h2 { margin: 0; font-size: 18px; } h3 { margin: var(--s-2) 0 var(--s-1); color: 
 .cc-usage-table th, .cc-usage-table td, .cc-timeline-table th, .cc-timeline-table td { padding: var(--s-1) var(--s-2); text-align: left; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 .cc-usage-table th, .cc-timeline-table th { color: var(--fg-dim); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: .04em; }
 .cc-usage-missing td:last-child { color: var(--status-running); }
+.cc-usage-insights { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-2); margin: var(--s-3) 0; }
+.cc-insight { padding: var(--s-2); border: 1px solid var(--border); border-radius: 12px; background: var(--bg); display: grid; gap: 2px; }
+.cc-insight span { color: var(--fg-dim); font-size: 12px; } .cc-insight a { font-weight: 800; } .cc-insight strong { font-size: 15px; }
+.cc-bar-cell { min-width: 120px; display: grid; grid-template-columns: minmax(42px, 1fr) auto; align-items: center; gap: var(--s-2); }
+.cc-bar-cell > span:last-child { min-width: 48px; text-align: right; }
+.cc-bar { height: 8px; border-radius: 999px; background: linear-gradient(90deg, var(--accent-2) var(--cc-bar), var(--bg-soft) var(--cc-bar)); border: 1px solid var(--border); }
+.cc-kind-summary { display: flex; flex-wrap: wrap; gap: var(--s-1); margin: var(--s-2) 0 var(--s-3); }
+.cc-kind-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--fg-dim); font-size: 12px; }
+.cc-kind-chip strong { color: var(--fg); }
 .cc-timeline-older { margin-top: var(--s-2); }
 .cc-footer { margin-top: var(--s-5); padding-top: var(--s-3); border-top: 1px solid var(--border); color: var(--fg-dim); font-size: 13px; }
 @media (max-width: 900px) {
@@ -687,7 +850,8 @@ h2 { margin: 0; font-size: 18px; } h3 { margin: var(--s-2) 0 var(--s-1); color: 
   body.cc-sidebar-open .cc-sidebar { transform: translateX(0); }
   .cc-menu-button { display: block; }
   .cc-main { padding: var(--s-3); padding-top: var(--s-5); }
-  .cc-stat-grid, .cc-artifact-row, .cc-closeout-row { grid-template-columns: 1fr; }
+  .cc-stat-grid, .cc-artifact-row, .cc-closeout-row, .cc-health-grid, .cc-usage-insights { grid-template-columns: 1fr; }
+  .cc-health-hero { align-items: flex-start; } .cc-health-ring { width: 88px; height: 88px; }
   .cc-header-meta, .cc-run-meta, .cc-usage-totals { grid-template-columns: 1fr; }
   table { display: block; overflow-x: auto; white-space: nowrap; }
 }
