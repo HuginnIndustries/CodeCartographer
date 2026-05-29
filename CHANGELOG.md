@@ -13,6 +13,35 @@ All notable changes to this project are documented here. The format is based on 
 - `pipeline-spec-mutate.yaml` for applying deltas to an existing spec and
   republishing it as a new library version.
 
+## [0.10.0] — 2026-05-28
+
+### Added
+
+- **Polished dashboard health summary.** The generated `.codecarto/dashboard.html`
+  now opens with a higher-signal Pipeline Health panel that summarizes overall
+  status, phase completion, artifact gaps, open questions, carry-forward items,
+  tool uses, runtime, and token availability before the detailed phase cards.
+- **Dashboard issue surfacing.** Completed phases whose required primary output
+  is missing are promoted into an attention-required health issue instead of
+  being buried in the phase details.
+
+### Changed
+
+- **Token accounting now distinguishes unavailable data from zero usage.** When
+  local usage records do not include token counts, the dashboard reports tokens
+  as `unavailable` rather than showing a misleading numeric total.
+- **Completed pipeline labels are friendlier.** `current_phase: complete` now
+  renders as `Pipeline complete` in dashboard header metadata.
+- **Activity and usage presentation is clearer.** The activity timeline and usage
+  panels now include stronger visual grouping, kind chips, and summary cues while
+  preserving the self-contained static HTML/no-network/no-framework contract.
+
+### Tests
+
+- Test count: **190 → 191**.
+- Added dashboard regression coverage for health-panel missing-output escalation
+  and completed-pipeline label rendering.
+
 ## [0.9.1] — 2026-05-25
 
 ### Fixed
