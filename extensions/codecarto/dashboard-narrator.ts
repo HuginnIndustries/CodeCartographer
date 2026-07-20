@@ -204,7 +204,6 @@ async function runNarratorOnce(ctx: ExtensionContext, prompt: string): Promise<s
 		agentDir,
 		sessionManager: SessionManager.inMemory(cwd),
 		settingsManager: SettingsManager.create(cwd, agentDir),
-		modelRegistry: ctx.modelRegistry,
 		model: ctx.model,
 		tools: [],
 		resourceLoader: loader,
