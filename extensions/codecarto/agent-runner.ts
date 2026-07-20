@@ -180,7 +180,7 @@ export async function runPhase(
 				};
 				callbacks.onCompactionEnd?.({
 					reason: compactEvent.reason,
-					successful: Boolean(compactEvent.result) && !compactEvent.aborted && !compactEvent.errorMessage,
+					successful: compactEvent.result !== undefined && compactEvent.result !== null && !compactEvent.aborted && !compactEvent.errorMessage,
 					aborted: compactEvent.aborted,
 				});
 				break;
