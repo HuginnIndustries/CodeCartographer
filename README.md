@@ -114,6 +114,35 @@ For multi-session work, every new session reads `.codecarto/GUIDE.md` (or the li
 
 ---
 
+## Progressive distillation and context resilience
+
+CodeCartographer is a progressive, evidence-tagged distillation of a codebase. It does not ask one context window to retain the entire investigation. Instead, each phase turns a large body of source evidence into a smaller, more task-specific artifact that the next phase can read:
+
+```text
+source code
+  → architecture map
+  → behavioral contracts + protocols + defect findings
+  → porting bundle
+  → reimplementation spec
+```
+
+This is deliberate distillation, not incidental chat summarization. Each artifact follows a template, preserves evidence levels and known unknowns, and must pass validation before it becomes an input to downstream phases.
+
+### What happens when conversation context is compacted?
+
+The filesystem, not the conversation, is the durable memory of a run:
+
+- Each phase gets a fresh context window. In the Pi extension it runs as an isolated phase sub-agent; MCP and drop-in hosts should use the same one-session-per-phase pattern.
+- Completed findings live under `.codecarto/findings/`. Later phases re-read the specific upstream artifacts declared by the active pipeline instead of relying on conversational recall.
+- `workflow/status.yaml` records progress, `open_questions`, and `carry_forward` items routed to later phases. `CONVENTIONS.md`, `DECISIONS.md`, closeouts, and `THREAD_LOG.md` preserve cross-session knowledge and handoffs.
+- Pi phase transcripts are file-backed and remain available through `/resume`, `/tree`, and `/export`, even when the active model context has been compacted.
+
+As a result, compaction—or even replacement—of the orchestrator session does not erase pipeline progress. A new session can reconstruct the relevant state from disk and continue.
+
+The remaining limit is **within a single oversized phase**. Host-level compaction is lossy, and CodeCartographer does not pretend otherwise. Phase instructions therefore prioritize targeted reads and durable scratch notes; if full coverage will not fit, the phase records `PARTIAL` validation and places unresolved work in `open_questions` or `carry_forward`. Cross-phase context loss is largely designed out; intra-phase context pressure is made explicit rather than hidden.
+
+---
+
 ## Phases produce these artifacts
 
 | Artifact | Description |
