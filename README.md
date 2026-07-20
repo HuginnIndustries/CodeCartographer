@@ -239,6 +239,7 @@ Beyond the slash commands, the Pi extension layers on:
 | Command | Purpose |
 |---|---|
 | `/codecarto-init [variant]` | Copy `.codecarto/` into the current repository, select pipeline variant |
+| `/codecarto-open` | Activate an existing `.codecarto/` workspace in a new Pi session without resetting durable state |
 | `/codecarto-status` | Current phase, progress, open questions |
 | `/codecarto-next [--auto [--strict]] [--llm-steer \| --no-llm-steer]` | Spawn the next eligible phase as a sub-agent. `--auto` walks the full pipeline end-to-end (auto-validate + auto-complete + advance); `--strict` flips the `PASS WITH GAPS` rule from "advance" to "pause". |
 | `/codecarto-phase <id>` | Force a specific phase, even out of pipeline order |

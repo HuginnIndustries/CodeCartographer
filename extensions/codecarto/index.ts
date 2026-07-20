@@ -1,6 +1,6 @@
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import { compact, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { autoCompletePhase, buildAutoSummary, isPhaseRunning, runAuto, runSinglePhase } from "./auto-runner.ts";
 import { disposeAgentsWidget } from "./agent-widget.ts";
@@ -8,7 +8,7 @@ import { parseDashboardFlags } from "./dashboard-flags.ts";
 import { narrateDashboard } from "./dashboard-narrator.ts";
 import { writeDashboard } from "./dashboard-writer.ts";
 import { parseNextFlags } from "./next-flags.ts";
-import { buildPhaseCompactionInstructions, phaseIdFromSessionName, writePhaseCheckpoint } from "./phase-compaction.ts";
+import { phaseCompactionExtension } from "./phase-compaction.ts";
 
 import {
 	buildPhasePrompt,
@@ -100,6 +100,7 @@ function setUiState(ctx: ExtensionContext | ExtensionCommandContext, state: Work
 }
 
 export default function codeCartographerExtension(pi: ExtensionAPI) {
+	phaseCompactionExtension(pi);
 	let lastFeedbackLines: string[] = [];
 	let codecartoModeActive = false;
 
@@ -154,44 +155,6 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		disposeAgentsWidget();
 	});
 
-	pi.on("session_before_compact", async (event, ctx) => {
-		const phaseId = phaseIdFromSessionName(ctx.sessionManager.getSessionName());
-		if (!phaseId || !ctx.model) return undefined;
-		try {
-			const state = await getWorkspaceState(ctx.cwd);
-			const phase = state.pipeline.phases.find((candidate) => candidate.id === phaseId);
-			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-			if (!auth.ok || !auth.apiKey) return undefined;
-			const instructions = buildPhaseCompactionInstructions(phaseId, phase?.primary_output);
-			const result = await compact(
-				event.preparation,
-				ctx.model,
-				auth.apiKey,
-				auth.headers,
-				instructions,
-				event.signal,
-			);
-			return { compaction: result };
-		} catch (error) {
-			if (ctx.hasUI) {
-				const message = error instanceof Error ? error.message : String(error);
-				ctx.ui.notify(`Phase-aware compaction unavailable (${message}); using host default.`, "warning");
-			}
-			return undefined;
-		}
-	});
-
-	pi.on("session_compact", async (event, ctx) => {
-		const phaseId = phaseIdFromSessionName(ctx.sessionManager.getSessionName());
-		if (!phaseId) return;
-		await writePhaseCheckpoint(
-			ctx.cwd,
-			phaseId,
-			event.compactionEntry.summary,
-			event.compactionEntry.tokensBefore,
-		).catch(() => undefined);
-	});
-
 	pi.on("agent_end", async (_event, ctx) => {
 		await refreshWorkspaceUi(ctx);
 	});
@@ -221,6 +184,28 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		}
 
 		return undefined;
+	});
+
+	pi.registerCommand("codecarto-open", {
+		description: "Activate an existing .codecarto workspace without resetting durable state",
+		handler: async (_args, ctx) => {
+			const workspaceDir = join(ctx.cwd, ".codecarto");
+			if (!(await pathExists(join(workspaceDir, "workflow", "status.yaml")))) {
+				ctx.ui.notify("No existing CodeCartographer workspace found. Run /codecarto-init first.", "warning");
+				return;
+			}
+			try {
+				const state = await getWorkspaceState(ctx.cwd);
+				codecartoModeActive = true;
+				lastFeedbackLines = [`Opened existing workspace: ${getPipelineLabel(state.status.pipeline)}`];
+				pi.setActiveTools(SAFE_TOOL_NAMES);
+				await refreshWorkspaceUi(ctx, lastFeedbackLines);
+				ctx.ui.notify("Opened existing CodeCartographer workspace without resetting state.", "info");
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Unable to open CodeCartographer workspace: ${message}`, "error");
+			}
+		},
 	});
 
 	pi.registerCommand("codecarto-init", {
