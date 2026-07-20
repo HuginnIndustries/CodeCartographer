@@ -25,6 +25,11 @@ export type CarryForwardEntry = OpenQuestionEntry & {
 	target_phase?: string;
 };
 
+export type PostPipelineEntry = OpenQuestionEntry & {
+	source_phase?: string;
+	status?: "pending" | "resolved";
+};
+
 export type StatusPhase = {
 	status: PhaseStatusValue | string;
 	owner_notes: string[];
@@ -41,6 +46,7 @@ export type StatusFile = {
 	schema_version?: number;
 	phases?: Record<string, StatusPhase>;
 	next_actions?: string[];
+	post_pipeline?: PostPipelineEntry[];
 };
 
 export type SecondaryOutput = {
@@ -71,7 +77,7 @@ export type PipelineFile = {
 	phases: PipelinePhase[];
 };
 
-export type NormalizedStatus = Required<Pick<StatusFile, "project_name" | "pipeline" | "current_phase" | "last_updated" | "phases" | "next_actions" >> & { schema_version: number };
+export type NormalizedStatus = Required<Pick<StatusFile, "project_name" | "pipeline" | "current_phase" | "last_updated" | "phases" | "next_actions" | "post_pipeline" >> & { schema_version: number };
 
 export type WorkspaceState = {
 	cwd: string;
@@ -108,6 +114,7 @@ export type PhaseHandoff = {
 	open_questions: OpenQuestionEntry[];
 	carry_forward: CarryForwardEntry[];
 	carry_forward_closures: string[]; // ids to remove from earlier phases
+	post_pipeline: PostPipelineEntry[];
 	decisions: string[];
 	closeout_content: string;
 	closeout_summary: string;

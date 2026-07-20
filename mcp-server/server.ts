@@ -176,12 +176,19 @@ export async function handleStatus(args: { cwd: string }) {
 	);
 	const currentOpenQuestions =
 		currentPhase === "complete" ? 0 : state.status.phases[currentPhase]?.open_questions.length ?? 0;
+	const terminalOpenQuestions = Object.values(state.status.phases).reduce(
+		(sum, phase) => sum + (phase.open_questions?.length ?? 0),
+		0,
+	);
+	const postPipelinePending = state.status.post_pipeline.filter((entry) => entry.status !== "resolved").length;
 	const summary = [
 		`Phase: ${currentPhase}`,
+		`Pipeline state: ${currentPhase === "complete" ? "complete" : "in progress"}`,
 		`Pipeline: ${getPipelineLabel(state.status.pipeline)} (${state.status.pipeline})`,
 		`Progress: ${completed}/${state.pipeline.phase_order.length} complete`,
-		`Open questions (current phase): ${currentOpenQuestions}`,
-		`Carry-forward (all phases): ${totalCarryForward}`,
+		`Open questions (terminal unresolved): ${terminalOpenQuestions}`,
+		`Carry-forward (pipeline phases): ${totalCarryForward}`,
+		`Post-pipeline work: ${postPipelinePending} pending`,
 		`Next: ${state.status.next_actions[0] ?? (nextPhase ? `Begin ${nextPhase.id}` : "All phases complete.")}`,
 	].join("\n");
 	return textResult(summary, {
@@ -191,7 +198,9 @@ export async function handleStatus(args: { cwd: string }) {
 		completed,
 		total: state.pipeline.phase_order.length,
 		openQuestionsCurrentPhase: currentOpenQuestions,
+		openQuestionsTerminal: terminalOpenQuestions,
 		carryForwardTotal: totalCarryForward,
+		postPipelinePending,
 		nextActions: state.status.next_actions,
 	});
 }

@@ -63,6 +63,7 @@ export function renderDashboard(inputs: DashboardInputs): string {
 		renderUsagePanel(inputs),
 		renderActivityTimeline(inputs.usage.runs),
 		renderOpenQuestionsRollup(inputs.status),
+		renderPostPipelineWork(inputs.status),
 		renderCloseoutsList(inputs),
 		renderFooter(inputs),
 		`</div>`,
@@ -118,6 +119,7 @@ function renderSidebar(inputs: DashboardInputs): string {
 		`<a class="cc-nav-section" href="#phases">Phases</a>`,
 		phaseLinks,
 		`<a class="cc-nav-section" href="#usage">Usage</a>`,
+		(inputs.status.post_pipeline?.length ?? 0) > 0 ? `<a class="cc-nav-section" href="#post-pipeline">Post-pipeline</a>` : "",
 		`<a class="cc-nav-section" href="#closeouts">Closeouts</a>`,
 		`</nav>`,
 		`<button type="button" class="cc-export" data-export>Export dashboard JSON</button>`,
@@ -184,6 +186,7 @@ function renderHealthPanel(inputs: DashboardInputs): string {
 	const issues = collectDashboardIssues(inputs);
 	const openQuestionCount = countOpenQuestions(status);
 	const carryForwardCount = countCarryForward(status);
+	const postPipelineCount = (status.post_pipeline ?? []).filter((entry) => entry.status !== "resolved").length;
 	const health = issues.some((i) => i.severity === "blocker") ? "attention required" : issues.length ? "review recommended" : completed === total ? "complete" : "on track";
 	const healthClass = issues.some((i) => i.severity === "blocker") ? "bad" : issues.length ? "warn" : "ok";
 	const tokenText = usageHasTokenAccounting(usage) ? formatTokenCount(totals.tokens.input + totals.tokens.output) : usage.runs.length ? "unavailable" : "0";
@@ -201,6 +204,7 @@ function renderHealthPanel(inputs: DashboardInputs): string {
 		renderHealthMetric("Artifacts needing attention", String(issues.length), issues.length ? "bad" : "ok"),
 		renderHealthMetric("Open questions", String(openQuestionCount), openQuestionCount ? "warn" : "ok"),
 		renderHealthMetric("Carry-forward items", String(carryForwardCount), carryForwardCount ? "warn" : "ok"),
+		renderHealthMetric("Post-pipeline work", String(postPipelineCount), postPipelineCount ? "neutral" : "ok"),
 		renderHealthMetric("Tool uses", String(totals.tool_uses), "neutral"),
 		renderHealthMetric("Runtime", formatMillis(totals.duration_ms), "neutral"),
 		renderHealthMetric("Tokens", tokenText, tokenText === "unavailable" ? "warn" : "neutral"),
@@ -552,6 +556,19 @@ function renderOpenQuestionsRollup(status: NormalizedStatus): string {
 	return [`<section class="cc-card cc-rollup" aria-label="Open questions roll-up" data-section data-search-text="open questions">`, `<div class="cc-section-head"><h2>Open questions</h2><span>${total} unique</span></div>`, `<div class="cc-kind-summary">${kindSummary}</div>`, buckets.join("\n"), `</section>`].join("\n");
 }
 
+function renderPostPipelineWork(status: NormalizedStatus): string {
+	const items = status.post_pipeline ?? [];
+	if (items.length === 0) return "";
+	const pending = items.filter((entry) => entry.status !== "resolved").length;
+	const rows = items.map((entry) => {
+		const state = entry.status ?? "pending";
+		const source = entry.source_phase ? `<span class="cc-pill cc-pill-target">from ${escapeHtml(entry.source_phase)}</span>` : "";
+		const kind = entry.kind ? `<span class="cc-kind">${escapeHtml(String(entry.kind))}</span>` : "";
+		return `<li>${kind}<strong>${escapeHtml(entry.id ?? "unidentified")}</strong> ${escapeHtml(entry.description ?? "")}${source}<span class="cc-pill">${escapeHtml(state)}</span></li>`;
+	}).join("");
+	return [`<section class="cc-card cc-rollup" id="post-pipeline" aria-label="Post-pipeline work" data-section data-search-text="post pipeline spikes amendments deltas decisions reruns">`, `<div class="cc-section-head"><h2>Post-pipeline work</h2><span>${pending} pending · ${items.length} total</span></div>`, `<p class="cc-muted">Optional work after the active pipeline; these items do not make pipeline completion partial.</p>`, `<ul class="cc-question-list">${rows}</ul>`, `</section>`].join("\n");
+}
+
 function renderCloseoutsList(inputs: DashboardInputs): string {
 	const closeouts = inputs.closeouts;
 	if (closeouts.length === 0) return [`<section class="cc-card cc-closeouts" id="closeouts" aria-label="Closeouts" data-section>`, `<h2>Closeouts</h2>`, `<p class="cc-empty">No closeouts yet.</p>`, `</section>`].join("\n");
@@ -602,7 +619,7 @@ function renderExportData(inputs: DashboardInputs): string {
 			secondary_outputs: outputs?.secondary ?? [],
 		};
 	});
-	const data = { project: inputs.status.project_name, generatedAt: inputs.generatedAt, packageVersion: inputs.packageVersion, phases, usage: inputs.usage, closeouts: inputs.closeouts };
+	const data = { project: inputs.status.project_name, generatedAt: inputs.generatedAt, packageVersion: inputs.packageVersion, phases, post_pipeline: inputs.status.post_pipeline, usage: inputs.usage, closeouts: inputs.closeouts };
 	return `<script id="cc-dashboard-data" type="application/json">${escapeJsonForScript(data)}</script>`;
 }
 

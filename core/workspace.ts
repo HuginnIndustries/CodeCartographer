@@ -51,6 +51,9 @@ function assertCanonicalStatus(status: StatusFile): void {
 	if (status.schema_version !== 1) {
 		throw new Error(`Cannot write unsupported status schema_version ${String(status.schema_version)}.`);
 	}
+	if (!Array.isArray(status.post_pipeline)) {
+		throw new Error("Cannot write status: post_pipeline must be an array.");
+	}
 	if (!status.phases || typeof status.phases !== "object" || Array.isArray(status.phases)) {
 		throw new Error("Cannot write status: phases must be a mapping.");
 	}
