@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Planned
+
+- Pi `/codecarto-publish` UX, dashboard library-state surfacing, and the
+  `library_path` tool-write allow-list.
+- Synthesis pipeline phases for turning selected library entries plus a
+  user vision into a `project-plan.md`.
+- `pipeline-spec-mutate.yaml` for applying deltas to an existing spec and
+  republishing it as a new library version.
+
+## [0.11.0] — 2026-07-20
+
 ### Added
 
 - Phase-aware Pi compaction for isolated CodeCartographer phase sessions, with atomic continuation checkpoints under `.codecarto/scratch/checkpoints/`.
@@ -23,16 +34,13 @@ All notable changes to this project are documented here. The format is based on 
 
 - Packed-package MCP smoke tests now ignore lifecycle scripts and sanitize inherited npm `allow-scripts` configuration.
 - Explicitly loaded phase-resilience and write-boundary guards into isolated child sessions, preserving phase-aware summaries, checkpoints, and read-only source safety when CodeCartographer itself was loaded with `pi -e`.
-- Phase runners now retain telemetry during delayed post-tool compaction and recover runs that stop after tool results, using the durable checkpoint when compaction occurred.
+- Phase runners now retain telemetry during delayed post-tool compaction and recover runs that stop before their required output, using the durable checkpoint when compaction occurred.
+- Declared primary-output checks reject path traversal and symlink escapes outside `.codecarto/`.
 
-### Planned
+### Tests
 
-- Pi `/codecarto-publish` UX, dashboard library-state surfacing, and the
-  `library_path` tool-write allow-list.
-- Synthesis pipeline phases for turning selected library entries plus a
-  user vision into a `project-plan.md`.
-- `pipeline-spec-mutate.yaml` for applying deltas to an existing spec and
-  republishing it as a new library version.
+- Test count: **191 → 207**.
+- Added regression coverage for phase compaction, checkpoints, interrupted provider runs, nondestructive workspace recovery, output-path containment, coverage accounting, and bundle-first final synthesis.
 
 ## [0.10.0] — 2026-05-28
 
