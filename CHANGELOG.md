@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format is based on 
 ### Added
 
 - Phase-aware Pi compaction for isolated CodeCartographer phase sessions, with atomic continuation checkpoints under `.codecarto/scratch/checkpoints/`.
+- Pi `/codecarto-open` command for safely attaching a new orchestrator session to an existing workspace without resetting phase progress.
 - Backward-compatible compaction telemetry in local usage records, `/codecarto-usage`, phase summaries, the live widget, and the dashboard.
 - Explicit `Coverage and limits` accounting in every phase template and completion rubric.
 - Pipeline invariant tests that pin coverage accounting and the porting bundle's role as the final synthesis compression boundary.
@@ -21,6 +22,8 @@ All notable changes to this project are documented here. The format is based on 
 ### Fixed
 
 - Packed-package MCP smoke tests now ignore lifecycle scripts and sanitize inherited npm `allow-scripts` configuration.
+- Explicitly loaded phase-resilience and write-boundary guards into isolated child sessions, preserving phase-aware summaries, checkpoints, and read-only source safety when CodeCartographer itself was loaded with `pi -e`.
+- Phase runners now retain telemetry during delayed post-tool compaction and recover runs that stop after tool results, using the durable checkpoint when compaction occurred.
 
 ### Planned
 

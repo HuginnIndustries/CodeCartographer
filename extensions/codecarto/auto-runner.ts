@@ -139,7 +139,7 @@ export async function runSinglePhase(
 					else activity.compactions.failed++;
 				},
 			},
-			{ sessionName: `CodeCartographer phase: ${phase.id}` },
+			{ sessionName: `CodeCartographer phase: ${phase.id}`, primaryOutput: phase.primary_output },
 			options.signal,
 		);
 

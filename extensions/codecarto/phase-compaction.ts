@@ -1,5 +1,8 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { compact, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+import { canonicalPath, getWorkspaceState, isWithinPath } from "../../core/index.ts";
 
 const PHASE_SESSION_PREFIX = "CodeCartographer phase: ";
 
@@ -53,4 +56,76 @@ export async function writePhaseCheckpoint(
 	await writeFile(temp, content, "utf8");
 	await rename(temp, target);
 	return target;
+}
+
+/**
+ * Phase-only compaction hooks shared by the parent extension and isolated
+ * child sessions. Keeping this as a standalone inline extension ensures that
+ * children spawned from an explicitly loaded (`pi -e ...`) CodeCartographer
+ * extension receive the same checkpoint behavior as globally installed runs.
+ */
+export function phaseCompactionExtension(pi: ExtensionAPI): void {
+	pi.on("tool_call", async (event, ctx) => {
+		if (!phaseIdFromSessionName(ctx.sessionManager.getSessionName())) return undefined;
+		if (event.toolName === "bash") {
+			return { block: true, reason: "CodeCartographer phase sessions disable bash to keep source analysis read-only." };
+		}
+		if (event.toolName === "edit" || event.toolName === "write") {
+			const inputPath = typeof event.input.path === "string" ? event.input.path : "";
+			const strippedPath = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
+			const targetPath = await canonicalPath(resolve(ctx.cwd, strippedPath));
+			const allowedRoot = await canonicalPath(join(ctx.cwd, ".codecarto"));
+			if (!isWithinPath(targetPath, allowedRoot)) {
+				return {
+					block: true,
+					reason: `CodeCartographer phase sessions only allow ${event.toolName} within .codecarto/`,
+				};
+			}
+		}
+		return undefined;
+	});
+
+	pi.on("session_before_compact", async (event, ctx) => {
+		const phaseId = phaseIdFromSessionName(ctx.sessionManager.getSessionName());
+		if (!phaseId || !ctx.model) return undefined;
+		try {
+			const state = await getWorkspaceState(ctx.cwd);
+			const phase = state.pipeline.phases.find((candidate) => candidate.id === phaseId);
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+			if (!auth.ok || !auth.apiKey) return undefined;
+			const instructions = buildPhaseCompactionInstructions(phaseId, phase?.primary_output);
+			const result = await compact(
+				event.preparation,
+				ctx.model,
+				auth.apiKey,
+				auth.headers,
+				instructions,
+				event.signal,
+			);
+			return { compaction: result };
+		} catch (error) {
+			if (ctx.hasUI) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Phase-aware compaction unavailable (${message}); using host default.`, "warning");
+			}
+			return undefined;
+		}
+	});
+
+	pi.on("session_compact", async (event, ctx) => {
+		const phaseId = phaseIdFromSessionName(ctx.sessionManager.getSessionName());
+		if (!phaseId) return;
+		try {
+			await writePhaseCheckpoint(
+				ctx.cwd,
+				phaseId,
+				event.compactionEntry.summary,
+				event.compactionEntry.tokensBefore,
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (ctx.hasUI) ctx.ui.notify(`Phase checkpoint could not be written: ${message}`, "warning");
+			else console.warn(`[codecarto] Phase checkpoint could not be written: ${message}`);
+		}
+	});
 }

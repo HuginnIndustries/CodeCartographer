@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -101,5 +101,23 @@ test("/codecarto-init activates the CodeCartographer UI and read-only tool polic
 
 		const result = await events.get("tool_call")({ toolName: "bash", input: {} }, ctx);
 		assert.deepEqual(result, { block: true, reason: "CodeCartographer mode disables bash to keep source analysis read-only." });
+	});
+});
+
+test("/codecarto-open activates an existing workspace without resetting durable state", async () => {
+	await withTempRepo(async (cwd) => {
+		await cp(join(REPO_ROOT, ".codecarto"), join(cwd, ".codecarto"), { recursive: true });
+		const statusPath = join(cwd, ".codecarto", "workflow", "status.yaml");
+		const before = await readFile(statusPath, "utf8");
+		const { commands, events, pi, ctx, ui } = createHarness(cwd);
+
+		await events.get("session_start")({}, ctx);
+		assert.equal(typeof commands.get("codecarto-open")?.handler, "function");
+		await commands.get("codecarto-open").handler("", ctx);
+
+		assert.equal(await readFile(statusPath, "utf8"), before);
+		assert.deepEqual(pi.activeTools, ["read", "grep", "find", "ls", "edit", "write"]);
+		assert.match(pi.sessionName, /^CodeCartographer:/);
+		assert.match(ui.notifications.at(-1).message, /Opened existing CodeCartographer workspace/);
 	});
 });

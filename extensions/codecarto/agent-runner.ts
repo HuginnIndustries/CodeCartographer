@@ -10,6 +10,9 @@
 // Codecarto phases are bounded by their phase prompt and validation gate;
 // they don't need the full subagent-framework machinery.
 
+import { access } from "node:fs/promises";
+import { join, resolve } from "node:path";
+
 import {
 	type AgentSession,
 	type AgentSessionEvent,
@@ -21,10 +24,56 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
+import { canonicalPath, isWithinPath } from "../../core/index.ts";
+import { phaseCompactionExtension } from "./phase-compaction.ts";
+
 // Tools available to the phase sub-agent. Matches the codecarto interception
 // allowlist (SAFE_TOOL_NAMES in extensions/codecarto/index.ts), minus bash.
 // Phases analyze source code and write findings; they don't need a shell.
 const PHASE_TOOL_NAMES = ["read", "edit", "write", "grep", "find", "ls"];
+const COMPACTION_SETTLE_TIMEOUT_MS = 30_000;
+
+export function needsPhaseContinuation(messages: ReadonlyArray<{ role: string; stopReason?: string }>): boolean {
+	const last = messages.at(-1);
+	if (!last) return false;
+	return last.role === "toolResult" || (last.role === "assistant" && last.stopReason === "toolUse");
+}
+
+export function shouldContinuePhase(
+	messages: ReadonlyArray<{ role: string; stopReason?: string }>,
+	primaryOutputPresent: boolean,
+): boolean {
+	return !primaryOutputPresent || needsPhaseContinuation(messages);
+}
+
+export async function primaryOutputExists(cwd: string, primaryOutput: string): Promise<boolean> {
+	const workspaceRoot = await canonicalPath(join(cwd, ".codecarto"));
+	const candidate = await canonicalPath(resolve(workspaceRoot, primaryOutput));
+	if (!isWithinPath(candidate, workspaceRoot)) return false;
+	return access(candidate).then(() => true, () => false);
+}
+
+export function buildPhaseContinuationPrompt(compacted: boolean): string {
+	const recovery = compacted
+		? "Continue the current CodeCartographer phase from the compacted context and durable checkpoint."
+		: "The previous phase run stopped before finalizing its required output. Continue from the current session context.";
+	return `${recovery} Finish the declared primary output, validation block, status updates, and closeout before ending.`;
+}
+
+export async function waitForCompaction(
+	compactionCompleted: Promise<boolean>,
+	timeoutMs: number = COMPACTION_SETTLE_TIMEOUT_MS,
+): Promise<boolean> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			compactionCompleted,
+			new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
 
 export interface PhaseRunCallbacks {
 	onSessionCreated?: (session: AgentSession) => void;
@@ -41,6 +90,9 @@ export interface PhaseRunOptions {
 	 *  /resume's picker as e.g. "CodeCartographer phase: blueprint". Pi reads
 	 *  it via SessionManager.getSessionName(). */
 	sessionName?: string;
+	/** Primary output relative to `.codecarto/`; used to detect provider runs
+	 * that stop normally before writing their required artifact. */
+	primaryOutput?: string;
 }
 
 export interface PhaseRunResult {
@@ -78,17 +130,19 @@ export async function runPhase(
 	const cwd = ctx.cwd;
 	const agentDir = getAgentDir();
 
-	// Resource loader: load Pi extensions and skills (so codecarto's own tool
-	// interception applies to the child) but skip prompt templates, themes,
-	// and project context files — they'd just bloat the system prompt.
+	// Resource loader: isolate the child from global extensions/skills and load
+	// only CodeCartographer's inline phase guards and compaction hooks. This
+	// avoids duplicate registration when CodeCartographer is globally installed
+	// while preserving the same safety when it was loaded explicitly with -e.
 	const loader = new DefaultResourceLoader({
 		cwd,
 		agentDir,
-		noExtensions: false,
-		noSkills: false,
+		noExtensions: true,
+		noSkills: true,
 		noPromptTemplates: true,
 		noThemes: true,
 		noContextFiles: true,
+		extensionFactories: [phaseCompactionExtension],
 	});
 	await loader.reload();
 
@@ -127,6 +181,8 @@ export async function runPhase(
 	let turnCount = 0;
 	let currentMessageText = "";
 	let aborted = false;
+	let resolveCompaction: ((completed: boolean) => void) | undefined;
+	const compactionCompleted = new Promise<boolean>((resolve) => { resolveCompaction = resolve; });
 
 	const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 		switch (event.type) {
@@ -182,6 +238,7 @@ export async function runPhase(
 					successful: compactEvent.result !== undefined && compactEvent.result !== null && !compactEvent.aborted && !compactEvent.errorMessage,
 					aborted: compactEvent.aborted,
 				});
+				resolveCompaction?.(true);
 				break;
 			}
 		}
@@ -199,6 +256,14 @@ export async function runPhase(
 
 	try {
 		await session.prompt(prompt);
+		let primaryOutputPresent = true;
+		if (options.primaryOutput) {
+			primaryOutputPresent = await primaryOutputExists(cwd, options.primaryOutput);
+		}
+		if (!aborted && shouldContinuePhase(session.messages, primaryOutputPresent)) {
+			const compacted = await waitForCompaction(compactionCompleted);
+			if (!aborted) await session.prompt(buildPhaseContinuationPrompt(compacted));
+		}
 	} finally {
 		unsubscribe();
 		abortCleanup();
