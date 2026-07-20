@@ -17,7 +17,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -78,6 +78,15 @@ test("`auto: true` composes with `forced: true` (manual /codecarto-phase under a
 	const prompt = await buildPhasePrompt(state, reimplPhase, true, { auto: true });
 	assert.match(prompt, /Strategic Alignment Hook \(auto run/);
 	assert.match(prompt, /The user explicitly requested this phase/);
+});
+
+test("existing phase checkpoint is included as a required resumability read", async () => {
+	const checkpointDir = join(WORKSPACE, ".codecarto", "scratch", "checkpoints");
+	await mkdir(checkpointDir, { recursive: true });
+	await writeFile(join(checkpointDir, "architecture.md"), "checkpoint", "utf8");
+	const prompt = await buildPhasePrompt(state, architecturePhase, false);
+	assert.match(prompt, /\.codecarto\/scratch\/checkpoints\/architecture\.md/);
+	assert.match(prompt, /resume from durable in-phase progress/i);
 });
 
 test("teardown: remove temp workspace", async () => {

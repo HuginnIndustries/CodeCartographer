@@ -36,6 +36,7 @@ phases:
       - Public surfaces are identified.
       - Runtime lifecycle, concurrency model, and porting priorities are summarized.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.
@@ -67,6 +68,7 @@ phases:
       - Contract ownership is mapped back to a layer or package.
       - A black-box acceptance list is included.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.
@@ -97,6 +99,7 @@ phases:
       - Persistent schema notes are documented.
       - Compatibility hazards are documented.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.
@@ -132,6 +135,8 @@ phases:
       - Portability hazards and open questions are separated from facts.
       - Feature importance is sorted for porting.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+      - The Source Index makes the bundle a self-contained compression boundary and identifies targeted deep-read triggers.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.
@@ -147,9 +152,6 @@ phases:
     required_reads:
       - GUIDE.md
       - workflow/status.yaml
-      - findings/architecture/architecture-map.md
-      - findings/contracts/behavioral-contracts.md
-      - findings/protocols/protocols-and-state.md
       - findings/porting/reverse-engineering-bundle.md
     completion_criteria:
       - Concept-level modules are defined.
@@ -157,6 +159,8 @@ phases:
       - Protocol and persisted state expectations are stated.
       - Acceptance scenarios and known unknowns are included.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+      - Lower-level findings are deep-read only when the porting bundle identifies a gap, conflict, missing acceptance detail, or defect rationale.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.

@@ -17,11 +17,23 @@ export const USAGE_RELATIVE_PATH = "workflow/.usage.local.yaml";
 const SCHEMA_VERSION = 1;
 
 export type UsageRunStatus = "completed" | "aborted" | "error";
+export type CompactionReason = "threshold" | "overflow" | "manual";
 
 export interface UsageTokens {
 	input: number;
 	output: number;
 	cache_write: number;
+}
+
+export interface CompactionTelemetry {
+	successful: number;
+	failed: number;
+	aborted: number;
+	reasons: Record<CompactionReason, number>;
+}
+
+export function emptyCompactionTelemetry(): CompactionTelemetry {
+	return { successful: 0, failed: 0, aborted: 0, reasons: { threshold: 0, overflow: 0, manual: 0 } };
 }
 
 export interface UsageRun {
@@ -33,6 +45,7 @@ export interface UsageRun {
 	duration_ms: number;
 	tokens: UsageTokens;
 	session_file?: string;
+	compactions?: CompactionTelemetry;
 }
 
 export interface UsageFile {
@@ -42,9 +55,11 @@ export interface UsageFile {
 
 export interface UsageTotals {
 	runs: number;
+	compaction_runs: number;
 	tokens: UsageTokens;
 	tool_uses: number;
 	duration_ms: number;
+	compactions: CompactionTelemetry;
 }
 
 export async function loadUsage(workspaceDir: string): Promise<UsageFile> {
@@ -55,8 +70,6 @@ export async function loadUsage(workspaceDir: string): Promise<UsageFile> {
 		const parsed = parseSimpleYaml(raw) as Partial<UsageFile> | null | undefined;
 		return normalize(parsed);
 	} catch {
-		// Malformed file: treat as empty rather than blocking the user. They
-		// can fix or delete the file; corrupt local state shouldn't stop work.
 		return emptyUsage();
 	}
 }
@@ -66,46 +79,57 @@ export async function appendUsageRun(workspaceDir: string, run: UsageRun): Promi
 	current.runs.push(run);
 	const path = join(workspaceDir, USAGE_RELATIVE_PATH);
 	const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-	const serialized = `${stringifySimpleYaml(current)}\n`;
-	await writeFile(tempPath, serialized, "utf8");
+	await writeFile(tempPath, `${stringifySimpleYaml(current)}\n`, "utf8");
 	await rename(tempPath, path);
 }
 
 export function computeTotals(file: UsageFile): UsageTotals {
-	const totals: UsageTotals = {
-		runs: file.runs.length,
-		tokens: { input: 0, output: 0, cache_write: 0 },
-		tool_uses: 0,
-		duration_ms: 0,
-	};
-	for (const r of file.runs) {
-		totals.tokens.input += r.tokens?.input ?? 0;
-		totals.tokens.output += r.tokens?.output ?? 0;
-		totals.tokens.cache_write += r.tokens?.cache_write ?? 0;
-		totals.tool_uses += r.tool_uses ?? 0;
-		totals.duration_ms += r.duration_ms ?? 0;
-	}
+	const totals = emptyTotals();
+	totals.runs = file.runs.length;
+	for (const run of file.runs) addRun(totals, run);
 	return totals;
 }
 
 export function computePerPhaseTotals(file: UsageFile): Map<string, UsageTotals> {
 	const byPhase = new Map<string, UsageTotals>();
-	for (const r of file.runs) {
-		const t = byPhase.get(r.phase) ?? {
-			runs: 0,
-			tokens: { input: 0, output: 0, cache_write: 0 },
-			tool_uses: 0,
-			duration_ms: 0,
-		};
-		t.runs += 1;
-		t.tokens.input += r.tokens?.input ?? 0;
-		t.tokens.output += r.tokens?.output ?? 0;
-		t.tokens.cache_write += r.tokens?.cache_write ?? 0;
-		t.tool_uses += r.tool_uses ?? 0;
-		t.duration_ms += r.duration_ms ?? 0;
-		byPhase.set(r.phase, t);
+	for (const run of file.runs) {
+		const totals = byPhase.get(run.phase) ?? emptyTotals();
+		totals.runs += 1;
+		addRun(totals, run);
+		byPhase.set(run.phase, totals);
 	}
 	return byPhase;
+}
+
+function emptyTotals(): UsageTotals {
+	return {
+		runs: 0,
+		compaction_runs: 0,
+		tokens: { input: 0, output: 0, cache_write: 0 },
+		tool_uses: 0,
+		duration_ms: 0,
+		compactions: emptyCompactionTelemetry(),
+	};
+}
+
+function addRun(totals: UsageTotals, run: UsageRun): void {
+	totals.tokens.input += run.tokens?.input ?? 0;
+	totals.tokens.output += run.tokens?.output ?? 0;
+	totals.tokens.cache_write += run.tokens?.cache_write ?? 0;
+	totals.tool_uses += run.tool_uses ?? 0;
+	totals.duration_ms += run.duration_ms ?? 0;
+	if (run.compactions) totals.compaction_runs += 1;
+	addCompactions(totals.compactions, run.compactions);
+}
+
+function addCompactions(target: CompactionTelemetry, source: CompactionTelemetry | undefined): void {
+	if (!source) return;
+	target.successful += source.successful;
+	target.failed += source.failed;
+	target.aborted += source.aborted;
+	target.reasons.threshold += source.reasons.threshold;
+	target.reasons.overflow += source.reasons.overflow;
+	target.reasons.manual += source.reasons.manual;
 }
 
 function emptyUsage(): UsageFile {
@@ -115,31 +139,37 @@ function emptyUsage(): UsageFile {
 function normalize(raw: Partial<UsageFile> | null | undefined): UsageFile {
 	if (!raw || typeof raw !== "object") return emptyUsage();
 	const runs = Array.isArray(raw.runs) ? raw.runs.filter(isUsageRun) : [];
-	return {
-		version: typeof raw.version === "number" ? raw.version : SCHEMA_VERSION,
-		runs,
-	};
+	return { version: typeof raw.version === "number" ? raw.version : SCHEMA_VERSION, runs };
 }
 
 function isUsageRun(x: unknown): x is UsageRun {
 	if (!x || typeof x !== "object") return false;
-	const r = x as Partial<UsageRun>;
+	const run = x as Partial<UsageRun>;
 	return (
-		typeof r.timestamp === "string" &&
-		typeof r.phase === "string" &&
-		(r.status === "completed" || r.status === "aborted" || r.status === "error") &&
-		isFiniteNumber(r.turn_count) &&
-		isFiniteNumber(r.tool_uses) &&
-		isFiniteNumber(r.duration_ms) &&
-		isUsageTokens(r.tokens) &&
-		(r.session_file === undefined || typeof r.session_file === "string")
+		typeof run.timestamp === "string" &&
+		typeof run.phase === "string" &&
+		(run.status === "completed" || run.status === "aborted" || run.status === "error") &&
+		isFiniteNumber(run.turn_count) &&
+		isFiniteNumber(run.tool_uses) &&
+		isFiniteNumber(run.duration_ms) &&
+		isUsageTokens(run.tokens) &&
+		(run.session_file === undefined || typeof run.session_file === "string") &&
+		(run.compactions === undefined || isCompactionTelemetry(run.compactions))
 	);
 }
 
 function isUsageTokens(x: unknown): x is UsageTokens {
 	if (!x || typeof x !== "object") return false;
-	const t = x as Partial<UsageTokens>;
-	return isFiniteNumber(t.input) && isFiniteNumber(t.output) && isFiniteNumber(t.cache_write);
+	const tokens = x as Partial<UsageTokens>;
+	return isFiniteNumber(tokens.input) && isFiniteNumber(tokens.output) && isFiniteNumber(tokens.cache_write);
+}
+
+function isCompactionTelemetry(x: unknown): x is CompactionTelemetry {
+	if (!x || typeof x !== "object") return false;
+	const telemetry = x as Partial<CompactionTelemetry>;
+	const reasons = telemetry.reasons as Partial<Record<CompactionReason, number>> | undefined;
+	return isFiniteNumber(telemetry.successful) && isFiniteNumber(telemetry.failed) && isFiniteNumber(telemetry.aborted) &&
+		Boolean(reasons) && isFiniteNumber(reasons?.threshold) && isFiniteNumber(reasons?.overflow) && isFiniteNumber(reasons?.manual);
 }
 
 function isFiniteNumber(x: unknown): x is number {

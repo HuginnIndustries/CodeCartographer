@@ -162,3 +162,33 @@ test("findings/*/SKILL.md and templates/*.md cite only paths that some pipeline 
 		`SKILL/template files cite findings/* paths that no pipeline produces and no framework file on disk supplies:\n${orphaned.map((b) => `  ${b.file} → ${b.path}`).join("\n")}`,
 	);
 });
+
+test("every phase template and completion criteria require coverage and limits accounting", async () => {
+	const checkedTemplates = new Set();
+	for (const [pipelineFile, pipeline] of Object.entries(pipelines)) {
+		for (const phase of pipeline.phases) {
+			assert.ok(
+				(phase.completion_criteria ?? []).some((criterion) => /coverage/i.test(criterion)),
+				`${pipelineFile}:${phase.id} lacks a coverage completion criterion`,
+			);
+			if (!phase.output_template || checkedTemplates.has(phase.output_template)) continue;
+			checkedTemplates.add(phase.output_template);
+			const template = await readFile(join(CODECARTO, phase.output_template), "utf8");
+			assert.match(template, /^## Coverage and limits\s*$/im, `${phase.output_template} lacks a Coverage and limits section`);
+			const validation = template.split(/^## Validation\s*$/im)[1] ?? "";
+			assert.match(validation, /Coverage and limits name inspected scope/i, `${phase.output_template} validation table omits coverage accounting`);
+			if (phase.id === "porting") assert.match(validation, /Source Index.*compression boundary/i, `${phase.output_template} validation table omits its compression-boundary criterion`);
+			if (phase.id === "reimplementation-spec") assert.match(validation, /Lower-level findings are deep-read only/i, `${phase.output_template} validation table omits selective deep-read accounting`);
+		}
+	}
+});
+
+test("reimplementation phases use the porting bundle as the default compression boundary", () => {
+	for (const [pipelineFile, pipeline] of Object.entries(pipelines)) {
+		const phase = pipeline.phases.find((candidate) => candidate.id === "reimplementation-spec");
+		if (!phase) continue;
+		assert.ok(phase.required_reads.includes("findings/porting/reverse-engineering-bundle.md"), `${pipelineFile} must require the porting bundle`);
+		const lowerLevel = phase.required_reads.filter((path) => path.startsWith("findings/") && path !== "findings/porting/reverse-engineering-bundle.md");
+		assert.deepEqual(lowerLevel, [], `${pipelineFile} should selectively deep-read lower-level findings instead of requiring them all`);
+	}
+});

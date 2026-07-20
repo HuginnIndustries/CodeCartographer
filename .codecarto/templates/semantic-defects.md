@@ -93,6 +93,14 @@
 
 ---
 
+## Coverage and limits
+
+- Inspected scope:
+- Skipped scope:
+- Evidence basis: source inspection | tests | runtime verification | upstream findings
+- Known blind spots:
+- Coverage disposition: COMPLETE | PARTIAL
+
 ## Validation
 
 <!-- Fill in this table per workflow/VALIDATE.md. The rows below match the semantic-pass scope. -->
@@ -104,6 +112,7 @@
 | 3 | Pass 5 findings cite the contract or protocol reference they violate. | PASS / PARTIAL / FAIL | |
 | 4 | Findings are organized by pass and sorted by severity; summary tables match the detailed findings. | PASS / PARTIAL / FAIL | |
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
+| 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

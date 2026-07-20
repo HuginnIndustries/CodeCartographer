@@ -72,6 +72,11 @@ export async function buildPhasePrompt(
 		lines.push(`- .codecarto/${path}`);
 	}
 
+	const checkpointRelativePath = `scratch/checkpoints/${phase.id}.md`;
+	if (await pathExists(join(state.workspaceDir, checkpointRelativePath))) {
+		lines.push(`- .codecarto/${checkpointRelativePath} (resume from durable in-phase progress after compaction or interruption)`);
+	}
+
 	const conventionsPath = join(state.workspaceDir, "CONVENTIONS.md");
 	if (await pathExists(conventionsPath)) {
 		lines.push("- .codecarto/CONVENTIONS.md (cross-cutting patterns the orchestrator has promoted)");
@@ -111,6 +116,8 @@ export async function buildPhasePrompt(
 	lines.push("- Do not modify source files outside .codecarto/.");
 	lines.push("- Follow the active pipeline and validation protocol.");
 	lines.push("- Update findings under .codecarto/findings/ for this phase.");
+	lines.push(`- For long phases, checkpoint resumable progress at .codecarto/scratch/checkpoints/${phase.id}.md; Pi writes this automatically after phase compaction.`);
+	lines.push("- Include a Coverage and limits section that names inspected scope, skipped scope, evidence basis, and blind spots; route material gaps through PARTIAL validation and open_questions/carry_forward.");
 	lines.push("- Distinguish open_questions (genuinely unknown) from carry_forward (routed to a specific later phase) when updating workflow/status.yaml — see GUIDE.md \"Open Questions vs Carry-Forward\".");
 
 	if (forced) {

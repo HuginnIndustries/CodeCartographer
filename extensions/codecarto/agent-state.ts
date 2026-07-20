@@ -4,6 +4,7 @@
 // the runner and the widget sees the same state without explicit plumbing.
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { emptyCompactionTelemetry, type CompactionTelemetry } from "../../core/usage.ts";
 
 export type PhaseStatus = "running" | "completed" | "error" | "aborted";
 
@@ -20,6 +21,8 @@ export interface PhaseActivity {
 	responseText: string;
 	/** Cumulative token usage across all assistant turns; survives in-session compaction. */
 	lifetimeUsage: { input: number; output: number; cacheWrite: number };
+	/** Compaction outcomes observed during this phase session. */
+	compactions: CompactionTelemetry;
 	session?: AgentSession;
 	error?: string;
 }
@@ -46,6 +49,7 @@ export function startPhase(phaseId: string): PhaseActivity {
 		activeTools: new Map(),
 		responseText: "",
 		lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+		compactions: emptyCompactionTelemetry(),
 	};
 	phaseActivity.set(phaseId, activity);
 	return activity;

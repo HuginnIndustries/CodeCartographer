@@ -33,6 +33,7 @@ phases:
       - Public surfaces are identified.
       - Runtime lifecycle, concurrency model, and porting priorities are summarized.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.
@@ -55,6 +56,7 @@ phases:
       - Findings are organized by pass and sorted by severity.
       - Summary tables are complete and counts match the detailed findings.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.

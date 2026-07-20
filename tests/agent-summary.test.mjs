@@ -86,3 +86,12 @@ test("token formatting handles k and M thresholds", () => {
 	const tm = buildPhaseSummary({ ...baseInput, tokens: { input: 2_500_000, output: 100_000, cacheWrite: 0 } });
 	assert.match(tm, /2\.6M tokens/);
 });
+
+test("phase summary reports compaction outcomes when present", () => {
+	const text = buildPhaseSummary({
+		...baseInput,
+		compactions: { successful: 2, failed: 1, aborted: 0, reasons: { threshold: 2, overflow: 1, manual: 0 } },
+	});
+	assert.match(text, /2 compactions/);
+	assert.match(text, /1 failed/);
+});

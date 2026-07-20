@@ -146,6 +146,14 @@
   integrations that will be stubbed first.
 -->
 
+## Coverage and limits
+
+- Inspected scope:
+- Skipped scope:
+- Evidence basis: source inspection | tests | runtime verification | upstream findings
+- Known blind spots:
+- Coverage disposition: COMPLETE | PARTIAL
+
 ## Known Unknowns
 
 <!-- Items that are still genuinely unknown — need a prototype, runtime test, maintainer decision,
@@ -178,6 +186,8 @@
 | 3 | Protocol and persisted state expectations are stated. | PASS / PARTIAL / FAIL | |
 | 4 | Acceptance scenarios and known unknowns are included. | PASS / PARTIAL / FAIL | |
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
+| 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
+| 7 | Lower-level findings are deep-read only when the porting bundle identifies a gap, conflict, missing acceptance detail, or defect rationale. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

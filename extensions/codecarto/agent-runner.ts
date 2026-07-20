@@ -33,6 +33,7 @@ export interface PhaseRunCallbacks {
 	onTextDelta?: (delta: string, fullText: string) => void;
 	onTurnEnd?: (turnCount: number) => void;
 	onMessageEnd?: (usage: { input: number; output: number; cacheWrite: number }) => void;
+	onCompactionEnd?: (event: { reason: "manual" | "threshold" | "overflow"; successful: boolean; aborted: boolean }) => void;
 }
 
 export interface PhaseRunOptions {
@@ -168,6 +169,20 @@ export async function runPhase(
 						});
 					}
 				}
+				break;
+			}
+			case "compaction_end": {
+				const compactEvent = event as AgentSessionEvent & {
+					reason: "manual" | "threshold" | "overflow";
+					result?: unknown;
+					aborted: boolean;
+					errorMessage?: string;
+				};
+				callbacks.onCompactionEnd?.({
+					reason: compactEvent.reason,
+					successful: Boolean(compactEvent.result) && !compactEvent.aborted && !compactEvent.errorMessage,
+					aborted: compactEvent.aborted,
+				});
 				break;
 			}
 		}

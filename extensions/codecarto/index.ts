@@ -1,6 +1,6 @@
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { compact, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { autoCompletePhase, buildAutoSummary, isPhaseRunning, runAuto, runSinglePhase } from "./auto-runner.ts";
 import { disposeAgentsWidget } from "./agent-widget.ts";
@@ -8,6 +8,7 @@ import { parseDashboardFlags } from "./dashboard-flags.ts";
 import { narrateDashboard } from "./dashboard-narrator.ts";
 import { writeDashboard } from "./dashboard-writer.ts";
 import { parseNextFlags } from "./next-flags.ts";
+import { buildPhaseCompactionInstructions, phaseIdFromSessionName, writePhaseCheckpoint } from "./phase-compaction.ts";
 
 import {
 	buildPhasePrompt,
@@ -151,6 +152,44 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		// Tear down the persistent agents widget so we don't leak the timer
 		// or render against a torn-down UI context after a session swap.
 		disposeAgentsWidget();
+	});
+
+	pi.on("session_before_compact", async (event, ctx) => {
+		const phaseId = phaseIdFromSessionName(ctx.sessionManager.getSessionName());
+		if (!phaseId || !ctx.model) return undefined;
+		try {
+			const state = await getWorkspaceState(ctx.cwd);
+			const phase = state.pipeline.phases.find((candidate) => candidate.id === phaseId);
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+			if (!auth.ok || !auth.apiKey) return undefined;
+			const instructions = buildPhaseCompactionInstructions(phaseId, phase?.primary_output);
+			const result = await compact(
+				event.preparation,
+				ctx.model,
+				auth.apiKey,
+				auth.headers,
+				instructions,
+				event.signal,
+			);
+			return { compaction: result };
+		} catch (error) {
+			if (ctx.hasUI) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Phase-aware compaction unavailable (${message}); using host default.`, "warning");
+			}
+			return undefined;
+		}
+	});
+
+	pi.on("session_compact", async (event, ctx) => {
+		const phaseId = phaseIdFromSessionName(ctx.sessionManager.getSessionName());
+		if (!phaseId) return;
+		await writePhaseCheckpoint(
+			ctx.cwd,
+			phaseId,
+			event.compactionEntry.summary,
+			event.compactionEntry.tokensBefore,
+		).catch(() => undefined);
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -499,12 +538,15 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			lines.push(`Total runs: ${totals.runs}`);
 			lines.push(`Total tokens: ${formatUsageTokens(totals.tokens.input)} in · ${formatUsageTokens(totals.tokens.output)} out · ${formatUsageTokens(totals.tokens.cache_write)} cache-write`);
 			lines.push(`Total duration: ${formatUsageDuration(totals.duration_ms)} · ${totals.tool_uses} tool uses`);
+			lines.push(totals.compaction_runs > 0
+				? `Compactions: ${totals.compactions.successful} successful · ${totals.compactions.failed} failed · ${totals.compactions.aborted} aborted`
+				: "Compactions: unavailable — historical or host usage records did not report compaction events");
 			lines.push("");
 			lines.push("Per-phase totals:");
 			for (const [phaseId, t] of perPhase) {
 				const tokensTotal = t.tokens.input + t.tokens.output;
 				lines.push(
-					`  ${phaseId}: ${t.runs} run${t.runs === 1 ? "" : "s"} · ${formatUsageTokens(tokensTotal)} tokens · ${t.tool_uses} tool uses · ${formatUsageDuration(t.duration_ms)}`,
+					`  ${phaseId}: ${t.runs} run${t.runs === 1 ? "" : "s"} · ${formatUsageTokens(tokensTotal)} tokens · ${t.tool_uses} tool uses · ${t.compaction_runs > 0 ? `${t.compactions.successful + t.compactions.failed + t.compactions.aborted} compactions` : "compactions unavailable"} · ${formatUsageDuration(t.duration_ms)}`,
 				);
 			}
 
