@@ -25,16 +25,15 @@ import { basename, isAbsolute, join } from "node:path";
 import {
 	buildPhasePrompt,
 	buildSkillPrompt,
-	buildThreadLogEntry,
 	buildValidationSummary,
 	canonicalPath,
-	closeoutFileName,
+	completeValidatedPhase,
 	createEmptyStatus,
-	dateOnly,
+
 	DEFAULT_PIPELINE_PATH,
 	deriveSlug,
 	discoverLibrary,
-	ensureCloseoutStub,
+
 	type EntryGeneration,
 	type GenerationReasoning,
 	type GenerationSurface,
@@ -49,8 +48,7 @@ import {
 	loadCodecartoConfig,
 	loadYamlFile,
 	normalizeForComparison,
-	normalizeStatus,
-	type OpenQuestionEntry,
+
 	PACKAGE_VERSION,
 	packagedWorkspaceDir,
 	pathExists,
@@ -62,8 +60,7 @@ import {
 	resolvePipelineChoice,
 	type StatusFile,
 	stringifySimpleYaml,
-	uniqueStrings,
-	updateStatusAtomically,
+
 	validatePhaseOutput,
 	type WorkspaceState,
 } from "../core/index.ts";
@@ -258,78 +255,9 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 		);
 	}
 
-	const completionTimestamp = new Date().toISOString();
-	const updatedState = await updateStatusAtomically(cwd, (lockedState) => {
-		const phase = resolvePhase(lockedState, validation.phaseId);
-		if (!phase?.primary_output) {
-			throw new Error(`Phase ${validation.phaseId} is missing primary_output.`);
-		}
-
-		const nextStatus = normalizeStatus(lockedState.status, lockedState.pipeline, lockedState.status.pipeline, lockedState.cwd);
-		const existingPhase = nextStatus.phases[validation.phaseId] ?? {
-			status: "pending",
-			owner_notes: [],
-			outputs_present: [],
-			open_questions: [],
-			carry_forward: [],
-		};
-
-		const gapEntries: OpenQuestionEntry[] = validation.rows
-			.filter((row) => row.result.toUpperCase().includes("PARTIAL"))
-			.map((row) => ({
-				kind: "needs-maintainer-decision",
-				description: row.criterion || "Partial validation gap",
-				deferred_reason: row.evidence || "Marked PARTIAL by validation",
-			}));
-
-		const mergedOpenQuestions: OpenQuestionEntry[] = [...existingPhase.open_questions];
-		for (const candidate of gapEntries) {
-			const dupe = mergedOpenQuestions.some(
-				(entry) => entry.description === candidate.description && entry.deferred_reason === candidate.deferred_reason,
-			);
-			if (!dupe) mergedOpenQuestions.push(candidate);
-		}
-
-		nextStatus.phases[validation.phaseId] = {
-			status: "complete",
-			owner_notes: uniqueStrings([
-				...existingPhase.owner_notes,
-				`Completed via codecarto_complete on ${completionTimestamp}.`,
-				`Primary output: .codecarto/${validation.primaryOutput}`,
-				`Validation: ${validation.overall}`,
-			]).slice(-3),
-			outputs_present: uniqueStrings([...existingPhase.outputs_present, validation.primaryOutput]),
-			open_questions: mergedOpenQuestions,
-			carry_forward: existingPhase.carry_forward ?? [],
-		};
-
-		nextStatus.last_updated = completionTimestamp;
-		const updatedWorkspaceState: WorkspaceState = {
-			...lockedState,
-			status: nextStatus,
-		};
-
-		const nextEligible = getNextEligiblePhase(updatedWorkspaceState);
-		nextStatus.current_phase = nextEligible?.id ?? "complete";
-		nextStatus.next_actions = nextEligible
-			? [`Begin ${nextEligible.id} phase by producing ${nextEligible.primary_output ?? `findings/${nextEligible.id}/`}`]
-			: ["All phases complete. Review findings, open questions, and downstream implementation notes."];
-
-		return {
-			state: { ...updatedWorkspaceState, status: nextStatus },
-			threadLogEntry: buildThreadLogEntry(validation.phaseId, validation, completionTimestamp),
-		};
+	const { updatedState, closeoutNotice } = await completeValidatedPhase(cwd, validation, "codecarto_complete").catch((error) => {
+		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
-
-	let closeoutNotice: string | undefined;
-	try {
-		const created = await ensureCloseoutStub(updatedState.workspaceDir, validation.phaseId, completionTimestamp);
-		if (created) {
-			closeoutNotice = `Closeout stub created: .codecarto/closeouts/${closeoutFileName(dateOnly(completionTimestamp), validation.phaseId)} (fill it in)`;
-		}
-	} catch (error) {
-		closeoutNotice = `Closeout stub not created: ${error instanceof Error ? error.message : String(error)}`;
-	}
 
 	const lines = [
 		`Marked ${validation.phaseId} complete (validation: ${validation.overall}).`,

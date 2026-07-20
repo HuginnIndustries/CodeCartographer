@@ -2,21 +2,29 @@
 // framework logic shared by every wrapper.
 
 import { open, rm, stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import type {
 	CarryForwardEntry,
 	NormalizedStatus,
 	OpenQuestionEntry,
+	PhaseHandoff,
 	PipelineFile,
 	PipelinePhase,
 	StatusFile,
 	StatusPhase,
 } from "./types.ts";
-import { sleep } from "./utils.ts";
+import { pathExists, sleep } from "./utils.ts";
+import { loadYamlFile } from "./yaml.ts";
 
 export const LOCK_RETRY_MS = 125;
 export const LOCK_TIMEOUT_MS = 5000;
 export const STALE_LOCK_MS = 60_000;
+
+export function assertSafePhaseId(phaseId: string): void {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(phaseId)) {
+		throw new Error(`Invalid phase id: ${phaseId}`);
+	}
+}
 
 export function ensureArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
@@ -79,7 +87,7 @@ export function createEmptyStatus(projectName: string, pipelinePath: string, pip
 	}
 
 	const firstPhase = pipeline.phase_order[0] ?? "complete";
-	const phaseMap = new Map<string, PipelinePhase>(pipeline.phases.map((phase) => [phase.id, phase]));
+	const phaseMap = new Map<string, { id: string; primary_output?: string }>(pipeline.phases.map((phase) => [phase.id, phase]));
 	const firstPhaseConfig = phaseMap.get(firstPhase);
 
 	return {
@@ -87,6 +95,7 @@ export function createEmptyStatus(projectName: string, pipelinePath: string, pip
 		pipeline: pipelinePath,
 		current_phase: firstPhase,
 		last_updated: "",
+		schema_version: 1,
 		phases,
 		next_actions: firstPhaseConfig?.primary_output
 			? [`Begin ${firstPhase} phase by producing ${firstPhaseConfig.primary_output}`]
@@ -95,6 +104,9 @@ export function createEmptyStatus(projectName: string, pipelinePath: string, pip
 }
 
 export function normalizeStatus(status: StatusFile, pipeline: PipelineFile, pipelinePath: string, cwd: string): NormalizedStatus {
+	if (typeof status.schema_version === "number" && status.schema_version > 1) {
+		throw new Error(`Unsupported status schema_version ${status.schema_version}. Supported: 1.`);
+	}
 	const phases = ensurePhaseRecord(status.phases);
 	for (const phaseId of pipeline.phase_order) {
 		if (!phases[phaseId]) {
@@ -113,9 +125,96 @@ export function normalizeStatus(status: StatusFile, pipeline: PipelineFile, pipe
 		pipeline: status.pipeline?.trim() || pipelinePath,
 		current_phase: status.current_phase?.trim() || pipeline.phase_order[0] || "complete",
 		last_updated: status.last_updated?.trim() || "",
+		schema_version: typeof status.schema_version === "number" ? status.schema_version : 1,
 		phases,
 		next_actions: ensureArray(status.next_actions),
 	};
+}
+
+export function parseHandoff(value: unknown): PhaseHandoff {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new Error("Invalid handoff: expected object");
+	}
+	const raw = value as Record<string, unknown>;
+	if (typeof raw.phase_id !== "string" || !raw.phase_id.trim()) {
+		throw new Error("Invalid handoff: phase_id is required");
+	}
+	const schemaVersion = typeof raw.schema_version === "number" ? raw.schema_version : 1;
+	// Reject unsupported future versions (anything > current version 1)
+	if (schemaVersion > 1) {
+		throw new Error(`Invalid handoff: unsupported schema_version ${schemaVersion}. Supported: 1.`);
+	}
+	for (const field of ["owner_notes", "open_questions", "carry_forward", "carry_forward_closures", "decisions"] as const) {
+		if (raw[field] !== undefined && !Array.isArray(raw[field])) {
+			throw new Error(`Invalid handoff: ${field} must be an array`);
+		}
+	}
+	return {
+		phase_id: raw.phase_id.trim(),
+		timestamp: typeof raw.timestamp === "string" ? raw.timestamp.trim() : undefined,
+		owner_notes: ensureArray(raw.owner_notes),
+		open_questions: ensureEntryArray<OpenQuestionEntry>(raw.open_questions, false),
+		carry_forward: ensureEntryArray<CarryForwardEntry>(raw.carry_forward, true),
+		carry_forward_closures: ensureArray(raw.carry_forward_closures),
+		decisions: ensureArray(raw.decisions),
+		closeout_content: typeof raw.closeout_content === "string" ? raw.closeout_content : "",
+		closeout_summary: typeof raw.closeout_summary === "string" ? raw.closeout_summary : "",
+		schema_version: schemaVersion,
+	};
+}
+
+export async function loadHandoffFile(phaseId: string, workspaceDir: string): Promise<PhaseHandoff | null> {
+	assertSafePhaseId(phaseId);
+	const handoffPath = join(workspaceDir, "scratch", "handoffs", `${phaseId}.yaml`);
+	if (!(await pathExists(handoffPath))) return null;
+	const raw = await loadYamlFile(handoffPath);
+	return parseHandoff(raw);
+}
+
+export function applyHandoff(status: NormalizedStatus, handoff: PhaseHandoff): NormalizedStatus {
+	const phase = status.phases[handoff.phase_id];
+	if (!phase) return status;
+
+	phase.owner_notes = ensureArray([
+		...phase.owner_notes,
+		...handoff.owner_notes,
+	]);
+
+	// Merge open_questions: overwrite by id or append new
+	const oqMap = new Map<string, OpenQuestionEntry>();
+	for (const entry of phase.open_questions) {
+		const key = entry.id || entry.description || "";
+		if (key) oqMap.set(key, entry);
+	}
+	for (const entry of handoff.open_questions) {
+		const key = entry.id || entry.description || "";
+		if (key) oqMap.set(key, entry);
+		else phase.open_questions.push(entry);
+	}
+	phase.open_questions = [...oqMap.values()];
+
+	// Merge carry_forward: overwrite by id or append new
+	const cfMap = new Map<string, CarryForwardEntry>();
+	for (const entry of phase.carry_forward) {
+		const key = entry.id || entry.description || "";
+		if (key) cfMap.set(key, entry);
+	}
+	for (const entry of handoff.carry_forward) {
+		const key = entry.id || entry.description || "";
+		if (key) cfMap.set(key, entry);
+		else phase.carry_forward.push(entry);
+	}
+	phase.carry_forward = [...cfMap.values()];
+
+	// Apply closures: remove carry_forward entries from ALL phases by id
+	for (const closureId of handoff.carry_forward_closures) {
+		if (!closureId) continue;
+		for (const ph of Object.values(status.phases)) {
+			ph.carry_forward = ph.carry_forward.filter((entry) => entry.id !== closureId);
+		}
+	}
+
+	return status;
 }
 
 export async function acquireLock(lockPath: string): Promise<{ release: () => Promise<void> }> {

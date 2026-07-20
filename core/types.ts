@@ -38,6 +38,7 @@ export type StatusFile = {
 	pipeline?: string;
 	current_phase?: string;
 	last_updated?: string;
+	schema_version?: number;
 	phases?: Record<string, StatusPhase>;
 	next_actions?: string[];
 };
@@ -70,7 +71,7 @@ export type PipelineFile = {
 	phases: PipelinePhase[];
 };
 
-export type NormalizedStatus = Required<Pick<StatusFile, "project_name" | "pipeline" | "current_phase" | "last_updated" | "phases" | "next_actions">>;
+export type NormalizedStatus = Required<Pick<StatusFile, "project_name" | "pipeline" | "current_phase" | "last_updated" | "phases" | "next_actions" >> & { schema_version: number };
 
 export type WorkspaceState = {
 	cwd: string;
@@ -93,4 +94,22 @@ export type ValidationResult = {
 	rows: Array<{ criterion: string; result: string; evidence: string }>;
 	gaps: string[];
 	errors: string[];
+};
+
+export type PhaseHandoff = {
+	phase_id: string;
+	/**
+	 * Deprecated: model-provided timestamps are ignored. The framework uses
+	 * the host clock for all canonical writes (status.yaml, THREAD_LOG,
+	 * closeout). Kept in the type for backward-compatible parse only.
+	 */
+	timestamp?: string;
+	owner_notes: string[];
+	open_questions: OpenQuestionEntry[];
+	carry_forward: CarryForwardEntry[];
+	carry_forward_closures: string[]; // ids to remove from earlier phases
+	decisions: string[];
+	closeout_content: string;
+	closeout_summary: string;
+	schema_version?: number;
 };

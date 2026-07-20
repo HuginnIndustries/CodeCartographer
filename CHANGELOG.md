@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Structured per-phase handoffs under `.codecarto/scratch/handoffs/` for owner notes, questions, routed work, closure IDs, decisions, and closeout content.
+- Status schema versioning with migration for v0.11 workspaces and rejection of unsupported future schemas.
+
+### Changed
+
+- Phase completion now owns canonical `status.yaml`, closeout, and `THREAD_LOG.md` updates, uses host-generated timestamps, rejects malformed handoffs and duplicate YAML keys, and remains idempotent across retries.
+
 ### Planned
 
 - Pi `/codecarto-publish` UX, dashboard library-state surfacing, and the

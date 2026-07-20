@@ -134,7 +134,7 @@ The filesystem, not the conversation, is the durable memory of a run:
 
 - Each phase gets a fresh context window. In the Pi extension it runs as an isolated phase sub-agent; MCP and drop-in hosts should use the same one-session-per-phase pattern.
 - Completed findings live under `.codecarto/findings/`. Later phases re-read the specific upstream artifacts declared by the active pipeline instead of relying on conversational recall.
-- `workflow/status.yaml` records progress, `open_questions`, and `carry_forward` items routed to later phases. `CONVENTIONS.md`, `DECISIONS.md`, closeouts, and `THREAD_LOG.md` preserve cross-session knowledge and handoffs.
+- `workflow/status.yaml` records progress, `open_questions`, and `carry_forward` items routed to later phases. Phase agents propose changes in `.codecarto/scratch/handoffs/<phase>.yaml`; completion validates and applies them under a lock with host timestamps, one canonical closeout, and an idempotent `THREAD_LOG.md` entry.
 - Pi phase transcripts are file-backed and remain available through `/resume`, `/tree`, and `/export`, even when the active model context has been compacted.
 - For isolated Pi phase sessions, compaction uses a phase-aware continuation summary that explicitly preserves evidence, files inspected, output progress, open questions, and validation gaps. The resulting summary is also checkpointed atomically at `.codecarto/scratch/checkpoints/<phase>.md`.
 - Pi records successful, failed, and aborted compactions plus their trigger (`threshold`, `overflow`, or `manual`) in local usage data and exposes the totals in the widget, `/codecarto-usage`, completion summaries, and dashboard.
@@ -244,7 +244,7 @@ Beyond the slash commands, the Pi extension layers on:
 | `/codecarto-next [--auto [--strict]] [--llm-steer \| --no-llm-steer]` | Spawn the next eligible phase as a sub-agent. `--auto` walks the full pipeline end-to-end (auto-validate + auto-complete + advance); `--strict` flips the `PASS WITH GAPS` rule from "advance" to "pause". |
 | `/codecarto-phase <id>` | Force a specific phase, even out of pipeline order |
 | `/codecarto-validate [phase]` | Validate a phase output against completion criteria |
-| `/codecarto-complete [phase]` | Atomically mark a phase complete (validation must pass) |
+| `/codecarto-complete [phase]` | Validate and atomically apply the phase handoff, canonical status, closeout, and log entry |
 | `/codecarto-skill <name>` | Run a post-pipeline skill once all phases are complete |
 | `/codecarto-usage` | Cumulative + per-phase token usage |
 | `/codecarto-dashboard [--narrate]` | Regenerate `.codecarto/dashboard.html`; `--narrate` for the LLM executive summary |
@@ -427,7 +427,7 @@ If you're testing a new model, start with `pipeline-architecture-only.yaml` on a
     protocols/               # Event streams, state machines, persistence formats.
     porting/                 # Reverse-engineering synthesis bundle.
     reimplementation-spec/   # Language-agnostic build spec.
-  scratch/                   # Disposable analysis notes.
+  scratch/                   # Disposable notes plus checkpoints and structured phase handoffs.
   templates/                 # Output structure templates.
   workflow/                  # Pipeline definitions, status, validation, config.
   closeouts/                 # Per-session closeout files.

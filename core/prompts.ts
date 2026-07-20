@@ -2,16 +2,15 @@
 // single biggest fidelity surface — both Pi and the MCP server emit
 // byte-identical text by importing buildPhasePrompt from here.
 
-import { copyFile, mkdir, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type {
 	CarryForwardEntry,
 	OpenQuestionEntry,
 	PipelinePhase,
-	ValidationResult,
 	WorkspaceState,
 } from "./types.ts";
-import { dateOnly, pathExists } from "./utils.ts";
+import { pathExists } from "./utils.ts";
 
 export function describeEntry(entry: OpenQuestionEntry | CarryForwardEntry): string {
 	const parts: string[] = [];
@@ -57,6 +56,7 @@ export async function buildPhasePrompt(
 		"Required reads before analysis:",
 		"- .codecarto/GUIDE.md",
 		"- .codecarto/workflow/status.yaml",
+		"- .codecarto/templates/phase-handoff.yaml",
 	];
 
 	const primaryOutput = phase.primary_output ? `.codecarto/${phase.primary_output}` : undefined;
@@ -66,7 +66,7 @@ export async function buildPhasePrompt(
 	if (phase.skill_path) lines.push(`- .codecarto/${phase.skill_path}`);
 	if (phase.output_template) lines.push(`- .codecarto/${phase.output_template}`);
 
-	const staticReads = new Set(["GUIDE.md", "workflow/status.yaml"]);
+	const staticReads = new Set(["GUIDE.md", "workflow/status.yaml", "templates/phase-handoff.yaml"]);
 	const phaseReads = (phase.required_reads ?? []).filter((path) => path && !staticReads.has(path));
 	for (const path of phaseReads) {
 		lines.push(`- .codecarto/${path}`);
@@ -92,7 +92,7 @@ export async function buildPhasePrompt(
 		for (const entry of routed) {
 			lines.push(`- ${describeEntry(entry)}`);
 		}
-		lines.push("Close each item by editing your phase output to address it, then remove the entry from the source phase's carry_forward in workflow/status.yaml.");
+		lines.push("Close each item by editing your phase output to address it, then record the closure in your phase handoff so the framework can remove the carry_forward entry atomically.");
 	}
 
 	if (phase.id === "reimplementation-spec") {
@@ -118,7 +118,7 @@ export async function buildPhasePrompt(
 	lines.push("- Update findings under .codecarto/findings/ for this phase.");
 	lines.push(`- For long phases, checkpoint resumable progress at .codecarto/scratch/checkpoints/${phase.id}.md; Pi writes this automatically after phase compaction.`);
 	lines.push("- Include a Coverage and limits section that names inspected scope, skipped scope, evidence basis, and blind spots; route material gaps through PARTIAL validation and open_questions/carry_forward.");
-	lines.push("- Distinguish open_questions (genuinely unknown) from carry_forward (routed to a specific later phase) when updating workflow/status.yaml — see GUIDE.md \"Open Questions vs Carry-Forward\".");
+	lines.push(`- On completion, write a phase handoff to .codecarto/scratch/handoffs/${phase.id}.yaml (see GUIDE.md). Do NOT directly edit workflow/status.yaml, append THREAD_LOG.md, or create a second closeout.`);
 
 	if (forced) {
 		lines.push("- The user explicitly requested this phase even if it is not the next eligible phase.");
@@ -149,23 +149,6 @@ export function closeoutFileName(date: string, phaseOrModule: string): string {
 	return `${date}-${phaseOrModule}.md`;
 }
 
-export function buildThreadLogEntry(phaseOrModule: string, validation: ValidationResult, timestamp: string): string {
-	const date = dateOnly(timestamp);
-	const file = closeoutFileName(date, phaseOrModule);
-	return `- ${date} — ${phaseOrModule} — Validation: ${validation.overall} — [closeout](closeouts/${file})\n`;
-}
-
-export async function ensureCloseoutStub(workspaceDir: string, phaseOrModule: string, timestamp: string): Promise<string | null> {
-	const date = dateOnly(timestamp);
-	const closeoutsDir = join(workspaceDir, "closeouts");
-	const closeoutPath = join(closeoutsDir, closeoutFileName(date, phaseOrModule));
-	if (await pathExists(closeoutPath)) return null;
-	const templatePath = join(workspaceDir, "templates", "closeout-template.md");
-	if (!(await pathExists(templatePath))) return null;
-	await mkdir(closeoutsDir, { recursive: true });
-	await copyFile(templatePath, closeoutPath);
-	return closeoutPath;
-}
 
 export async function listSkillNames(workspaceDir: string): Promise<string[]> {
 	const skillsDir = join(workspaceDir, "skills");
@@ -208,8 +191,8 @@ export async function buildSkillPrompt(state: WorkspaceState, skillName: string)
 	lines.push("- Do not modify source files outside .codecarto/.");
 	lines.push("- Follow the SKILL.md instructions exactly; the skill enforces its own discipline (see GUIDE.md).");
 	lines.push("- Update only the artifacts the skill calls for. Do NOT touch phase status entries.");
-	lines.push("- On completion, write a closeout at .codecarto/closeouts/<YYYY-MM-DD>-<skill-or-module>.md and append a one-line index entry to THREAD_LOG.md.");
-	lines.push("- If your work resolves entries in any phase's open_questions or carry_forward, remove only those resolved entries.");
+	lines.push("- On completion, write the post-pipeline closeout requested by the skill. Post-pipeline lifecycle state is not yet framework-managed; do not create a phase handoff or edit phase status entries.");
+	lines.push("- If the work resolves a phase question or carry-forward item, name the ID in the closeout for a later explicit amendment; do not edit status.yaml directly.");
 
 	return lines.join("\n");
 }

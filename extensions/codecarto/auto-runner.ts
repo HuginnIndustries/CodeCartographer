@@ -24,24 +24,16 @@ import { writeDashboard } from "./dashboard-writer.ts";
 import {
 	appendUsageRun,
 	buildPhasePrompt,
-	buildThreadLogEntry,
 	buildValidationSummary,
-	closeoutFileName,
-	dateOnly,
-	ensureCloseoutStub,
+	completeValidatedPhase,
 	formatMillis,
 	formatTokenCount,
 	getNextEligiblePhase,
 	getWorkspaceState,
 	loadCodecartoConfig,
-	normalizeStatus,
-	type OpenQuestionEntry,
 	PACKAGE_VERSION,
 	type PipelinePhase,
-	resolvePhase,
 	type UsageRunStatus,
-	uniqueStrings,
-	updateStatusAtomically,
 	type ValidationOverall,
 	type ValidationResult,
 	validatePhaseOutput,
@@ -230,81 +222,9 @@ export async function autoCompletePhase(
 	ctx: ExtensionContext,
 	validation: ValidationResult,
 ): Promise<AutoCompleteResult> {
-	const completionTimestamp = new Date().toISOString();
-	const updatedState = await updateStatusAtomically(ctx.cwd, (lockedState) => {
-		const phase = resolvePhase(lockedState, validation.phaseId);
-		if (!phase?.primary_output) {
-			throw new Error(`Phase ${validation.phaseId} is missing primary_output.`);
-		}
-
-		const nextStatus = normalizeStatus(lockedState.status, lockedState.pipeline, lockedState.status.pipeline, lockedState.cwd);
-		const existingPhase = nextStatus.phases[validation.phaseId] ?? {
-			status: "pending",
-			owner_notes: [],
-			outputs_present: [],
-			open_questions: [],
-			carry_forward: [],
-		};
-
-		const gapEntries: OpenQuestionEntry[] = validation.rows
-			.filter((row) => row.result.toUpperCase().includes("PARTIAL"))
-			.map((row) => ({
-				kind: "needs-maintainer-decision",
-				description: row.criterion || "Partial validation gap",
-				deferred_reason: row.evidence || "Marked PARTIAL by validation",
-			}));
-
-		const mergedOpenQuestions: OpenQuestionEntry[] = [...existingPhase.open_questions];
-		for (const candidate of gapEntries) {
-			const dupe = mergedOpenQuestions.some((entry) => entry.description === candidate.description && entry.deferred_reason === candidate.deferred_reason);
-			if (!dupe) mergedOpenQuestions.push(candidate);
-		}
-
-		nextStatus.phases[validation.phaseId] = {
-			status: "complete",
-			owner_notes: uniqueStrings([
-				...existingPhase.owner_notes,
-				`Completed via /codecarto-complete on ${completionTimestamp}.`,
-				`Primary output: .codecarto/${validation.primaryOutput}`,
-				`Validation: ${validation.overall}`,
-			]).slice(-3),
-			outputs_present: uniqueStrings([...existingPhase.outputs_present, validation.primaryOutput]),
-			open_questions: mergedOpenQuestions,
-			carry_forward: existingPhase.carry_forward ?? [],
-		};
-
-		nextStatus.last_updated = completionTimestamp;
-		const updatedWorkspaceState: WorkspaceState = {
-			...lockedState,
-			status: nextStatus,
-		};
-
-		const nextEligible = getNextEligiblePhase(updatedWorkspaceState);
-		nextStatus.current_phase = nextEligible?.id ?? "complete";
-		nextStatus.next_actions = nextEligible
-			? [`Begin ${nextEligible.id} phase by producing ${nextEligible.primary_output ?? `findings/${nextEligible.id}/`}`]
-			: ["All phases complete. Review findings, open questions, and downstream implementation notes."];
-
-		return {
-			state: { ...updatedWorkspaceState, status: nextStatus },
-			threadLogEntry: buildThreadLogEntry(validation.phaseId, validation, completionTimestamp),
-		};
-	});
-
-	let closeoutNotice: string | undefined;
-	try {
-		const created = await ensureCloseoutStub(updatedState.workspaceDir, validation.phaseId, completionTimestamp);
-		if (created) {
-			closeoutNotice = `Closeout stub: .codecarto/closeouts/${closeoutFileName(dateOnly(completionTimestamp), validation.phaseId)} (fill it in)`;
-		}
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		closeoutNotice = `Closeout stub not created: ${message}`;
-	}
-
+	const result = await completeValidatedPhase(ctx.cwd, validation, "/codecarto-complete");
 	void writeDashboard(ctx.cwd, PACKAGE_VERSION);
-
-	return { updatedState, closeoutNotice };
+	return result;
 }
 
 // ----------------------------------------------------------------------------
