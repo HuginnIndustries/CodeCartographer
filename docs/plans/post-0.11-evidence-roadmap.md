@@ -42,6 +42,7 @@ FreeAgent showed that phase agents can directly mutate `workflow/status.yaml`, i
 - [ ] Stop instructing phase agents to directly add/remove entries in `workflow/status.yaml` or append `THREAD_LOG.md`.
 - [ ] Apply the handoff atomically in `codecarto_complete`, with the framework supplying timestamps.
 - [ ] Parse YAML with duplicate-key rejection and validate `status.yaml` against a strict schema before and after completion.
+- [ ] Add a top-level `schema_version` and explicit backward-compatible migrations for older workspaces.
 - [ ] Normalize absent collections to `[]`; reject null or duplicate `open_questions` / `carry_forward` keys.
 - [ ] Make completion idempotent and preserve unrelated phase data under the file lock.
 
@@ -79,6 +80,8 @@ The FreeAgent contracts phase has both a blank framework-created closeout stub a
 - [ ] Make `PASS WITH GAPS` require at least one machine-readable gap/open item, or explain that the status comes from coverage disposition even when every criterion row passes.
 - [ ] Ensure phase completion preserves `PARTIAL` honestly without making resolved downstream gaps look permanently unresolved.
 - [ ] Label undeclared/optional secondary outputs as `not produced (optional)`, not `bad` or `missing`, unless the pipeline marks them required.
+- [ ] Regenerate the dashboard after framework-owned status mutations, or show a prominent actionable refresh state rather than relying on a subtle staleness warning.
+- [ ] Explain the mechanical/semantic defect split directly on dashboard phase cards: early context-light scan versus later contract-informed analysis.
 - [ ] Keep unavailable token accounting neutral; do not turn provider-reported zero token counts into measured usage.
 - [ ] Clarify the Strategic Alignment Hook behavior when a user resumes without answering: apply the documented auto-default or ask again, but do not leave the phase to infer the policy.
 
