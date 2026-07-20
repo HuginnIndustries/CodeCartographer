@@ -21,7 +21,7 @@ CodeCartographer 0.11.0 makes long reverse-engineering pipelines more resilient 
 
 ## Upgrade notes
 
-- Pi users must run `@earendil-works/pi-coding-agent` 0.80.10 or later in the compatible 0.x line.
+- Pi users must run `@earendil-works/pi-coding-agent` 0.80.10 or a compatible 0.80.x release.
 - Existing `.codecarto/` workspaces and legacy `.usage.local.yaml` records remain supported.
 - Use `/codecarto-open`, not `/codecarto-init`, when continuing an existing workspace from a fresh Pi session.
 
