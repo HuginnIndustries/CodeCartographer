@@ -7,6 +7,14 @@ description: Convert reverse-engineering findings into a language-agnostic reimp
 
 Use this skill after the architecture, behavior, and protocol passes are complete enough to trust.
 
+Start with `findings/porting/reverse-engineering-bundle.md`; it is the default compression boundary for this phase. Do not load every lower-level finding automatically. Follow the bundle's Source Index and deep-read architecture, contracts, protocols, or defect reports only when:
+- the bundle names a gap or conflict,
+- an acceptance scenario needs detail the bundle deliberately omitted,
+- a load-bearing claim lacks enough evidence to state safely, or
+- a defect disposition needs its original rationale.
+
+Record those targeted deep reads in the spec's Coverage and limits section. If the bundle is not self-sufficient, mark the affected validation criterion PARTIAL and route the gap through `open_questions` or `carry_forward` rather than silently reconstructing the whole pipeline in context.
+
 Treat the source repo as evidence, not as a template.
 
 Define concept-level modules:
@@ -60,6 +68,8 @@ End with a spike list:
 - unknown behaviors that need a prototype
 - risky performance assumptions
 - platform-sensitive areas that need targeted tests
+
+For every defect in the bundle, preserve its disposition (`fix before porting`, `port differently`, or `leave behind`) and convert it into an explicit design consequence or acceptance check.
 
 Use the output template at `templates/reimplementation-spec.md`.
 

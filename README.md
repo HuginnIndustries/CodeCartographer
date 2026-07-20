@@ -136,10 +136,14 @@ The filesystem, not the conversation, is the durable memory of a run:
 - Completed findings live under `.codecarto/findings/`. Later phases re-read the specific upstream artifacts declared by the active pipeline instead of relying on conversational recall.
 - `workflow/status.yaml` records progress, `open_questions`, and `carry_forward` items routed to later phases. `CONVENTIONS.md`, `DECISIONS.md`, closeouts, and `THREAD_LOG.md` preserve cross-session knowledge and handoffs.
 - Pi phase transcripts are file-backed and remain available through `/resume`, `/tree`, and `/export`, even when the active model context has been compacted.
+- For isolated Pi phase sessions, compaction uses a phase-aware continuation summary that explicitly preserves evidence, files inspected, output progress, open questions, and validation gaps. The resulting summary is also checkpointed atomically at `.codecarto/scratch/checkpoints/<phase>.md`.
+- Pi records successful, failed, and aborted compactions plus their trigger (`threshold`, `overflow`, or `manual`) in local usage data and exposes the totals in the widget, `/codecarto-usage`, completion summaries, and dashboard.
 
 As a result, compaction—or even replacement—of the orchestrator session does not erase pipeline progress. A new session can reconstruct the relevant state from disk and continue.
 
-The remaining limit is **within a single oversized phase**. Host-level compaction is lossy, and CodeCartographer does not pretend otherwise. Phase instructions therefore prioritize targeted reads and durable scratch notes; if full coverage will not fit, the phase records `PARTIAL` validation and places unresolved work in `open_questions` or `carry_forward`. Cross-phase context loss is largely designed out; intra-phase context pressure is made explicit rather than hidden.
+The remaining limit is **within a single oversized phase**. Even Pi's phase-aware summary is still a lossy distillation, and MCP/drop-in compaction remains entirely host-controlled. Phase instructions therefore prioritize targeted reads, durable checkpoints, and explicit coverage accounting; if full coverage will not fit, the phase records `PARTIAL` validation and places unresolved work in `open_questions` or `carry_forward`. Cross-phase context loss is largely designed out; intra-phase context pressure is observed and bounded rather than hidden.
+
+The porting bundle is the final intentional compression boundary. It carries a source index, load-bearing invariants, defect dispositions, and deep-read triggers. `reimplementation-spec` reads that bundle by default and opens lower-level reports only for a named gap, conflict, missing acceptance detail, or defect rationale.
 
 ---
 
@@ -193,7 +197,7 @@ Every state change re-renders `.codecarto/dashboard.html` — a self-contained s
 
 - Pipeline progress strip with per-phase status badges
 - Per-phase cards with output links, open questions, carry-forward routing, owner notes, last-run usage
-- Aggregate token usage panel + per-phase breakdown
+- Aggregate token and compaction telemetry + per-phase breakdown
 - Activity timeline with session-file links
 - Open questions roll-up grouped by source phase
 - Closeouts list (reverse-chronological) with relative-path links
@@ -220,11 +224,13 @@ Beyond the slash commands, the Pi extension layers on:
 
 **File-backed phase sessions.** Phase transcripts persist to the same Pi session directory the orchestrator uses, so `/resume`, `/tree`, and `/export` browse them as first-class sessions. Each appears as `CodeCartographer phase: <id>` with lineage back to the orchestrator's session.
 
+**Phase-aware compaction and checkpoints.** Only isolated sessions named `CodeCartographer phase: <id>` receive the specialized compaction prompt. It preserves the phase goal, evidence, inspected files, output progress, open questions, and validation gaps, then writes the resulting summary to `.codecarto/scratch/checkpoints/<phase>.md`. Orchestrator and unrelated Pi sessions retain normal host compaction.
+
 **Phase-completion summary in the orchestrator transcript.** When a phase finishes, a Markdown closeout block is appended to the orchestrator's session via `pi.sendMessage(...)`. Visible in the TUI scrollback; available to the orchestrator's LLM as context on your next message. No auto-trigger — you stay in control.
 
 **Opt-in LLM-steered seed prompts.** Set `orchestrator.llm_steer_next_phase: true` in `.codecarto/workflow/config.yaml` (or pass `--llm-steer` per invocation), and the orchestrator's LLM rewrites the next phase's seed prompt to highlight relevant prior findings. Off by default — extra orchestrator-side tokens, opt-in. The rewritten prompt is injected into the orchestrator transcript so you can audit what the rewriter chose to emphasize.
 
-**Per-phase usage tracking.** Each phase run is appended to `.codecarto/workflow/.usage.local.yaml`. `/codecarto-usage` reports cumulative + per-phase totals.
+**Per-phase usage tracking.** Each phase run is appended to `.codecarto/workflow/.usage.local.yaml`. `/codecarto-usage` reports cumulative + per-phase token, runtime, tool-use, and compaction totals, including threshold/overflow/manual triggers and successful/failed/aborted outcomes.
 
 **Tool interception.** `bash` is blocked outright; `edit` and `write` are confined to `.codecarto/`. Same rules apply to phase sub-agents.
 

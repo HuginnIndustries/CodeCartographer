@@ -99,6 +99,14 @@
 
 ---
 
+## Coverage and limits
+
+- Inspected scope:
+- Skipped scope:
+- Evidence basis: source inspection | tests | runtime verification | upstream findings
+- Known blind spots:
+- Coverage disposition: COMPLETE | PARTIAL
+
 ## Validation
 
 <!-- Fill in this table per workflow/VALIDATE.md. The rows below match the full pipeline.
@@ -111,6 +119,7 @@
 | 3 | Findings are organized by pass and sorted by severity. | PASS / PARTIAL / FAIL | |
 | 4 | Summary tables are complete and counts match the detailed findings. | PASS / PARTIAL / FAIL | |
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
+| 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

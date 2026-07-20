@@ -228,6 +228,18 @@ test("usage panel: totals roll up across runs; per-phase breakdown row count mat
 	const usageTbody = usageSection.split("<tbody>")[1]?.split("</tbody>")[0] ?? "";
 	const phaseRows = usageTbody.match(/<tr/g) ?? [];
 	assert.equal(phaseRows.length, 3, "expected one tbody row per pipeline phase in the per-phase usage table");
+	assert.match(html, /Compactions<\/dt><dd><span class="cc-muted">unavailable — host did not report compaction events<\/span><\/dd>/);
+});
+
+test("usage dashboard exposes compaction totals, reasons, and per-run counts", () => {
+	const usage = makeUsage([
+		{ timestamp: "2026-05-13T10:00:00.000Z", phase: "architecture", status: "completed", turn_count: 5, tool_uses: 10, duration_ms: 60_000, tokens: { input: 1000, output: 500, cache_write: 0 }, compactions: { successful: 2, failed: 1, aborted: 0, reasons: { threshold: 2, overflow: 1, manual: 0 } } },
+	]);
+	const html = renderDashboard({ ...emptyInputs(["architecture"]), usage });
+	assert.match(html, /Compactions<\/dt><dd>2 successful · 1 failed · 0 aborted<\/dd>/);
+	assert.match(html, /Reasons<\/dt><dd>threshold 2 · overflow 1 · manual 0<\/dd>/);
+	assert.match(html, /<th>Compactions<\/th>/);
+	assert.match(html, /<td>2 \/ 1 \/ 0<\/td>/);
 });
 
 test("activity timeline shows newest 10 visible; older runs collapsed under <details>", () => {

@@ -10,6 +10,22 @@
 
 <!-- One to three paragraphs summarizing the system in plain language, aimed at someone who will reimplement it. -->
 
+## Source Index
+
+<!--
+  This bundle is the default compression boundary for reimplementation-spec.
+  Point to the canonical upstream section for every load-bearing claim. A later
+  phase should deep-read an upstream report only when this index identifies a
+  gap, conflict, or detail that cannot be represented responsibly here.
+-->
+
+| Area | Canonical upstream section | Summary carried forward | Deep-read trigger |
+|---|---|---|---|
+| Architecture | | | |
+| Contracts | | | |
+| Protocols and state | | | |
+| Defects (if scanned) | | | |
+
 ## Layer Map With Ownership
 
 <!--
@@ -68,9 +84,9 @@
   re-list every finding. Keep it under one screen.
 -->
 
-| Defect ID | Source Report | One-line Description | Severity | Porting Recommendation |
-|-----------|---------------|----------------------|----------|------------------------|
-| | | | | fix before porting / port differently / leave behind |
+| Defect ID | Source Report | One-line Description | Severity | Disposition | Required design consequence |
+|-----------|---------------|----------------------|----------|-------------|-----------------------------|
+| | | | | fix before porting / port differently / leave behind | |
 
 ## Observed Facts vs. Inferred Structure
 
@@ -100,6 +116,14 @@
 | Term | Definition | Where Used |
 |---|---|---|
 | | | |
+
+## Coverage and limits
+
+- Inspected scope:
+- Skipped scope:
+- Evidence basis: source inspection | tests | runtime verification | upstream findings
+- Known blind spots:
+- Coverage disposition: COMPLETE | PARTIAL
 
 ## Open Questions
 
@@ -136,6 +160,8 @@
 | 3 | Feature importance is sorted for porting. | PASS / PARTIAL / FAIL | |
 | 4 | Known defects are referenced in the Defect Synthesis with porting recommendations (fix before porting / port differently / leave behind), or the section explicitly notes that no defect scan ran. | PASS / PARTIAL / FAIL | |
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
+| 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
+| 7 | The Source Index makes the bundle a self-contained compression boundary and identifies targeted deep-read triggers. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

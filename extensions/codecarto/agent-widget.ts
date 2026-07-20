@@ -213,6 +213,8 @@ function formatRunningStats(a: PhaseActivity): string {
 	if (a.toolUses > 0) parts.push(`${a.toolUses} tool use${a.toolUses === 1 ? "" : "s"}`);
 	const tokens = a.lifetimeUsage.input + a.lifetimeUsage.output;
 	if (tokens > 0) parts.push(formatTokens(tokens));
+	const compactions = a.compactions.successful + a.compactions.failed + a.compactions.aborted;
+	if (compactions > 0) parts.push(`${compactions} compact`);
 	parts.push(formatDuration(Date.now() - a.startedAt));
 	return parts.join(" · ");
 }
@@ -223,6 +225,8 @@ function formatFinishedStats(a: PhaseActivity): string {
 	if (a.toolUses > 0) parts.push(`${a.toolUses} tool use${a.toolUses === 1 ? "" : "s"}`);
 	const tokens = a.lifetimeUsage.input + a.lifetimeUsage.output;
 	if (tokens > 0) parts.push(formatTokens(tokens));
+	const compactions = a.compactions.successful + a.compactions.failed + a.compactions.aborted;
+	if (compactions > 0) parts.push(`${compactions} compact`);
 	const dur = a.completedAt ? a.completedAt - a.startedAt : 0;
 	if (dur > 0) parts.push(formatDuration(dur));
 	return parts.join(" · ");

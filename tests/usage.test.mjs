@@ -96,6 +96,41 @@ test("computePerPhaseTotals groups by phase ID", async () => {
 	}
 });
 
+test("compaction telemetry round-trips and aggregates without breaking legacy runs", async () => {
+	const { workspaceDir, cleanup } = await makeWorkspace();
+	try {
+		await appendUsageRun(workspaceDir, sampleRun());
+		await appendUsageRun(workspaceDir, sampleRun({
+			phase: "contracts",
+			compactions: {
+				successful: 2,
+				failed: 1,
+				aborted: 1,
+				reasons: { threshold: 2, overflow: 1, manual: 1 },
+			},
+		}));
+		const usage = await loadUsage(workspaceDir);
+		assert.equal(usage.runs[0].compactions, undefined, "legacy run stays valid without telemetry");
+		assert.deepEqual(usage.runs[1].compactions, {
+			successful: 2,
+			failed: 1,
+			aborted: 1,
+			reasons: { threshold: 2, overflow: 1, manual: 1 },
+		});
+		const totals = computeTotals(usage);
+		assert.equal(totals.compaction_runs, 1);
+		assert.deepEqual(totals.compactions, {
+			successful: 2,
+			failed: 1,
+			aborted: 1,
+			reasons: { threshold: 2, overflow: 1, manual: 1 },
+		});
+		assert.equal(computePerPhaseTotals(usage).get("contracts").compactions.successful, 2);
+	} finally {
+		await cleanup();
+	}
+});
+
 test("loadUsage falls back to empty file on malformed YAML", async () => {
 	const { workspaceDir, cleanup } = await makeWorkspace();
 	try {

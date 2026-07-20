@@ -34,6 +34,7 @@ phases:
       - Public surfaces are identified.
       - Runtime lifecycle, concurrency model, and porting priorities are summarized.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.
@@ -64,6 +65,7 @@ phases:
       - Contract ownership is mapped back to a layer or package.
       - A black-box acceptance list is included.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.
@@ -94,6 +96,7 @@ phases:
       - Persistent schema notes are documented.
       - Compatibility hazards are documented.
       - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Update workflow/status.yaml.

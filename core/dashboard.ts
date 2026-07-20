@@ -427,7 +427,8 @@ function renderPhaseLastRun(run: UsageRun | undefined): string {
 	const tokensTotal = formatRunTokens(run);
 	const sessionLink = run.session_file ? renderSafeLink(run.session_file, "transcript") : undefined;
 	const session = sessionLink ? `<dt>Session</dt><dd>${sessionLink}</dd>` : "";
-	return [`<div class="cc-phase-section">`, `<h3>Last run</h3>`, `<dl class="cc-run-meta">`, `<dt>Timestamp</dt><dd>${escapeHtml(run.timestamp)}</dd>`, `<dt>Status</dt><dd>${escapeHtml(run.status)}</dd>`, `<dt>Turns</dt><dd>${run.turn_count}</dd>`, `<dt>Tool uses</dt><dd>${run.tool_uses}</dd>`, `<dt>Tokens</dt><dd>${escapeHtml(tokensTotal)}</dd>`, `<dt>Duration</dt><dd>${escapeHtml(formatMillis(run.duration_ms))}</dd>`, session, `</dl>`, `</div>`].join("");
+	const compactions = run.compactions ? `<dt>Compactions</dt><dd>${formatCompactionCounts(run.compactions)}</dd>` : "";
+	return [`<div class="cc-phase-section">`, `<h3>Last run</h3>`, `<dl class="cc-run-meta">`, `<dt>Timestamp</dt><dd>${escapeHtml(run.timestamp)}</dd>`, `<dt>Status</dt><dd>${escapeHtml(run.status)}</dd>`, `<dt>Turns</dt><dd>${run.turn_count}</dd>`, `<dt>Tool uses</dt><dd>${run.tool_uses}</dd>`, `<dt>Tokens</dt><dd>${escapeHtml(tokensTotal)}</dd>`, `<dt>Duration</dt><dd>${escapeHtml(formatMillis(run.duration_ms))}</dd>`, compactions, session, `</dl>`, `</div>`].join("");
 }
 
 function renderUsagePanel(inputs: DashboardInputs): string {
@@ -441,10 +442,11 @@ function renderUsagePanel(inputs: DashboardInputs): string {
 		const t = perPhase.get(phaseId);
 		if (!t) {
 			const complete = status.phases[phaseId]?.status === "complete";
-			return `<tr class="${complete ? "cc-usage-missing" : ""}"><td><a href="#${phaseAnchor(phaseId)}">${escapeHtml(phaseId)}</a></td><td>0</td><td>—</td><td>—</td><td>—</td><td>${complete ? "usage not recorded" : "not run"}</td></tr>`;
+			return `<tr class="${complete ? "cc-usage-missing" : ""}"><td><a href="#${phaseAnchor(phaseId)}">${escapeHtml(phaseId)}</a></td><td>0</td><td>—</td><td>—</td><td>—</td><td>—</td><td>${complete ? "usage not recorded" : "not run"}</td></tr>`;
 		}
 		const tokensTotal = t.tokens.input + t.tokens.output;
-		return `<tr><td><a href="#${phaseAnchor(phaseId)}">${escapeHtml(phaseId)}</a></td><td>${t.runs}</td><td>${escapeHtml(tokenAccounting ? formatTokenCount(tokensTotal) : "unavailable")}</td><td>${renderUsageBar(t.tool_uses, maxTools, String(t.tool_uses))}</td><td>${renderUsageBar(t.duration_ms, maxDuration, formatMillis(t.duration_ms))}</td><td>${usagePhaseNote(phaseId, status)}</td></tr>`;
+		const compactions = t.compaction_runs > 0 ? formatCompactionTriplet(t.compactions) : "unavailable";
+		return `<tr><td><a href="#${phaseAnchor(phaseId)}">${escapeHtml(phaseId)}</a></td><td>${t.runs}</td><td>${escapeHtml(tokenAccounting ? formatTokenCount(tokensTotal) : "unavailable")}</td><td>${renderUsageBar(t.tool_uses, maxTools, String(t.tool_uses))}</td><td>${renderUsageBar(t.duration_ms, maxDuration, formatMillis(t.duration_ms))}</td><td>${compactions}</td><td>${usagePhaseNote(phaseId, status)}</td></tr>`;
 	}).join("");
 
 	return [
@@ -453,7 +455,7 @@ function renderUsagePanel(inputs: DashboardInputs): string {
 		usage.runs.length === 0 ? `<p class="cc-empty">No phase runs recorded yet.</p>` : `<dl class="cc-usage-totals">${renderUsageTotalsList(totals, tokenAccounting)}</dl>`,
 		renderUsageInsights(perPhase, status),
 		`<table class="cc-usage-table">`,
-		`<thead><tr><th>Phase</th><th>Runs</th><th>Tokens</th><th>Tools</th><th>Duration</th><th>State</th></tr></thead>`,
+		`<thead><tr><th>Phase</th><th>Runs</th><th>Tokens</th><th>Tools</th><th>Duration</th><th>Compactions</th><th>State</th></tr></thead>`,
 		`<tbody>${rows}</tbody>`,
 		`</table>`,
 		`</section>`,
@@ -466,7 +468,21 @@ function renderUsageTotalsList(totals: UsageTotals, tokenAccounting: boolean): s
 		? `${escapeHtml(formatTokenCount(totals.tokens.input))} / ${escapeHtml(formatTokenCount(totals.tokens.output))} / ${escapeHtml(formatTokenCount(totals.tokens.cache_write))}`
 		: `<span class="cc-muted">unavailable — host did not report token counts</span>`;
 	const tokenTotal = tokenAccounting ? escapeHtml(formatTokenCount(tokensTotal)) : `<span class="cc-muted">unavailable</span>`;
-	return [`<dt>Total runs</dt><dd>${totals.runs}</dd>`, `<dt>Tokens (in / out / cache)</dt><dd>${tokenDetail}</dd>`, `<dt>Total tokens</dt><dd>${tokenTotal}</dd>`, `<dt>Tool uses</dt><dd>${totals.tool_uses}</dd>`, `<dt>Total duration</dt><dd>${escapeHtml(formatMillis(totals.duration_ms))}</dd>`].join("");
+	const compactionCounts = totals.compaction_runs > 0 ? formatCompactionCounts(totals.compactions) : `<span class="cc-muted">unavailable — host did not report compaction events</span>`;
+	const compactionReasons = totals.compaction_runs > 0 ? `<dt>Reasons</dt><dd>${formatCompactionReasons(totals.compactions)}</dd>` : "";
+	return [`<dt>Total runs</dt><dd>${totals.runs}</dd>`, `<dt>Tokens (in / out / cache)</dt><dd>${tokenDetail}</dd>`, `<dt>Total tokens</dt><dd>${tokenTotal}</dd>`, `<dt>Tool uses</dt><dd>${totals.tool_uses}</dd>`, `<dt>Total duration</dt><dd>${escapeHtml(formatMillis(totals.duration_ms))}</dd>`, `<dt>Compactions</dt><dd>${compactionCounts}</dd>`, compactionReasons].join("");
+}
+
+function formatCompactionCounts(value: UsageTotals["compactions"]): string {
+	return `${value.successful} successful · ${value.failed} failed · ${value.aborted} aborted`;
+}
+
+function formatCompactionReasons(value: UsageTotals["compactions"]): string {
+	return `threshold ${value.reasons.threshold} · overflow ${value.reasons.overflow} · manual ${value.reasons.manual}`;
+}
+
+function formatCompactionTriplet(value: UsageTotals["compactions"]): string {
+	return `${value.successful} / ${value.failed} / ${value.aborted}`;
 }
 
 function renderUsageInsights(perPhase: Map<string, UsageTotals>, status: NormalizedStatus): string {

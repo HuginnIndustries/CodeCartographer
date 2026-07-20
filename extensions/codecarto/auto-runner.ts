@@ -132,6 +132,12 @@ export async function runSinglePhase(
 					activity.lifetimeUsage.output += usage.output;
 					activity.lifetimeUsage.cacheWrite += usage.cacheWrite;
 				},
+				onCompactionEnd: (event) => {
+					activity.compactions.reasons[event.reason]++;
+					if (event.aborted) activity.compactions.aborted++;
+					else if (event.successful) activity.compactions.successful++;
+					else activity.compactions.failed++;
+				},
 			},
 			{ sessionName: `CodeCartographer phase: ${phase.id}` },
 			options.signal,
@@ -155,6 +161,7 @@ export async function runSinglePhase(
 				turnCount: activity.turnCount,
 				toolUses: activity.toolUses,
 				tokens: activity.lifetimeUsage,
+				compactions: activity.compactions,
 				durationMs: (activity.completedAt ?? Date.now()) - activity.startedAt,
 				responseText: result.responseText,
 				sessionFile: result.sessionFile,
@@ -183,6 +190,7 @@ export async function runSinglePhase(
 				turnCount: activity.turnCount,
 				toolUses: activity.toolUses,
 				tokens: activity.lifetimeUsage,
+				compactions: activity.compactions,
 				durationMs: (activity.completedAt ?? Date.now()) - activity.startedAt,
 				responseText: "",
 				error: message,
@@ -569,6 +577,7 @@ async function recordUsage(
 				output: activity.lifetimeUsage.output,
 				cache_write: activity.lifetimeUsage.cacheWrite,
 			},
+			compactions: activity.compactions,
 			...(sessionFile ? { session_file: sessionFile } : {}),
 		});
 	} catch {

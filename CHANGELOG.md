@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Phase-aware Pi compaction for isolated CodeCartographer phase sessions, with atomic continuation checkpoints under `.codecarto/scratch/checkpoints/`.
+- Backward-compatible compaction telemetry in local usage records, `/codecarto-usage`, phase summaries, the live widget, and the dashboard.
+- Explicit `Coverage and limits` accounting in every phase template and completion rubric.
+- Pipeline invariant tests that pin coverage accounting and the porting bundle's role as the final synthesis compression boundary.
+
+### Changed
+
+- `reimplementation-spec` now reads the porting bundle by default and deep-reads lower-level findings only for named gaps, conflicts, missing acceptance detail, or defect rationale.
+- The porting bundle now includes a source index, targeted deep-read triggers, and explicit defect design consequences.
+
 ### Planned
 
 - Pi `/codecarto-publish` UX, dashboard library-state surfacing, and the

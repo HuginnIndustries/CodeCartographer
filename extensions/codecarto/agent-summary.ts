@@ -11,6 +11,7 @@ export interface PhaseSummaryInput {
 	turnCount: number;
 	toolUses: number;
 	tokens: { input: number; output: number; cacheWrite: number };
+	compactions?: { successful: number; failed: number; aborted: number };
 	durationMs: number;
 	responseText: string;
 	sessionFile?: string;
@@ -55,6 +56,13 @@ function formatStats(input: PhaseSummaryInput): string {
 	if (input.toolUses > 0) parts.push(`${input.toolUses} tool use${input.toolUses === 1 ? "" : "s"}`);
 	const totalTokens = input.tokens.input + input.tokens.output;
 	if (totalTokens > 0) parts.push(formatTokens(totalTokens));
+	const compact = input.compactions;
+	if (compact && compact.successful + compact.failed + compact.aborted > 0) {
+		const details = [`${compact.successful} compaction${compact.successful === 1 ? "" : "s"}`];
+		if (compact.failed > 0) details.push(`${compact.failed} failed`);
+		if (compact.aborted > 0) details.push(`${compact.aborted} aborted`);
+		parts.push(details.join(", "));
+	}
 	if (input.durationMs > 0) parts.push(formatDuration(input.durationMs));
 	return parts.length > 0 ? `_${parts.join(" · ")}_` : "_(no activity recorded)_";
 }

@@ -55,8 +55,9 @@ Read these files in order before doing any analysis:
 1. This `GUIDE.md` (you are here — `.codecarto/GUIDE.md`).
 2. `workflow/status.yaml` to see which phases are done and what is next.
 3. The current phase's existing output file, if one exists (to avoid repeating work).
-4. The current phase's `SKILL.md` for detailed instructions on what to analyze and produce.
-5. The output template from `templates/` for the current phase (if starting a new output).
+4. `scratch/checkpoints/<phase>.md`, if present, to resume durable in-phase progress after compaction or interruption.
+5. The current phase's `SKILL.md` for detailed instructions on what to analyze and produce.
+6. The output template from `templates/` for the current phase (if starting a new output).
 
 All paths in this guide are relative to `.codecarto/` unless stated otherwise.
 
@@ -81,7 +82,7 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Conventions (orchestrator-maintained) | `CONVENTIONS.md` | Cross-cutting patterns promoted to project-wide invariants. Implementing sessions propose; the orchestrator writes. |
 | Decisions (orchestrator-maintained, append-only) | `DECISIONS.md` | Numbered log of decisions that diverge from spec, prompt, or obvious-default. Appended at session close. |
 | Backlog (read-write) | `BACKLOG.md` | Deferred items with rationale. |
-| Scratch (read-write) | `scratch/*` | Disposable working notes. |
+| Scratch (read-write) | `scratch/*` | Working notes; `scratch/checkpoints/<phase>.md` is the durable in-phase continuation checkpoint until the phase validates. |
 
 If you are uncertain whether a file should be modified, treat it as read-only.
 
@@ -158,7 +159,13 @@ Before beginning a phase, estimate how much source material you need to read. Fo
 - Read structural files first (manifests, entrypoints, READMEs) from the repository root (`../`).
 - Use the architecture map to prioritize which packages to read in detail.
 - Defer deep reads until the current phase actually needs them.
+- For long phases, update `scratch/checkpoints/<phase>.md` after each major subsystem or output section. Pi writes a phase-aware checkpoint automatically after phase compaction; other hosts should use `templates/phase-checkpoint.md` manually.
+- Every primary output must include `Coverage and limits`: inspected scope, skipped scope, evidence basis, known blind spots, and a `COMPLETE` or `PARTIAL` disposition.
 - If you are running low on context, finish the current section, write a PARTIAL validation, and document what remains in `open_questions` (truly unknown) or `carry_forward` (deferred to a specific later phase) in status.yaml. See "Open Questions vs Carry-Forward" below.
+
+### Synthesis compression boundary
+
+The porting bundle is the intentional compression boundary before `reimplementation-spec`. Its Source Index must preserve load-bearing claims, defect dispositions, coverage gaps, and exact pointers for targeted deep reads. The final synthesis phase reads the bundle by default; it opens architecture, contracts, protocols, or defect reports only when the bundle names a gap or conflict, an acceptance scenario needs omitted detail, a claim needs stronger evidence, or a defect disposition needs its rationale. If the bundle cannot support that selective workflow, mark validation `PARTIAL` instead of loading every upstream report by habit.
 
 ### Subagent Delegation for Large Codebases
 

@@ -104,6 +104,14 @@
   logs, caches, databases, generated artifacts.
 -->
 
+## Coverage and limits
+
+- Inspected scope:
+- Skipped scope:
+- Evidence basis: source inspection | tests | runtime verification | upstream findings
+- Known blind spots:
+- Coverage disposition: COMPLETE | PARTIAL
+
 ## Open Questions
 
 <!-- Items that are still genuinely unknown — need a runtime test, maintainer decision, or spec ruling.
@@ -138,6 +146,7 @@
 | 3 | Public surfaces are identified. | PASS / PARTIAL / FAIL | |
 | 4 | Runtime lifecycle, concurrency model, and porting priorities are summarized. | PASS / PARTIAL / FAIL | |
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
+| 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

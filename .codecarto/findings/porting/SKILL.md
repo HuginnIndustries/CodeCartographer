@@ -7,6 +7,12 @@ description: Synthesize architecture, contracts, and protocol findings into a re
 
 This phase synthesizes the outputs of architecture, contracts, and protocols. If defect reports exist, also read and integrate them: `findings/defect-scan/defect-report.md` (full-with-audit pipeline) or both `findings/defect-scan-mechanical/mechanical-defects.md` and `findings/defect-scan-semantic/semantic-defects.md` (full-with-deep-audit pipeline). The pipeline ensures all required phases are complete before this one runs. Read the prior phase artifacts before starting.
 
+Treat the reverse-engineering bundle as the pipeline's intentional compression boundary. It must be self-sufficient enough for `reimplementation-spec` to start from this one artifact rather than loading every upstream report. Preserve compact source pointers instead of copying upstream prose:
+- Add a Source Index covering architecture, contracts, protocols/state, and defects when present.
+- Carry forward every load-bearing invariant, acceptance obligation, compatibility hazard, and defect disposition.
+- For omitted detail, name the canonical upstream section and the exact condition that should trigger a targeted deep read.
+- Surface conflicts and incomplete coverage explicitly; never hide them behind synthesis.
+
 The source code to analyze is in the parent directory (`../` relative to `.codecarto/`). This is the repository root.
 
 Keep four classes of findings separate throughout:
@@ -43,6 +49,7 @@ Use the output template at `templates/reverse-engineering-bundle.md`. Produce:
 - A protocol and state note set.
 - Portability hazards consolidated from all prior phases.
 - Observed facts separated from inferred structure.
+- A compact Source Index and explicit coverage gaps that let downstream synthesis deep-read selectively.
 
 Bias toward evidence over cleverness:
 - Prefer tests over assumptions.
