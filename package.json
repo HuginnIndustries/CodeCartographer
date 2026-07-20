@@ -43,7 +43,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "~0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.80.10",
     "@sinclair/typebox": "*"
   },
   "pi": {

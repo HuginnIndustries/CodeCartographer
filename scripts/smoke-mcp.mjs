@@ -71,10 +71,13 @@ async function setupFixture() {
 	);
 
 	console.error(`# installing ${INSTALL_LABEL} into ${pkgRoot}`);
+	const installEnv = { ...process.env, npm_config_loglevel: "error" };
+	delete installEnv.npm_config_allow_scripts;
+	delete installEnv.NPM_CONFIG_ALLOW_SCRIPTS;
 	await execFile(
 		"npm",
-		["install", "--no-audit", "--no-fund", "--prefix", pkgRoot, INSTALL_SPEC],
-		{ env: { ...process.env, npm_config_loglevel: "error" } },
+		["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", pkgRoot, INSTALL_SPEC],
+		{ env: installEnv },
 	);
 
 	const binPath = join(pkgRoot, "node_modules", ".bin", "codecarto-mcp");

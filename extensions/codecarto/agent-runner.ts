@@ -114,7 +114,6 @@ export async function runPhase(
 		agentDir,
 		sessionManager,
 		settingsManager: SettingsManager.create(cwd, agentDir),
-		modelRegistry: ctx.modelRegistry,
 		model: ctx.model,
 		tools: PHASE_TOOL_NAMES,
 		resourceLoader: loader,

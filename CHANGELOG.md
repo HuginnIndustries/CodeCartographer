@@ -15,6 +15,12 @@ All notable changes to this project are documented here. The format is based on 
 
 - `reimplementation-spec` now reads the porting bundle by default and deep-reads lower-level findings only for named gaps, conflicts, missing acceptance detail, or defect rationale.
 - The porting bundle now includes a source index, targeted deep-read triggers, and explicit defect design consequences.
+- Raised the Pi peer requirement to `^0.80.10`, migrated child-session construction to the current SDK, and refreshed transitive dependencies to patched Hono, Undici, and protobufjs releases.
+- Updated GitHub Actions to Node 24-native action releases and added a high-severity production dependency audit gate.
+
+### Fixed
+
+- Packed-package MCP smoke tests now ignore lifecycle scripts and sanitize inherited npm `allow-scripts` configuration.
 
 ### Planned
 
