@@ -4,11 +4,11 @@
 // atomic status-update primitive used by /codecarto-complete.
 
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireLock, normalizeStatus } from "./status.ts";
-import type { PipelineFile, StatusFile, WorkspaceState } from "./types.ts";
+import { acquireLock, applyHandoff, normalizeStatus, parseHandoff } from "./status.ts";
+import type { PhaseHandoff, PipelineFile, StatusFile, WorkspaceState } from "./types.ts";
 import { pathExists } from "./utils.ts";
 import { loadYamlFile, stringifySimpleYaml } from "./yaml.ts";
 
@@ -47,6 +47,22 @@ export const PACKAGE_VERSION: string = (() => {
 	}
 })();
 
+function assertCanonicalStatus(status: StatusFile): void {
+	if (status.schema_version !== 1) {
+		throw new Error(`Cannot write unsupported status schema_version ${String(status.schema_version)}.`);
+	}
+	if (!status.phases || typeof status.phases !== "object" || Array.isArray(status.phases)) {
+		throw new Error("Cannot write status: phases must be a mapping.");
+	}
+	for (const [phaseId, phase] of Object.entries(status.phases)) {
+		for (const field of ["owner_notes", "outputs_present", "open_questions", "carry_forward"] as const) {
+			if (!Array.isArray(phase?.[field])) {
+				throw new Error(`Cannot write status: phases.${phaseId}.${field} must be an array.`);
+			}
+		}
+	}
+}
+
 export async function getWorkspaceState(cwd: string): Promise<WorkspaceState | null> {
 	const workspaceDir = join(cwd, ".codecarto");
 	const statusPath = join(workspaceDir, "workflow", "status.yaml");
@@ -78,7 +94,7 @@ export async function getWorkspaceState(cwd: string): Promise<WorkspaceState | n
 
 export async function updateStatusAtomically(
 	cwd: string,
-	updater: (state: WorkspaceState) => Promise<{ state: WorkspaceState; threadLogEntry?: string }> | { state: WorkspaceState; threadLogEntry?: string },
+	updater: (state: WorkspaceState) => Promise<{ state: WorkspaceState; handoff?: PhaseHandoff; threadLogEntry?: string }> | { state: WorkspaceState; handoff?: PhaseHandoff; threadLogEntry?: string },
 ): Promise<WorkspaceState> {
 	const workspaceDir = join(cwd, ".codecarto");
 	const statusPath = join(workspaceDir, "workflow", "status.yaml");
@@ -93,6 +109,14 @@ export async function updateStatusAtomically(
 
 		const result = await updater(currentState);
 		const nextState = result.state;
+
+		// Apply handoff if provided
+		if (result.handoff) {
+			const handoff = parseHandoff(result.handoff);
+			applyHandoff(nextState.status, handoff);
+		}
+		assertCanonicalStatus(nextState.status);
+
 		const serialized = `${stringifySimpleYaml(nextState.status)}\n`;
 		const tempPath = `${statusPath}.${process.pid}.${Date.now()}.tmp`;
 		await writeFile(tempPath, serialized, "utf8");
@@ -100,7 +124,18 @@ export async function updateStatusAtomically(
 
 		if (result.threadLogEntry) {
 			const threadLogPath = join(workspaceDir, "THREAD_LOG.md");
-			await appendFile(threadLogPath, result.threadLogEntry, "utf8");
+			let currentLog = "";
+			try {
+				currentLog = await readFile(threadLogPath, "utf8");
+			} catch {
+				// File may not exist yet
+			}
+			const logEntries = currentLog.split(/\r?\n/).filter((line) => line.trim().startsWith("- "));
+			const normalizedEntry = result.threadLogEntry.trim();
+			const isDuplicate = logEntries.some((line) => line.trim() === normalizedEntry);
+			if (!isDuplicate) {
+				await appendFile(threadLogPath, result.threadLogEntry, "utf8");
+			}
 		}
 
 		return nextState;

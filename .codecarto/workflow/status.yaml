@@ -1,4 +1,5 @@
 project_name: ""
+schema_version: 1
 # source_location is defined in the active pipeline YAML. Do not duplicate it here.
 pipeline: workflow/pipeline-full-with-deep-audit.yaml
 # ^^^ To switch pipelines, change the line above AND adjust the phases below to match:

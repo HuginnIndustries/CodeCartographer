@@ -76,9 +76,10 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Templates (read-only) | `templates/*.md` | Read only. Never modify. |
 | Pipeline definitions (read-only) | `workflow/pipeline*.yaml`, `workflow/VALIDATE.md` | Read only. Never modify. |
 | Source code (read-only) | `../` (everything outside `.codecarto/`) | Read only. Analyze but never modify. |
-| Workflow state (read-write) | `workflow/status.yaml` | Update to track progress. |
+| Workflow state (framework-owned) | `workflow/status.yaml` | Read to understand progress. Implementing sessions never edit it directly; completion applies a validated phase handoff under a lock. |
 | Findings (read-write) | `findings/<phase>/<primary-output>.md`, secondary output files | Create and update during phases. |
-| Closeouts (read-write, append-only) | `closeouts/<date>-<phase-or-module>.md`, `THREAD_LOG.md` | Each session writes a new closeout file; `THREAD_LOG.md` is an INDEX pointing to closeouts. |
+| Phase handoff (read-write) | `scratch/handoffs/<phase>.yaml` | Implementing sessions propose state changes and closeout content here. The framework validates and applies them. |
+| Closeouts (framework-owned) | `closeouts/<date>-<phase-or-module>.md`, `THREAD_LOG.md` | Completion writes or updates one canonical closeout and one idempotent index entry. |
 | Conventions (orchestrator-maintained) | `CONVENTIONS.md` | Cross-cutting patterns promoted to project-wide invariants. Implementing sessions propose; the orchestrator writes. |
 | Decisions (orchestrator-maintained, append-only) | `DECISIONS.md` | Numbered log of decisions that diverge from spec, prompt, or obvious-default. Appended at session close. |
 | Backlog (read-write) | `BACKLOG.md` | Deferred items with rationale. |
@@ -161,7 +162,7 @@ Before beginning a phase, estimate how much source material you need to read. Fo
 - Defer deep reads until the current phase actually needs them.
 - For long phases, update `scratch/checkpoints/<phase>.md` after each major subsystem or output section. Pi writes a phase-aware checkpoint automatically after phase compaction; other hosts should use `templates/phase-checkpoint.md` manually.
 - Every primary output must include `Coverage and limits`: inspected scope, skipped scope, evidence basis, known blind spots, and a `COMPLETE` or `PARTIAL` disposition.
-- If you are running low on context, finish the current section, write a PARTIAL validation, and document what remains in `open_questions` (truly unknown) or `carry_forward` (deferred to a specific later phase) in status.yaml. See "Open Questions vs Carry-Forward" below.
+- If you are running low on context, finish the current section, write a PARTIAL validation, and document what remains in `open_questions` (truly unknown) or `carry_forward` (deferred to a specific later phase) in the phase handoff. See "Open Questions vs Carry-Forward" below.
 
 ### Synthesis compression boundary
 
@@ -194,7 +195,7 @@ carry_forward:
     deferred_reason: framing this as a defect requires the defect-scan rubric; flagged here so defect-scan picks it up.
 ```
 
-`kind` is one of: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`. The downstream phase scans `carry_forward` entries whose `target_phase` matches its own ID and either resolves them (deleting the entry) or re-defers (updating `target_phase`).
+`kind` is one of: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`. The downstream phase scans `carry_forward` entries whose `target_phase` matches its own ID and records resolved IDs in `carry_forward_closures`; completion removes those entries atomically.
 
 ## Phase Selection Logic
 
@@ -205,9 +206,9 @@ carry_forward:
 5. Load that phase's `skill_path` and all files listed in `required_reads`.
 6. Run the phase. Write output to `primary_output`.
 7. Run validation per `workflow/VALIDATE.md`. Append the validation block to the output.
-8. Enforce completion rules: the primary output file must exist with a PASS or PASS WITH GAPS validation block, status.yaml must reflect completion, and THREAD_LOG.md must have a handoff entry.
+8. Write `scratch/handoffs/<phase>.yaml`, then run completion. The framework verifies the primary output and validation, applies the handoff to `status.yaml`, and maintains the closeout and `THREAD_LOG.md` entry.
 
-**Parallel phase warning:** Some phases share the same `depends_on` and can run concurrently (e.g., `contracts` and `protocols` both depend only on `architecture`). If two sessions update `status.yaml` at the same time, the second write will overwrite the first. When running parallel phases, update `status.yaml` carefully — read the file immediately before writing, and preserve the status of any phase completed by a sibling session.
+**Parallel phases:** Some phases share the same `depends_on` and can run concurrently. Each session writes only its phase handoff; completion serializes canonical state changes with a filesystem lock so sibling phase state is preserved.
 
 ## Session Update Protocol
 
@@ -224,9 +225,9 @@ When a session starts:
 When a session finishes durable work:
 
 1. Run the validation step described in `workflow/VALIDATE.md`. Append a validation block to the output.
-2. Update `workflow/status.yaml` (the single source of truth for progress): mark the phase status as `complete`, advance `current_phase` to the next pending phase, and update both `open_questions` and `carry_forward`. When all phases in the pipeline are complete, set `current_phase` to `complete`.
-3. Record 2-3 key observations in `owner_notes` for the completed phase (e.g., row counts, notable decisions, scope of analysis).
-4. Write a per-session closeout file at `closeouts/<YYYY-MM-DD>-<phase-or-module>.md` using `templates/closeout-template.md`. Append a one-line index entry to `THREAD_LOG.md` pointing at it.
+2. Write `scratch/handoffs/<phase>.yaml` with `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, and `decisions`, plus `closeout_summary` and optional multiline `closeout_content`. Omitted arrays default to empty; malformed collection shapes fail completion.
+3. Record 2-3 key observations in the handoff's `owner_notes` (e.g., row counts, notable decisions, scope of analysis). Do not provide a canonical timestamp; the host clock owns timestamps.
+4. Run `/codecarto-complete` (or `codecarto_complete`). The framework atomically updates `workflow/status.yaml`, writes or updates one canonical closeout, and appends one idempotent `THREAD_LOG.md` entry. Do not edit those files directly.
 5. Store the durable output in the declared `findings/` path.
 6. If the session made cross-cutting decisions or discovered project-wide invariants, propose additions to `CONVENTIONS.md` (in the closeout's "Proposed Conventions" section) and `DECISIONS.md` (numbered entries in the closeout's "Decisions Beyond Prompt" section). The orchestrator promotes these to the canonical files.
 
@@ -243,9 +244,9 @@ This conversation produces inputs the synthesis phase actually needs (locked tar
 
 ## Guardrails
 
-These rules cannot be enforced by the template — they rely on the LLM following instructions. A future code-backed implementation should enforce them programmatically.
+These rules combine framework enforcement with explicit agent discipline:
 
-1. **Validation gate:** Never set a phase's status to `complete` in `status.yaml` if the validation block contains any FAIL result. Fix the output first, re-run validation, and only then mark complete. If the validation is PASS WITH GAPS, document the gaps in `open_questions` before marking complete.
+1. **Validation gate:** Completion refuses FAIL or MISSING validation. Fix the output first and re-run validation. If validation is PASS WITH GAPS, document the gaps in the handoff's `open_questions`.
 2. **Status recovery:** If `workflow/status.yaml` becomes malformed (bad YAML syntax, missing fields), do not guess at the intended state. Stop and ask the user to review the file. Compare against the phase outputs in `findings/` to reconstruct which phases are actually complete.
 3. **Output path verification:** After writing a phase's primary output, verify the file path matches the `primary_output` field in the active pipeline YAML. Do not write findings to a path that belongs to a different phase.
 
@@ -255,7 +256,7 @@ These rules cannot be enforced by the template — they rely on the LLM followin
 - Rough working notes go under `scratch/`.
 - The primary outputs are listed in the deliverables table above.
 - Secondary outputs are created only when needed, using `mode: append`.
-- Per-session closeouts go under `closeouts/<YYYY-MM-DD>-<phase-or-module>.md`. `THREAD_LOG.md` is an INDEX of one-line pointers to those closeouts, not the primary store.
+- Completion owns `closeouts/<YYYY-MM-DD>-<phase-or-module>.md` and `THREAD_LOG.md`; implementing sessions supply closeout content through their phase handoff.
 - Cross-cutting patterns go in `CONVENTIONS.md`; numbered cross-cutting decisions go in `DECISIONS.md`. Both are orchestrator-maintained — implementing sessions propose in their closeout, the orchestrator promotes.
 - Do not store durable findings only in `THREAD_LOG.md`. The log is an index, not the primary artifact store.
 
@@ -282,7 +283,8 @@ your-repo/
       state-and-storage/       # (Optional) Extracted durable state notes.
       build-and-deploy/        # (Optional) Build pipeline and packaging notes.
       config-model/            # (Optional) Configuration inheritance and env behavior.
-    scratch/                   # Disposable analysis notes.
+    scratch/                   # Disposable analysis notes plus framework handoffs/checkpoints.
+      handoffs/<phase>.yaml    # Structured state/closeout proposal consumed by completion.
     templates/                 # Output templates and log entry templates.
     skills/
       spec-delta-application/  # Post-pipeline skill: apply triaged spec deltas with citation discipline.

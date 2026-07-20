@@ -1,0 +1,17 @@
+# Phase handoff schema v1. Copy to scratch/handoffs/<phase-id>.yaml.
+# The framework owns canonical timestamps, status.yaml, closeouts, and THREAD_LOG.md.
+schema_version: 1
+phase_id: <phase-id>
+owner_notes: []
+open_questions: []
+carry_forward: []
+carry_forward_closures: []
+decisions: []
+closeout_summary: ""
+# Optional full closeout Markdown. YAML literal blocks are supported.
+closeout_content: |-
+  # Closeout — <phase-id>
+
+  ## Summary
+
+  -

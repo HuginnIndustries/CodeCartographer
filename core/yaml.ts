@@ -133,6 +133,30 @@ export function parseSimpleYaml(raw: string): unknown {
 			const key = trimmed.slice(0, separator).trim();
 			const rawValue = trimmed.slice(separator + 1).trim();
 			index++;
+			if (key in result) {
+				throw new Error(`Duplicate YAML key: ${key} near line: ${line.trim()}`);
+			}
+
+			if (rawValue === "|" || rawValue === "|-") {
+				const blockLines: string[] = [];
+				let contentIndent: number | null = null;
+				while (index < lines.length) {
+					const blockLine = lines[index] ?? "";
+					if (blockLine.trim() === "") {
+						blockLines.push("");
+						index++;
+						continue;
+					}
+					const blockIndent = countIndent(blockLine);
+					if (blockIndent <= indent) break;
+					contentIndent ??= blockIndent;
+					blockLines.push(blockLine.slice(Math.min(contentIndent, blockIndent)));
+					index++;
+				}
+				const content = blockLines.join("\n").replace(/\n+$/, "");
+				result[key] = rawValue === "|" ? `${content}\n` : content;
+				continue;
+			}
 
 			if (rawValue !== "") {
 				result[key] = parseYamlScalar(rawValue);
