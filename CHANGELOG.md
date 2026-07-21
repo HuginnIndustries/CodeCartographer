@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format is based on 
 
 - Phase completion now owns canonical `status.yaml`, closeout, and `THREAD_LOG.md` updates, uses host-generated timestamps, rejects malformed handoffs and duplicate YAML keys, and remains idempotent across retries.
 - Carry-forward targets are now limited to real downstream pipeline phases; optional spikes, amendments, deltas, decisions, and reruns live in a distinct `post_pipeline` backlog shown separately by status and the dashboard.
+- Open questions now support canonical IDs (auto-assigned if missing), cross-phase deduplication by ID, and `open_question_closures` to atomically remove resolved questions from all phases during completion.
 
 ### Planned
 

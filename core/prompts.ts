@@ -119,6 +119,7 @@ export async function buildPhasePrompt(
 	lines.push(`- For long phases, checkpoint resumable progress at .codecarto/scratch/checkpoints/${phase.id}.md; Pi writes this automatically after phase compaction.`);
 	lines.push("- Include a Coverage and limits section that names inspected scope, skipped scope, evidence basis, and blind spots; route material gaps through PARTIAL validation and open_questions/carry_forward.");
 	lines.push("- Use carry_forward only for a real downstream phase in the active pipeline. Put optional spikes, amendments, deltas, maintainer rulings, and opinionated reruns in the handoff's post_pipeline list.");
+	lines.push("- Give every open_question a stable id (e.g. q-loadconfig-ambiguity). If you omit it, the framework auto-assigns one. When a later phase resolves a question, list its id in open_question_closures to remove it from all phases.");
 	lines.push(`- On completion, write a phase handoff to .codecarto/scratch/handoffs/${phase.id}.yaml (see GUIDE.md). Do NOT directly edit workflow/status.yaml, append THREAD_LOG.md, or create a second closeout.`);
 
 	if (forced) {

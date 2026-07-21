@@ -114,6 +114,7 @@ export type PhaseHandoff = {
 	open_questions: OpenQuestionEntry[];
 	carry_forward: CarryForwardEntry[];
 	carry_forward_closures: string[]; // ids to remove from earlier phases
+	open_question_closures: string[]; // ids to resolve and remove from all phases
 	post_pipeline: PostPipelineEntry[];
 	decisions: string[];
 	closeout_content: string;

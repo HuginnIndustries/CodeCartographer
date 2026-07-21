@@ -58,6 +58,16 @@ export function ensureEntryArray<T extends OpenQuestionEntry>(value: unknown, al
 	return result;
 }
 
+function autoAssignIds(entries: OpenQuestionEntry[], prefix: string, phaseId: string): void {
+	let counter = 0;
+	for (const entry of entries) {
+		if (!entry.id || !entry.id.trim()) {
+			counter++;
+			entry.id = `${prefix}-${phaseId}-${counter}`;
+		}
+	}
+}
+
 export function ensurePostPipelineArray(value: unknown): PostPipelineEntry[] {
 	if (!Array.isArray(value)) return [];
 	const result: PostPipelineEntry[] = [];
@@ -163,18 +173,23 @@ export function parseHandoff(value: unknown): PhaseHandoff {
 	if (schemaVersion > 1) {
 		throw new Error(`Invalid handoff: unsupported schema_version ${schemaVersion}. Supported: 1.`);
 	}
-	for (const field of ["owner_notes", "open_questions", "carry_forward", "carry_forward_closures", "post_pipeline", "decisions"] as const) {
+	for (const field of ["owner_notes", "open_questions", "carry_forward", "carry_forward_closures", "open_question_closures", "post_pipeline", "decisions"] as const) {
 		if (raw[field] !== undefined && !Array.isArray(raw[field])) {
 			throw new Error(`Invalid handoff: ${field} must be an array`);
 		}
 	}
+	const openQuestions = ensureEntryArray<OpenQuestionEntry>(raw.open_questions, false);
+	const carryForward = ensureEntryArray<CarryForwardEntry>(raw.carry_forward, true);
+	autoAssignIds(openQuestions, "oq", raw.phase_id.trim());
+	autoAssignIds(carryForward, "cf", raw.phase_id.trim());
 	return {
 		phase_id: raw.phase_id.trim(),
 		timestamp: typeof raw.timestamp === "string" ? raw.timestamp.trim() : undefined,
 		owner_notes: ensureArray(raw.owner_notes),
-		open_questions: ensureEntryArray<OpenQuestionEntry>(raw.open_questions, false),
-		carry_forward: ensureEntryArray<CarryForwardEntry>(raw.carry_forward, true),
+		open_questions: openQuestions,
+		carry_forward: carryForward,
 		carry_forward_closures: ensureArray(raw.carry_forward_closures),
+		open_question_closures: ensureArray(raw.open_question_closures),
 		post_pipeline: ensurePostPipelineArray(raw.post_pipeline),
 		decisions: ensureArray(raw.decisions),
 		closeout_content: typeof raw.closeout_content === "string" ? raw.closeout_content : "",
@@ -200,18 +215,37 @@ export function applyHandoff(status: NormalizedStatus, handoff: PhaseHandoff): N
 		...handoff.owner_notes,
 	]);
 
-	// Merge open_questions: overwrite by id or append new
-	const oqMap = new Map<string, OpenQuestionEntry>();
+	// Merge open_questions: deduplicate by id across ALL phases, not just this one
+	// First, collect existing questions with the same id from other phases
+	const oqMap = new Map<string, { entry: OpenQuestionEntry; phase: string }>();
+	for (const [pid, ph] of Object.entries(status.phases)) {
+		for (const entry of ph.open_questions ?? []) {
+			const key = entry.id || entry.description || "";
+			if (key) oqMap.set(key, { entry, phase: pid });
+		}
+	}
+	// Remove existing entries with matching ids from their original phases
+	for (const entry of handoff.open_questions) {
+		const key = entry.id || entry.description || "";
+		if (key && oqMap.has(key)) {
+			const existing = oqMap.get(key)!;
+			if (existing.phase !== handoff.phase_id) {
+				status.phases[existing.phase].open_questions = status.phases[existing.phase].open_questions.filter((e) => (e.id || e.description || "") !== key);
+			}
+		}
+	}
+	// Now merge into the current phase: overwrite by id or append new
+	const localOqMap = new Map<string, OpenQuestionEntry>();
 	for (const entry of phase.open_questions) {
 		const key = entry.id || entry.description || "";
-		if (key) oqMap.set(key, entry);
+		if (key) localOqMap.set(key, entry);
 	}
 	for (const entry of handoff.open_questions) {
 		const key = entry.id || entry.description || "";
-		if (key) oqMap.set(key, entry);
+		if (key) localOqMap.set(key, entry);
 		else phase.open_questions.push(entry);
 	}
-	phase.open_questions = [...oqMap.values()];
+	phase.open_questions = [...localOqMap.values()];
 
 	// Merge carry_forward: overwrite by id or append new
 	const cfMap = new Map<string, CarryForwardEntry>();
@@ -231,6 +265,14 @@ export function applyHandoff(status: NormalizedStatus, handoff: PhaseHandoff): N
 		if (!closureId) continue;
 		for (const ph of Object.values(status.phases)) {
 			ph.carry_forward = ph.carry_forward.filter((entry) => entry.id !== closureId);
+		}
+	}
+
+	// Apply open_question_closures: remove resolved questions from ALL phases by id
+	for (const closureId of handoff.open_question_closures) {
+		if (!closureId) continue;
+		for (const ph of Object.values(status.phases)) {
+			ph.open_questions = ph.open_questions.filter((entry) => entry.id !== closureId);
 		}
 	}
 
