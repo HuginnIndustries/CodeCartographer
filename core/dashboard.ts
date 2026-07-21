@@ -540,7 +540,7 @@ function renderOpenQuestionsRollup(status: NormalizedStatus): string {
 	for (const [phaseId, phaseState] of Object.entries(status.phases)) {
 		const questions: string[] = [];
 		for (const q of phaseState.open_questions ?? []) {
-			const key = `${q.kind ?? ""}|${q.description ?? ""}|${q.deferred_reason ?? ""}`;
+			const key = q.id ?? `${q.kind ?? ""}|${q.description ?? ""}|${q.deferred_reason ?? ""}`;
 			if (seen.has(key)) continue;
 			seen.add(key);
 			const kind = String(q.kind ?? "unspecified");
