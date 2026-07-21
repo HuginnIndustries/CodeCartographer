@@ -49,6 +49,45 @@ export function parseConfirmedProposalEntries(markdown: string): string[] {
 	return parseConfirmedProposalSelections(markdown).map((selection) => selection.ref);
 }
 
+export function hasMeaningfulVisionContent(markdown: string): boolean {
+	let inHtmlComment = false;
+
+	for (const line of markdown.split(/\r?\n/)) {
+		const visibleSegments: string[] = [];
+		let cursor = 0;
+
+		while (cursor < line.length) {
+			if (inHtmlComment) {
+				const commentEnd = line.indexOf("-->", cursor);
+				if (commentEnd === -1) {
+					cursor = line.length;
+					continue;
+				}
+				inHtmlComment = false;
+				cursor = commentEnd + 3;
+				continue;
+			}
+
+			const commentStart = line.indexOf("<!--", cursor);
+			if (commentStart === -1) {
+				visibleSegments.push(line.slice(cursor));
+				break;
+			}
+			visibleSegments.push(line.slice(cursor, commentStart));
+			inHtmlComment = true;
+			cursor = commentStart + 4;
+		}
+
+		// Keep source segments separated so removing a comment cannot manufacture
+		// a new multi-character token from the characters on either side.
+		const visible = visibleSegments.join(" ").trim();
+		if (!visible || /^#+(?:\s|$)/.test(visible)) continue;
+		if (/[\p{L}\p{N}]/u.test(visible)) return true;
+	}
+
+	return false;
+}
+
 export function parseConfirmedProposalSelections(markdown: string): ConfirmedProposalSelection[] {
 	const confirmed: ConfirmedProposalSelection[] = [];
 	for (const rawLine of markdown.split(/\r?\n/)) {
@@ -78,11 +117,7 @@ export async function runPhasePreflight(
 			);
 		}
 		const rawVision = await readFile(visionPath, "utf8");
-		const meaningful = rawVision
-			.replace(/<!--[\s\S]*?-->/g, "")
-			.replace(/^\s*#+\s+.*$/gm, "")
-			.trim();
-		if (!meaningful) {
+		if (!hasMeaningfulVisionContent(rawVision)) {
 			throw new PhasePreflightError(
 				phase.id,
 				`the vision brief at .codecarto/${SYNTHESIS_VISION_INPUT_PATH} is still empty. Describe the audience, problem, and desired outcome, then retry.`,
