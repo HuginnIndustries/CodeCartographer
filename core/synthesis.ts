@@ -106,6 +106,11 @@ export async function runPhasePreflight(
 	phase: PipelinePhase,
 ): Promise<PhasePreflightResult> {
 	const checks = new Set(phase.preflight ?? []);
+	// Confirmed proposal rows are meaningful only when they can be resolved
+	// against the configured versioned library. Keep the stronger check
+	// self-contained instead of relying on every pipeline to co-declare its
+	// implementation dependency.
+	if (checks.has("requires-confirmed-proposal")) checks.add("requires-library");
 	const result: PhasePreflightResult = { libraryEntries: [], confirmedEntries: [], confirmedSelections: [] };
 
 	if (checks.has("requires-vision-input")) {
