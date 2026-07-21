@@ -14,3 +14,4 @@ export * from "./orchestrator-config.ts";
 export * from "./usage.ts";
 export * from "./dashboard.ts";
 export * from "./library.ts";
+export * from "./synthesis.ts";

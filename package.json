@@ -37,7 +37,8 @@
     "build": "tsc",
     "prepublishOnly": "npm run build",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.mjs",
-    "smoke": "node scripts/smoke-mcp.mjs"
+    "smoke": "node scripts/smoke-mcp.mjs",
+    "demo:synthesis": "npm run build && node scripts/create-synthesis-demo.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"

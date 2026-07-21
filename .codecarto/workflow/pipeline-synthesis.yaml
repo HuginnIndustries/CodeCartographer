@@ -1,0 +1,105 @@
+workflow_name: evidence-backed-project-synthesis
+workflow_version: 1
+workflow_goal: Combine a product vision with confirmed library specifications into a provenance-preserving implementation plan.
+source_location: ../
+validation_protocol: workflow/VALIDATE.md
+phase_order:
+  - vision-capture
+  - goal-synthesis-propose
+  - spec-merge
+  - goal-synthesis-finalize
+phases:
+  - id: vision-capture
+    purpose: Turn the user's product intent into a bounded, testable vision without prematurely selecting source specifications.
+    skill_path: findings/vision-capture/SKILL.md
+    output_template: templates/vision.md
+    depends_on: []
+    primary_output: findings/vision-capture/vision.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+    preflight:
+      - requires-vision-input
+    completion_criteria:
+      - The target audience, problem, outcomes, constraints, and non-goals are explicit.
+      - Success measures and acceptance scenarios are testable.
+      - Assumptions and unresolved decisions are separated from confirmed intent.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the canonical phase handoff; do not edit workflow state directly.
+  - id: goal-synthesis-propose
+    purpose: Shortlist library specifications against the vision and pause for explicit human confirmation.
+    skill_path: findings/goal-synthesis-propose/SKILL.md
+    output_template: templates/proposal.md
+    depends_on:
+      - vision-capture
+    primary_output: findings/goal-synthesis/proposal.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/vision-capture/vision.md
+    preflight:
+      - requires-library
+    completion_criteria:
+      - Candidate library entries are ranked against explicit vision needs.
+      - Inclusion benefits, likely conflicts, and missing capabilities are stated for every candidate.
+      - At least one entry is presented with an unchecked human-confirmation box.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+    handoff_requirements:
+      - Stop after writing the proposal; the user confirms selections by changing one or more [ ] boxes to [x].
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the canonical phase handoff; do not edit workflow state directly.
+  - id: spec-merge
+    purpose: Merge only the human-confirmed specifications into a normalized, conflict-explicit intermediate.
+    skill_path: findings/spec-merge/SKILL.md
+    output_template: templates/merged-spec.md
+    depends_on:
+      - goal-synthesis-propose
+    primary_output: findings/spec-merge/merged-spec.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/vision-capture/vision.md
+      - findings/goal-synthesis/proposal.md
+    preflight:
+      - requires-library
+      - requires-confirmed-proposal
+    completion_criteria:
+      - Only human-confirmed library entries are merged.
+      - Capabilities, invariants, constraints, and acceptance behavior are normalized by concept rather than copied by source structure.
+      - Conflicts, gaps, and chosen dispositions are explicit.
+      - Every load-bearing merged claim has a provenance reference.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the canonical phase handoff; do not edit workflow state directly.
+  - id: goal-synthesis-finalize
+    purpose: Transform the confirmed vision and merged specifications into an implementation-ready project plan with a provenance ledger.
+    skill_path: findings/goal-synthesis-finalize/SKILL.md
+    output_template: templates/project-plan.md
+    depends_on:
+      - spec-merge
+    primary_output: findings/goal-synthesis/project-plan.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/vision-capture/vision.md
+      - findings/goal-synthesis/proposal.md
+      - findings/spec-merge/merged-spec.md
+    preflight:
+      - requires-library
+      - requires-confirmed-proposal
+    completion_criteria:
+      - The plan defines coherent product scope, architecture, work packages, dependencies, and acceptance gates.
+      - Each load-bearing plan decision is traceable through the provenance ledger.
+      - Conflicts and unknowns remain visible with explicit dispositions.
+      - The implementation sequence identifies an executable first slice.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the canonical phase handoff; do not edit workflow state directly.

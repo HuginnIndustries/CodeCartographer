@@ -65,6 +65,7 @@ export type PipelinePhase = {
 	required_reads?: string[];
 	completion_criteria?: string[];
 	handoff_requirements?: string[];
+	preflight?: Array<"requires-vision-input" | "requires-library" | "requires-confirmed-proposal">;
 };
 
 export type PipelineFile = {

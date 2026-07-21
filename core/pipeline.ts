@@ -17,6 +17,7 @@ export const PIPELINE_ALIASES: Record<string, string> = {
 	"defect-scan": "workflow/pipeline-defect-scan.yaml",
 	lite: "workflow/pipeline-lite.yaml",
 	"architecture-only": "workflow/pipeline-architecture-only.yaml",
+	synthesis: "workflow/pipeline-synthesis.yaml",
 };
 
 export const DEFAULT_PIPELINE_PATH = "workflow/pipeline-full-with-deep-audit.yaml";
