@@ -35,6 +35,7 @@ import {
 	pathExists,
 	PACKAGE_VERSION,
 	PhasePreflightError,
+	type PhasePreflightResult,
 	PIPELINE_ALIASES,
 	publishEntry,
 	type PipelineFile,
@@ -382,8 +383,9 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
+			let preflight: PhasePreflightResult;
 			try {
-				await runPhasePreflight(state, phase);
+				preflight = await runPhasePreflight(state, phase);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				lastFeedbackLines = [message];
@@ -408,7 +410,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			// Fire-and-forget: keep the TUI responsive while the sub-agent works.
 			// runSinglePhase handles all side effects (steering message, notify,
 			// phase summary, recordUsage, dashboard regen, clearPhase linger).
-			void runSinglePhase(ctx, pi, state, phase, { llmSteerEnabled, signal: ctx.signal })
+			void runSinglePhase(ctx, pi, state, phase, { llmSteerEnabled, signal: ctx.signal, preflight })
 				.finally(() => {
 					// Refresh the status widget after the phase resolves so the
 					// "Open questions / Carry-forward / Next" lines reflect any
