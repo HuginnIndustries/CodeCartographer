@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-07-21
+
 ### Added
 
 - Four-phase forward synthesis workflow (`vision-capture` → `goal-synthesis-propose` → `spec-merge` → `goal-synthesis-finalize`) for turning a product vision and reusable library specs into an implementation-ready `project-plan.md`.
