@@ -133,6 +133,20 @@ test("spec merge preflight refuses a missing or unchecked proposal", async () =>
 	await assert.rejects(runPhasePreflight(state, phase), /no library entries are confirmed/);
 });
 
+test("confirmed proposal preflight implicitly initializes the library", async () => {
+	const proposalPath = join(workspace, ".codecarto", "findings", "goal-synthesis", "proposal.md");
+	await writeFile(proposalPath, "| [x] | `event-router` | v1 |\n", "utf8");
+	const phase = {
+		...resolvePhase(state, "spec-merge"),
+		preflight: ["requires-confirmed-proposal"],
+	};
+
+	const result = await runPhasePreflight(state, phase);
+	assert.equal(result.libraryPath, library);
+	assert.deepEqual(result.confirmedEntries, ["event-router"]);
+	assert.match(result.confirmedSelections[0].specPath, /event-router\/v1\/reimplementation-spec\.md$/);
+});
+
 test("checked proposal unlocks merge and finalization with confirmed refs in the prompt", async () => {
 	const proposalPath = join(workspace, ".codecarto", "findings", "goal-synthesis", "proposal.md");
 	await writeFile(proposalPath, "| [x] | `event-router` | v1 |\n", "utf8");
