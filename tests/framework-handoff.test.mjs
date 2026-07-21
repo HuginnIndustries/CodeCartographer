@@ -385,7 +385,18 @@ test("MCP and Pi completion surfaces both delegate to framework-owned handoff co
 			const state = await getWorkspaceState(cwd);
 			assert.ok(state.status.phases.architecture.owner_notes.includes(`${surface}-handoff`));
 		} finally {
-			await rm(cwd, { recursive: true, force: true });
+			for (let attempt = 0; attempt < 3; attempt++) {
+				try {
+					await rm(cwd, { recursive: true, force: true });
+					break;
+				} catch (err) {
+					if (err.code === "ENOTEMPTY" && attempt < 2) {
+						await new Promise((resolve) => setTimeout(resolve, 100));
+						continue;
+					}
+					throw err;
+				}
+			}
 		}
 	}
 });
