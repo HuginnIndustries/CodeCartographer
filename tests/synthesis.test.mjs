@@ -10,6 +10,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const {
 	buildPhasePrompt,
 	getWorkspaceState,
+	hasMeaningfulVisionContent,
 	parseConfirmedProposalEntries,
 	publishEntry,
 	resolvePhase,
@@ -82,6 +83,23 @@ test("vision capture refuses the placeholder brief and includes a completed brie
 	const prompt = await buildPhasePrompt(state, phase, false);
 	assert.match(prompt, /\.codecarto\/inputs\/vision\.md/);
 	assert.match(prompt, /raw product brief/);
+});
+
+test("vision content detection cannot be bypassed by HTML comment delimiters", () => {
+	for (const emptyVision of [
+		"# Vision\n\n<!-- placeholder -->\n",
+		"# Vision\n\n<!-- first --><!-- second -->\n",
+		"# Vision\n\n<!-- unclosed placeholder\nignored text\n",
+		"# Vision\n\n<!<!-- placeholder -->--\n",
+		"# Vision\n\n<!-- outer <!-- nested marker -->\n",
+	]) {
+		assert.equal(hasMeaningfulVisionContent(emptyVision), false);
+	}
+
+	assert.equal(
+		hasMeaningfulVisionContent("# Vision\n\n<!-- audience --> Platform engineers need an auditable plan.\n"),
+		true,
+	);
 });
 
 test("proposal prompt exposes read-only library provenance", async () => {
