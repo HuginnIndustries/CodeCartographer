@@ -2,7 +2,7 @@ import { appendFile, copyFile, mkdir, readFile, readdir, writeFile } from "node:
 import { join } from "node:path";
 
 import { getNextEligiblePhase, resolvePhase } from "./pipeline.ts";
-import { applyHandoff, loadHandoffFile, normalizeStatus } from "./status.ts";
+import { applyHandoff, autoAssignIds, loadHandoffFile, normalizeStatus } from "./status.ts";
 import type { OpenQuestionEntry, PhaseHandoff, ValidationResult, WorkspaceState } from "./types.ts";
 import { dateOnly, pathExists, uniqueStrings } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
@@ -107,6 +107,7 @@ export async function completeValidatedPhase(
 				description: row.criterion || "Partial validation gap",
 				deferred_reason: row.evidence || "Marked PARTIAL by validation",
 			}));
+		autoAssignIds(gapEntries, "oq", validation.phaseId);
 		const mergedOpenQuestions = [...existingPhase.open_questions];
 		for (const candidate of gapEntries) {
 			if (!mergedOpenQuestions.some((entry) => entry.description === candidate.description && entry.deferred_reason === candidate.deferred_reason)) {

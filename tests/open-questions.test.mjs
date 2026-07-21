@@ -179,3 +179,45 @@ test("dashboard rollup deduplicates open questions by canonical id across phases
 		assert.match(html, /shared question updated by contracts/);
 	} finally { await rm(cwd, { recursive: true, force: true }); }
 });
+
+test("autoAssignIds avoids collisions with explicit ids in the same handoff", async () => {
+	const handoff = core.parseHandoff({
+		phase_id: "architecture",
+		open_questions: [
+			{ id: "oq-architecture-1", description: "explicit with the auto-assigned slot" },
+			{ description: "missing id should not collide" },
+		],
+	});
+	assert.equal(handoff.open_questions[0].id, "oq-architecture-1");
+	assert.equal(handoff.open_questions[1].id, "oq-architecture-2");
+	assert.notEqual(handoff.open_questions[0].id, handoff.open_questions[1].id);
+});
+
+test("PARTIAL validation gaps receive canonical IDs so open_question_closures can reach them", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "cc-oq-"));
+	try {
+		await initWorkspace(cwd);
+		const dir = join(cwd, ".codecarto", "scratch", "handoffs");
+		await mkdir(dir, { recursive: true });
+
+		const partialValidation = {
+			phaseId: "architecture",
+			primaryOutput: "findings/architecture/architecture-map.md",
+			outputPath: "",
+			exists: true,
+			hasValidationBlock: true,
+			overall: "PASS WITH GAPS",
+			rows: [{ criterion: "Coverage complete", result: "PASS", evidence: "all files" }, { criterion: "Edge cases documented", result: "PARTIAL", evidence: "some edges missing" }],
+			gaps: ["some edges missing"],
+			errors: [],
+		};
+		await writeFile(join(dir, "architecture.yaml"), "phase_id: architecture\ncloseout_summary: done\n", "utf8");
+		await core.completeValidatedPhase(cwd, partialValidation, "test");
+
+		const state = await core.getWorkspaceState(cwd);
+		const gapQuestions = state.status.phases.architecture.open_questions.filter((q) => q.description?.includes("Edge cases"));
+		assert.equal(gapQuestions.length, 1);
+		assert.ok(gapQuestions[0].id, "gap question must have an auto-assigned id");
+		assert.match(gapQuestions[0].id, /^oq-architecture-/);
+	} finally { await rm(cwd, { recursive: true, force: true }); }
+});

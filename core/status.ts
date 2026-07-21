@@ -58,12 +58,19 @@ export function ensureEntryArray<T extends OpenQuestionEntry>(value: unknown, al
 	return result;
 }
 
-function autoAssignIds(entries: OpenQuestionEntry[], prefix: string, phaseId: string): void {
+export function autoAssignIds(entries: OpenQuestionEntry[], prefix: string, phaseId: string): void {
+	const existingIds = new Set(entries.map((e) => e.id).filter(Boolean));
 	let counter = 0;
 	for (const entry of entries) {
 		if (!entry.id || !entry.id.trim()) {
 			counter++;
-			entry.id = `${prefix}-${phaseId}-${counter}`;
+			let candidate = `${prefix}-${phaseId}-${counter}`;
+			while (existingIds.has(candidate)) {
+				counter++;
+				candidate = `${prefix}-${phaseId}-${counter}`;
+			}
+			existingIds.add(candidate);
+			entry.id = candidate;
 		}
 	}
 }
