@@ -32,8 +32,11 @@
 | **HTML dashboard** — single-file aggregate of progress, links, usage, narrative | `.codecarto/dashboard.html` |
 | **Per-phase token tracking** | `/codecarto-usage` |
 | **Opt-in LLM steering** of the next phase's seed prompt | `/codecarto-next --llm-steer` |
+| **Forward synthesis** — vision + confirmed library specs → provenance-backed project plan | `pipeline-synthesis.yaml` |
 
-> **Forward-flow synthesis is underway.** v0.9.0 adds the experimental library foundation and MCP publish/list/reindex tools for accumulating `reimplementation-spec.md` artifacts in a git-trackable library. The Pi publish UX and synthesis pipeline that turns selected library entries plus a vision into `project-plan.md` are still in progress. See [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md) for the implementation tracker.
+> **Forward-flow synthesis is available on the development branch.** Publish completed reimplementation specs from Pi or MCP, then run the `synthesis` pipeline to turn a product vision and explicitly confirmed library entries into a conflict-aware `project-plan.md` with a decision-level provenance ledger.
+
+OpenAI Build Week reviewers: see the [new-vs-existing scope and one-command demo](docs/build-week-2026.md).
 
 ---
 
@@ -93,7 +96,47 @@ cp -r /path/to/CodeCartographer/.codecarto /path/to/your-repo/
 
 Then in the LLM session: `Read .codecarto/GUIDE.md and begin the analysis.`
 
-> **Limitation.** Drop-in mode runs the analysis pipeline fully, but library + synthesis workflows require executable code. Publishing and reading library entries are currently available through the MCP server; Pi publish UX and project-plan synthesis are still in progress. See [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md) for the planned scope.
+> **Limitation.** Drop-in mode runs the analysis pipeline fully, but library + synthesis workflows require executable code through Pi or MCP.
+
+---
+
+## Forward synthesis quickstart
+
+Analysis turns repositories into reusable specifications. Synthesis runs the other direction: it combines a raw product vision with human-confirmed specifications and produces an implementation-ready plan without losing provenance.
+
+1. Configure the library that contains specs published with `/codecarto-publish` or the MCP `codecarto_publish` tool:
+
+   ```yaml
+   # ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml
+   library:
+     path: /absolute/path/to/codecarto-library
+     namespace: your-namespace # omit for a single-tenant library
+     publish_confirm: true
+   ```
+
+2. Initialize a clean planning workspace and fill in its brief:
+
+   ```text
+   /codecarto-init synthesis
+   ```
+
+   Edit `.codecarto/inputs/vision.md` with the audience, problem, desired outcome, constraints, and non-goals.
+
+3. Run until CodeCartographer creates the candidate proposal:
+
+   ```text
+   /codecarto-next --auto
+   ```
+
+   The run intentionally stops before merging. Review `.codecarto/findings/goal-synthesis/proposal.md` and change one or more candidate boxes from `[ ]` to `[x]`.
+
+4. Resume:
+
+   ```text
+   /codecarto-next --auto
+   ```
+
+The final `.codecarto/findings/goal-synthesis/project-plan.md` contains product scope, architecture, work packages, acceptance gates, an unresolved-conflict register, and a provenance ledger mapping every load-bearing decision back to the vision or a confirmed specification. Runtime preflight checks prevent merging or finalization before explicit human confirmation.
 
 ---
 
@@ -175,6 +218,7 @@ The default is a 7-phase run that splits the defect scan into a mechanical early
 | **Defect scan** | 2 | Maintenance audit to surface latent problems |
 | **Lite** | 3 | You need to understand behavior without porting plans |
 | **Architecture only** | 1 | Quick structural overview |
+| **Synthesis** | 4 | Turn a product vision and confirmed library specifications into a provenance-backed implementation plan |
 
 Set the active pipeline by editing `workflow/status.yaml`'s `pipeline:` field, or pass it as the argument to `/codecarto-init`.
 
@@ -188,6 +232,7 @@ Set the active pipeline by editing `workflow/status.yaml`'s `pipeline:` field, o
 | Defect scan | `workflow/pipeline-defect-scan.yaml` |
 | Lite | `workflow/pipeline-lite.yaml` |
 | Architecture only | `workflow/pipeline-architecture-only.yaml` |
+| Synthesis | `workflow/pipeline-synthesis.yaml` |
 
 ---
 

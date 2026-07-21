@@ -32,6 +32,8 @@ import {
 	getWorkspaceState,
 	loadCodecartoConfig,
 	PACKAGE_VERSION,
+	PhasePreflightError,
+	runPhasePreflight,
 	type PipelinePhase,
 	type UsageRunStatus,
 	type ValidationOverall,
@@ -331,6 +333,17 @@ export async function runAuto(
 			return finish({
 				outcome: "complete",
 				reason: "Pipeline complete.",
+			});
+		}
+
+		try {
+			await runPhasePreflight(state, phase);
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			return finish({
+				outcome: "stopped",
+				reason: message,
+				stoppedAt: { phaseId: phase.id, error: err instanceof PhasePreflightError ? undefined : message },
 			});
 		}
 

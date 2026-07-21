@@ -52,6 +52,7 @@ import {
 	PACKAGE_VERSION,
 	packagedWorkspaceDir,
 	pathExists,
+	PhasePreflightError,
 	PIPELINE_ALIASES,
 	type PipelineFile,
 	publishEntry,
@@ -99,6 +100,21 @@ function textResult(text: string, structured?: Record<string, unknown>) {
 	};
 	if (structured) result.structuredContent = structured;
 	return result;
+}
+
+async function buildMcpPhasePrompt(
+	state: WorkspaceState,
+	phase: PipelineFile["phases"][number],
+	forced: boolean,
+): Promise<string> {
+	try {
+		return await buildPhasePrompt(state, phase, forced);
+	} catch (error) {
+		if (error instanceof PhasePreflightError) {
+			throw new McpError(ErrorCode.InvalidRequest, error.message);
+		}
+		throw error;
+	}
 }
 
 // ---------- handlers ----------
@@ -214,7 +230,7 @@ export async function handleNext(args: { cwd: string }) {
 			complete: true,
 		});
 	}
-	const prompt = await buildPhasePrompt(state, phase, false);
+	const prompt = await buildMcpPhasePrompt(state, phase, false);
 	return textResult(prompt, { phase: phase.id, forced: false });
 }
 
@@ -228,7 +244,7 @@ export async function handlePhase(args: { cwd: string; phase: string }) {
 	if (!phase) {
 		throw new McpError(ErrorCode.InvalidParams, `Unknown phase: ${args.phase}`);
 	}
-	const prompt = await buildPhasePrompt(state, phase, true);
+	const prompt = await buildMcpPhasePrompt(state, phase, true);
 	return textResult(prompt, { phase: phase.id, forced: true });
 }
 

@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- Four-phase forward synthesis workflow (`vision-capture` → `goal-synthesis-propose` → `spec-merge` → `goal-synthesis-finalize`) for turning a product vision and reusable library specs into an implementation-ready `project-plan.md`.
+- Runtime preflight gates shared by Pi and MCP: synthesis requires a completed vision brief and a valid non-empty library, while merge and finalization refuse to start until a user explicitly checks at least one proposal entry.
+- Provenance ledger, conflict register, normalized merge artifact, synthesis templates, phase skills, and cross-surface regression tests.
 - Structured per-phase handoffs under `.codecarto/scratch/handoffs/` for owner notes, questions, routed work, closure IDs, decisions, and closeout content.
 - Status schema versioning with migration for v0.11 workspaces and rejection of unsupported future schemas.
 
@@ -17,12 +20,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Planned
 
-- Pi `/codecarto-publish` UX, dashboard library-state surfacing, and the
-  `library_path` tool-write allow-list.
-- Synthesis pipeline phases for turning selected library entries plus a
-  user vision into a `project-plan.md`.
-- `pipeline-spec-mutate.yaml` for applying deltas to an existing spec and
-  republishing it as a new library version.
+- Dashboard library-state surfacing.
+- `pipeline-spec-mutate.yaml` for applying deltas to an existing spec and republishing it as a new library version.
 
 ## [0.11.0] — 2026-07-20
 

@@ -34,11 +34,13 @@ import {
 	packagedWorkspaceDir,
 	pathExists,
 	PACKAGE_VERSION,
+	PhasePreflightError,
 	PIPELINE_ALIASES,
 	publishEntry,
 	type PipelineFile,
 	resolvePhase,
 	resolvePipelineChoice,
+	runPhasePreflight,
 	type StatusFile,
 	stringifySimpleYaml,
 	validatePhaseOutput,
@@ -380,6 +382,16 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
+			try {
+				await runPhasePreflight(state, phase);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				lastFeedbackLines = [message];
+				setUiState(ctx, state, lastFeedbackLines);
+				ctx.ui.notify(message, error instanceof PhasePreflightError ? "warning" : "error");
+				return;
+			}
+
 			// Reject re-entry: don't spawn a duplicate runner for a phase that's
 			// already in flight from a previous /codecarto-next invocation.
 			if (isPhaseRunning(phase.id)) {
@@ -424,7 +436,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const prompt = await buildPhasePrompt(state, phase, true);
+			let prompt: string;
+			try {
+				prompt = await buildPhasePrompt(state, phase, true);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(message, error instanceof PhasePreflightError ? "warning" : "error");
+				return;
+			}
 			if (ctx.isIdle()) {
 				pi.sendUserMessage(prompt);
 			} else {

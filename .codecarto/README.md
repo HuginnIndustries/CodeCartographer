@@ -36,4 +36,7 @@ pipeline: workflow/pipeline.yaml                       # 5-phase without defect 
 pipeline: workflow/pipeline-defect-scan.yaml           # 2-phase defect audit — remove contracts through reimplementation-spec
 pipeline: workflow/pipeline-lite.yaml                  # 3-phase understanding — remove defect-scan phases, porting, and reimplementation-spec
 pipeline: workflow/pipeline-architecture-only.yaml     # 1-phase quick overview — keep only architecture
+pipeline: workflow/pipeline-synthesis.yaml             # 4-phase forward synthesis — vision + confirmed library specs → project plan (Pi/MCP only)
 ```
+
+The synthesis pipeline is different from the analysis variants: it requires Pi or MCP, a configured non-empty CodeCartographer library, and a completed `inputs/vision.md`. It pauses after proposing candidate specs and will not merge or finalize until the user changes at least one proposal checkbox from `[ ]` to `[x]`.

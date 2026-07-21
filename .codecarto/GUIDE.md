@@ -6,6 +6,8 @@ This is a structured reverse-engineering workspace embedded inside a repository.
 
 All CodeCartographer files live inside this `.codecarto/` folder. The source code is everything outside it.
 
+**Synthesis exception.** When `workflow/status.yaml` selects `workflow/pipeline-synthesis.yaml`, this workspace is planning a new product rather than reverse-engineering the surrounding repository. Use `inputs/vision.md` and the read-only library paths supplied by the executable host. Do not treat the parent directory as source evidence for synthesis.
+
 Work in explicit phases. Do not try to do everything at once.
 
 ## Roles
@@ -76,6 +78,7 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Templates (read-only) | `templates/*.md` | Read only. Never modify. |
 | Pipeline definitions (read-only) | `workflow/pipeline*.yaml`, `workflow/VALIDATE.md` | Read only. Never modify. |
 | Source code (read-only) | `../` (everything outside `.codecarto/`) | Read only. Analyze but never modify. |
+| Synthesis input (user-maintained) | `inputs/vision.md` | The user fills this before the synthesis pipeline starts. Implementing phases read it but do not rewrite the raw brief. |
 | Workflow state (framework-owned) | `workflow/status.yaml` | Read to understand progress. Implementing sessions never edit it directly; completion applies a validated phase handoff under a lock. |
 | Findings (read-write) | `findings/<phase>/<primary-output>.md`, secondary output files | Create and update during phases. |
 | Phase handoff (read-write) | `scratch/handoffs/<phase>.yaml` | Implementing sessions propose state changes and closeout content here. The framework validates and applies them. |
@@ -89,7 +92,7 @@ If you are uncertain whether a file should be modified, treat it as read-only.
 
 ## Pipeline Selection
 
-Six pipeline variants are available. Check the `pipeline` field in `workflow/status.yaml` to see which is active.
+Seven pipeline variants are available. Check the `pipeline` field in `workflow/status.yaml` to see which is active.
 
 - If the field is **empty**, ask the user which scope to use.
 - If the field points to a **file that does not exist**, stop and ask the user to correct it. Do not guess or fall back to the default pipeline.
@@ -102,6 +105,7 @@ Six pipeline variants are available. Check the `pipeline` field in `workflow/sta
 | Defect scan | `workflow/pipeline-defect-scan.yaml` | architecture → defect-scan | Maintenance audit to surface latent problems |
 | Lite | `workflow/pipeline-lite.yaml` | architecture → contracts → protocols | Understanding behavior without porting plans |
 | Architecture only | `workflow/pipeline-architecture-only.yaml` | architecture | Quick structural overview |
+| Synthesis | `workflow/pipeline-synthesis.yaml` | vision-capture → goal-synthesis-propose → spec-merge → goal-synthesis-finalize | Convert a user vision and explicitly confirmed library specs into a provenance-backed project plan; requires Pi or MCP |
 
 ## Evaluation Objective
 
@@ -120,6 +124,9 @@ Produce a reusable evaluation bundle for the repository. The bundle has two purp
 | Protocols and state | `findings/protocols/protocols-and-state.md` |
 | Reverse-engineering bundle | `findings/porting/reverse-engineering-bundle.md` |
 | Reimplementation spec | `findings/reimplementation-spec/reimplementation-spec.md` |
+| Synthesis proposal | `findings/goal-synthesis/proposal.md` |
+| Merged specification | `findings/spec-merge/merged-spec.md` |
+| Evidence-backed project plan | `findings/goal-synthesis/project-plan.md` |
 
 Not all deliverables apply to every pipeline variant. Check your active pipeline YAML for which phases and outputs are included.
 
@@ -301,6 +308,7 @@ your-repo/
       pipeline-defect-scan.yaml           # 2-phase (architecture + defect scan).
       pipeline-lite.yaml                  # 3-phase (no porting or reimpl).
       pipeline-architecture-only.yaml     # 1-phase (architecture only).
+      pipeline-synthesis.yaml             # 4-phase forward synthesis (Pi/MCP only).
       status.yaml              # Per-project progress. Single source of truth.
       VALIDATE.md              # Validation protocol. Run after every phase.
     closeouts/                 # Per-session closeout files (replaces monolithic THREAD_LOG body).
