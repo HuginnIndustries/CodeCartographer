@@ -72,6 +72,19 @@ export async function completeValidatedPhase(
 	if (handoff && handoff.phase_id !== validation.phaseId) {
 		throw new Error(`Invalid handoff: phase_id ${handoff.phase_id} does not match ${validation.phaseId}`);
 	}
+	if (handoff) {
+		const activePhases = new Set(initialState.pipeline.phase_order);
+		const sourceIndex = initialState.pipeline.phase_order.indexOf(validation.phaseId);
+		for (const entry of handoff.carry_forward) {
+			const targetIndex = entry.target_phase ? initialState.pipeline.phase_order.indexOf(entry.target_phase) : -1;
+			if (!entry.target_phase || !activePhases.has(entry.target_phase) || targetIndex <= sourceIndex) {
+				throw new Error(`Invalid handoff: carry_forward target_phase ${entry.target_phase ?? "(missing)"} is not a downstream active pipeline phase; use post_pipeline for work after the pipeline`);
+			}
+		}
+		for (const entry of handoff.post_pipeline) {
+			if (!entry.id?.trim()) throw new Error("Invalid handoff: post_pipeline entries require a canonical id");
+		}
+	}
 
 	const completionTimestamp = new Date().toISOString();
 	let closeoutPath: string | undefined;

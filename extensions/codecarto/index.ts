@@ -64,17 +64,20 @@ function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): str
 	const currentPhase = nextPhase?.id ?? state.status.current_phase ?? "complete";
 	const pipelineLabel = getPipelineLabel(state.status.pipeline);
 	const completedCount = state.pipeline.phase_order.filter((phaseId) => state.status.phases[phaseId]?.status === "complete").length;
-	const currentOpenQuestions = currentPhase === "complete" ? 0 : state.status.phases[currentPhase]?.open_questions.length ?? 0;
+	const terminalOpenQuestions = Object.values(state.status.phases).reduce((sum, phase) => sum + (phase.open_questions?.length ?? 0), 0);
 	const totalCarryForward = Object.values(state.status.phases).reduce((sum, phase) => sum + (phase.carry_forward?.length ?? 0), 0);
+	const postPipelinePending = state.status.post_pipeline.filter((entry) => entry.status !== "resolved").length;
 	const nextAction = state.status.next_actions[0] ?? (nextPhase ? `Next: ${nextPhase.id}` : "All phases complete.");
 
 	const lines = [
 		"CodeCartographer",
 		`Phase: ${currentPhase}`,
+		`Pipeline state: ${currentPhase === "complete" ? "complete" : "in progress"}`,
 		`Pipeline: ${pipelineLabel}`,
 		`Progress: ${completedCount}/${state.pipeline.phase_order.length} complete`,
-		`Open questions: ${currentOpenQuestions}`,
-		`Carry-forward: ${totalCarryForward}`,
+		`Open questions (terminal unresolved): ${terminalOpenQuestions}`,
+		`Carry-forward (pipeline phases): ${totalCarryForward}`,
+		`Post-pipeline work: ${postPipelinePending} pending`,
 		`Next: ${nextAction}`,
 	];
 

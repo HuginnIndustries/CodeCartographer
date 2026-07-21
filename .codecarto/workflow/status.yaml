@@ -63,3 +63,4 @@ phases:
     carry_forward: []
 next_actions:
   - Begin architecture phase by reading the repository and producing findings/architecture/architecture-map.md
+post_pipeline: []

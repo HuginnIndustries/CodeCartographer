@@ -7,6 +7,7 @@ import type {
 	CarryForwardEntry,
 	NormalizedStatus,
 	OpenQuestionEntry,
+	PostPipelineEntry,
 	PhaseHandoff,
 	PipelineFile,
 	PipelinePhase,
@@ -57,6 +58,22 @@ export function ensureEntryArray<T extends OpenQuestionEntry>(value: unknown, al
 	return result;
 }
 
+export function ensurePostPipelineArray(value: unknown): PostPipelineEntry[] {
+	if (!Array.isArray(value)) return [];
+	const result: PostPipelineEntry[] = [];
+	for (const item of value) {
+		const base = coerceEntry(item, false);
+		if (!base) continue;
+		const raw = typeof item === "object" && item && !Array.isArray(item) ? item as Record<string, unknown> : {};
+		result.push({
+			...base,
+			source_phase: typeof raw.source_phase === "string" && raw.source_phase.trim() ? raw.source_phase.trim() : undefined,
+			status: raw.status === "resolved" ? "resolved" : "pending",
+		});
+	}
+	return result;
+}
+
 export function ensurePhaseRecord(value: unknown): Record<string, StatusPhase> {
 	if (!value || typeof value !== "object") return {};
 	const record = value as Record<string, unknown>;
@@ -100,6 +117,7 @@ export function createEmptyStatus(projectName: string, pipelinePath: string, pip
 		next_actions: firstPhaseConfig?.primary_output
 			? [`Begin ${firstPhase} phase by producing ${firstPhaseConfig.primary_output}`]
 			: ["Begin the first pending phase."],
+		post_pipeline: [],
 	};
 }
 
@@ -128,6 +146,7 @@ export function normalizeStatus(status: StatusFile, pipeline: PipelineFile, pipe
 		schema_version: typeof status.schema_version === "number" ? status.schema_version : 1,
 		phases,
 		next_actions: ensureArray(status.next_actions),
+		post_pipeline: ensurePostPipelineArray(status.post_pipeline),
 	};
 }
 
@@ -144,7 +163,7 @@ export function parseHandoff(value: unknown): PhaseHandoff {
 	if (schemaVersion > 1) {
 		throw new Error(`Invalid handoff: unsupported schema_version ${schemaVersion}. Supported: 1.`);
 	}
-	for (const field of ["owner_notes", "open_questions", "carry_forward", "carry_forward_closures", "decisions"] as const) {
+	for (const field of ["owner_notes", "open_questions", "carry_forward", "carry_forward_closures", "post_pipeline", "decisions"] as const) {
 		if (raw[field] !== undefined && !Array.isArray(raw[field])) {
 			throw new Error(`Invalid handoff: ${field} must be an array`);
 		}
@@ -156,6 +175,7 @@ export function parseHandoff(value: unknown): PhaseHandoff {
 		open_questions: ensureEntryArray<OpenQuestionEntry>(raw.open_questions, false),
 		carry_forward: ensureEntryArray<CarryForwardEntry>(raw.carry_forward, true),
 		carry_forward_closures: ensureArray(raw.carry_forward_closures),
+		post_pipeline: ensurePostPipelineArray(raw.post_pipeline),
 		decisions: ensureArray(raw.decisions),
 		closeout_content: typeof raw.closeout_content === "string" ? raw.closeout_content : "",
 		closeout_summary: typeof raw.closeout_summary === "string" ? raw.closeout_summary : "",
@@ -213,6 +233,22 @@ export function applyHandoff(status: NormalizedStatus, handoff: PhaseHandoff): N
 			ph.carry_forward = ph.carry_forward.filter((entry) => entry.id !== closureId);
 		}
 	}
+
+	const postPipeline = new Map<string, PostPipelineEntry>();
+	const legacyPostPipeline: PostPipelineEntry[] = [];
+	for (const entry of status.post_pipeline) {
+		if (entry.id) postPipeline.set(entry.id, entry);
+		else legacyPostPipeline.push(entry);
+	}
+	for (const entry of handoff.post_pipeline) {
+		const normalized: PostPipelineEntry = {
+			...entry,
+			source_phase: entry.source_phase ?? handoff.phase_id,
+			status: entry.status ?? "pending",
+		};
+		if (normalized.id) postPipeline.set(normalized.id, normalized);
+	}
+	status.post_pipeline = [...legacyPostPipeline, ...postPipeline.values()];
 
 	return status;
 }

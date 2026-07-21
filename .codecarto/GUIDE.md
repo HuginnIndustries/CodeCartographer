@@ -178,8 +178,9 @@ For codebases over roughly 50 source files or 100K LOC, do not burn primary cont
 
 - **`open_questions`** — items that are *still genuinely unknown*. Need more evidence (a runtime test, a maintainer decision, a spec ruling). Not resolvable by any later phase in the current pipeline.
 - **`carry_forward`** — items that are deferred to a specific later phase because the current phase can't responsibly close them but the pipeline naturally will. Each entry has a target phase.
+- **`post_pipeline`** — optional work after the active pipeline: spikes, amendments, deltas, maintainer rulings, or opinionated reruns. These items do not make pipeline completion partial and must not be disguised as carry-forward targets.
 
-Both lists carry structured entries. Recommended shape:
+All three collections carry structured entries. Recommended phase-state shape:
 
 ```yaml
 open_questions:
@@ -193,9 +194,13 @@ carry_forward:
     target_phase: defect-scan
     description: The `loadConfig()` callsite returns `{}` on both ENOENT and parse-error — can't tell absent from corrupt.
     deferred_reason: framing this as a defect requires the defect-scan rubric; flagged here so defect-scan picks it up.
+post_pipeline:
+  - id: post-runtime-1
+    kind: spike
+    description: Capture restart behavior against a packaged build after the pipeline is complete.
 ```
 
-`kind` is one of: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`. The downstream phase scans `carry_forward` entries whose `target_phase` matches its own ID and records resolved IDs in `carry_forward_closures`; completion removes those entries atomically.
+`kind` is one of: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`, or a post-pipeline work kind such as `spike` or `amendment`. Every new `carry_forward.target_phase` must be an ID in the active pipeline. Every `post_pipeline` entry requires a stable ID. The downstream phase records resolved carry-forward IDs in `carry_forward_closures`; completion removes those entries atomically.
 
 ## Phase Selection Logic
 
@@ -225,7 +230,7 @@ When a session starts:
 When a session finishes durable work:
 
 1. Run the validation step described in `workflow/VALIDATE.md`. Append a validation block to the output.
-2. Write `scratch/handoffs/<phase>.yaml` with `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, and `decisions`, plus `closeout_summary` and optional multiline `closeout_content`. Omitted arrays default to empty; malformed collection shapes fail completion.
+2. Write `scratch/handoffs/<phase>.yaml` with `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, `post_pipeline`, and `decisions`, plus `closeout_summary` and optional multiline `closeout_content`. Omitted arrays default to empty; malformed collection shapes fail completion.
 3. Record 2-3 key observations in the handoff's `owner_notes` (e.g., row counts, notable decisions, scope of analysis). Do not provide a canonical timestamp; the host clock owns timestamps.
 4. Run `/codecarto-complete` (or `codecarto_complete`). The framework atomically updates `workflow/status.yaml`, writes or updates one canonical closeout, and appends one idempotent `THREAD_LOG.md` entry. Do not edit those files directly.
 5. Store the durable output in the declared `findings/` path.

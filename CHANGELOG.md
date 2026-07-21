@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format is based on 
 ### Changed
 
 - Phase completion now owns canonical `status.yaml`, closeout, and `THREAD_LOG.md` updates, uses host-generated timestamps, rejects malformed handoffs and duplicate YAML keys, and remains idempotent across retries.
+- Carry-forward targets are now limited to real downstream pipeline phases; optional spikes, amendments, deltas, decisions, and reruns live in a distinct `post_pipeline` backlog shown separately by status and the dashboard.
 
 ### Planned
 

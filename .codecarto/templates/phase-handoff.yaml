@@ -6,6 +6,9 @@ owner_notes: []
 open_questions: []
 carry_forward: []
 carry_forward_closures: []
+# Work after the active pipeline: spikes, amendments, deltas, maintainer rulings,
+# or opinionated reruns. Every entry requires a stable id.
+post_pipeline: []
 decisions: []
 closeout_summary: ""
 # Optional full closeout Markdown. YAML literal blocks are supported.
