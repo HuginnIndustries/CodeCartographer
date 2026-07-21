@@ -1,4 +1,4 @@
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -19,6 +19,9 @@ import {
 	computeTotals,
 	createEmptyStatus,
 	DEFAULT_PIPELINE_PATH,
+	deriveSlug,
+	discoverLibrary,
+	type EntryGeneration,
 	getNextEligiblePhase,
 	getPipelineLabel,
 	getWorkspaceState,
@@ -32,6 +35,7 @@ import {
 	pathExists,
 	PACKAGE_VERSION,
 	PIPELINE_ALIASES,
+	publishEntry,
 	type PipelineFile,
 	resolvePhase,
 	resolvePipelineChoice,
@@ -44,6 +48,29 @@ import {
 const STATUS_WIDGET_ID = "codecarto-widget";
 const STATUS_LINE_ID = "codecarto-status";
 const SAFE_TOOL_NAMES = ["read", "grep", "find", "ls", "edit", "write"];
+
+function derivePublishHeadline(spec: string, cwd: string): string {
+	const summary = spec.split(/^##\s+System Summary\s*$/mi)[1]?.split(/^##\s+/m)[0] ?? "";
+	const candidate = summary
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.find((line) => line && !line.startsWith("<!--") && !line.startsWith("-->") && !line.startsWith("#"));
+	return candidate?.replace(/\s+/g, " ").slice(0, 280) || `Reimplementation specification for ${basename(cwd)}.`;
+}
+
+function piGeneration(ctx: ExtensionCommandContext): EntryGeneration {
+	return {
+		surface: "pi-extension",
+		agent: "pi",
+		agent_version: "unknown",
+		model: ctx.model?.id ?? "unknown",
+		model_vendor: ctx.model?.provider ?? "unknown",
+		// Pi's extension context exposes the selected model but not the active
+		// thinking level. Preserve that uncertainty instead of inferring it.
+		reasoning: "unknown",
+		notes: "",
+	};
+}
 
 function formatUsageTokens(count: number): string {
 	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(2)}M`;
@@ -177,12 +204,16 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const inputPath = typeof event.input.path === "string" ? event.input.path : "";
 			const strippedPath = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
 			const targetPath = await canonicalPath(resolve(ctx.cwd, strippedPath));
-			const allowedRoot = await canonicalPath(workspaceDir);
-			if (!isWithinPath(targetPath, allowedRoot)) {
+			const allowedRoots = [await canonicalPath(workspaceDir)];
+			const config = await loadCodecartoConfig(workspaceDir);
+			if (config.library.path && await discoverLibrary(config.library.path)) {
+				allowedRoots.push(await canonicalPath(config.library.path));
+			}
+			if (!allowedRoots.some((allowedRoot) => isWithinPath(targetPath, allowedRoot))) {
 				if (ctx.hasUI) {
-					ctx.ui.notify(`Blocked ${event.toolName} outside .codecarto/: ${inputPath}`, "warning");
+					ctx.ui.notify(`Blocked ${event.toolName} outside .codecarto/ or configured library: ${inputPath}`, "warning");
 				}
-				return { block: true, reason: `CodeCartographer mode only allows ${event.toolName} within .codecarto/` };
+				return { block: true, reason: `CodeCartographer mode only allows ${event.toolName} within .codecarto/ or the configured CodeCartographer library.` };
 			}
 		}
 
@@ -502,6 +533,76 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			lastFeedbackLines = [`Queued post-pipeline skill: ${skillName}`];
 			setUiState(ctx, state, lastFeedbackLines);
 			ctx.ui.notify(`Queued CodeCartographer skill: ${skillName}`, "info");
+		},
+	});
+
+	pi.registerCommand("codecarto-publish", {
+		description: "Publish the completed reimplementation spec to the configured CodeCartographer library",
+		handler: async (_args, ctx) => {
+			const state = await ensureWorkspaceState(ctx);
+			if (!state) return;
+
+			const config = await loadCodecartoConfig(state.workspaceDir);
+			if (!config.library.path) {
+				ctx.ui.notify("No library.path is configured. Set it in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml.", "error");
+				return;
+			}
+			const marker = await discoverLibrary(config.library.path);
+			if (!marker) {
+				ctx.ui.notify(`No CodeCartographer library at ${config.library.path} (missing .codecarto-library).`, "error");
+				return;
+			}
+
+			const phase = resolvePhase(state, "reimplementation-spec");
+			if (!phase?.primary_output) {
+				ctx.ui.notify("The active pipeline does not produce a reimplementation spec to publish.", "error");
+				return;
+			}
+			const specPath = join(state.workspaceDir, phase.primary_output);
+			if (!(await pathExists(specPath))) {
+				ctx.ui.notify(`Reimplementation spec is missing: .codecarto/${phase.primary_output}`, "error");
+				return;
+			}
+
+			const spec = await readFile(specPath, "utf8");
+			const slug = deriveSlug(ctx.cwd);
+			const headline = derivePublishHeadline(spec, ctx.cwd);
+			const namespace = marker.namespaced ? config.library.namespace ?? undefined : undefined;
+			if (marker.namespaced && !namespace) {
+				ctx.ui.notify("The configured library is namespaced; set library.namespace before publishing.", "error");
+				return;
+			}
+
+			const preview = [
+				`Publish ${namespace ? `${namespace}/` : ""}${slug} to ${config.library.path}`,
+				`Source: ${ctx.cwd}`,
+				`Spec: .codecarto/${phase.primary_output}`,
+				`Headline: ${headline}`,
+				`Provenance: Pi / ${ctx.model?.provider ?? "unknown"} / ${ctx.model?.id ?? "unknown"}`,
+			].join("\n");
+			if (config.library.publish_confirm && !(await ctx.ui.confirm("Publish reimplementation spec", preview))) return;
+
+			try {
+				const result = await publishEntry(config.library.path, spec, {
+					slug,
+					namespace,
+					source_repo: ctx.cwd,
+					analyzed_at: new Date().toISOString(),
+					pipeline: state.status.pipeline,
+					codecarto_version: PACKAGE_VERSION,
+					headline,
+					tags: [],
+					capabilities: [],
+					generation: piGeneration(ctx),
+				});
+				lastFeedbackLines = [`Published ${result.namespace ? `${result.namespace}/` : ""}${result.slug} v${result.version}`, result.isNewVersion ? "New content version." : "Metadata-only update (content unchanged)."];
+				await writeDashboard(ctx.cwd, PACKAGE_VERSION);
+				await refreshWorkspaceUi(ctx, lastFeedbackLines);
+				ctx.ui.notify(`Published ${result.namespace ? `${result.namespace}/` : ""}${result.slug} v${result.version}.`, "info");
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Unable to publish: ${message}`, "error");
+			}
 		},
 	});
 

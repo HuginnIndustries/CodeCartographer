@@ -1,7 +1,7 @@
 # Post-v0.11 evidence-driven roadmap
 
 Status: active checklist  
-Updated: 2026-07-20  
+Updated: 2026-07-21
 Authority: this file is the durable checklist for work after v0.11.0. `CHANGELOG.md` remains authoritative for shipped behavior; completed checklist items should link to their PR and release rather than duplicating release notes.
 
 ## Evidence baseline
@@ -38,49 +38,49 @@ Evidence paths for the FreeAgent run:
 
 FreeAgent showed that phase agents can directly mutate `workflow/status.yaml`, invent future timestamps, temporarily create duplicate YAML keys, leave collection keys as null/comment-only values, and duplicate inherited open questions under new IDs. The framework must own canonical workflow mutations.
 
-- [ ] Define a structured phase-handoff payload for owner notes, open questions, routed items, closures, decisions, and closeout content.
-- [ ] Stop instructing phase agents to directly add/remove entries in `workflow/status.yaml` or append `THREAD_LOG.md`.
-- [ ] Apply the handoff atomically in `codecarto_complete`, with the framework supplying timestamps.
-- [ ] Parse YAML with duplicate-key rejection and validate `status.yaml` against a strict schema before and after completion.
-- [ ] Add a top-level `schema_version` and explicit backward-compatible migrations for older workspaces.
-- [ ] Normalize absent collections to `[]`; reject null or duplicate `open_questions` / `carry_forward` keys.
-- [ ] Make completion idempotent and preserve unrelated phase data under the file lock.
+- [x] Define a structured phase-handoff payload for owner notes, open questions, routed items, closures, decisions, and closeout content. (#46)
+- [x] Stop instructing phase agents to directly add/remove entries in `workflow/status.yaml` or append `THREAD_LOG.md`. (#46)
+- [x] Apply the handoff atomically in `codecarto_complete`, with the framework supplying timestamps. (#46)
+- [x] Parse YAML with duplicate-key rejection and validate `status.yaml` against a strict schema before and after completion. (#46)
+- [x] Add a top-level `schema_version` and explicit backward-compatible migrations for older workspaces. (#46)
+- [x] Normalize absent collections to `[]`; reject null or duplicate `open_questions` / `carry_forward` keys. (#46)
+- [x] Make completion idempotent and preserve unrelated phase data under the file lock. (#46)
 
 ### Separate pipeline routing from post-pipeline work
 
 FreeAgent completed all seven phases but displayed three `carry_forward` entries targeting `spike` and `amendment`, neither of which exists in the active pipeline. This was semantically intentional but looked like unfinished pipeline work.
 
-- [ ] Require `carry_forward.target_phase` to identify a real downstream phase in the active pipeline.
-- [ ] Add a distinct `post_pipeline` backlog for spikes, amendments, deltas, maintainer rulings, and opinionated reruns.
-- [ ] Show `pipeline complete` independently from `post-pipeline work remaining` in status, summaries, widgets, and dashboards.
-- [ ] Migrate or tolerate legacy terminal carry-forward entries without corrupting older workspaces.
+- [x] Require `carry_forward.target_phase` to identify a real downstream phase in the active pipeline. (#47)
+- [x] Add a distinct `post_pipeline` backlog for spikes, amendments, deltas, maintainer rulings, and opinionated reruns. (#47)
+- [x] Show `pipeline complete` independently from `post-pipeline work remaining` in status, summaries, widgets, and dashboards. (#47)
+- [x] Migrate or tolerate legacy terminal carry-forward entries without corrupting older workspaces. (#47)
 
 ### Deduplicate and actively close inherited open questions
 
 The FreeAgent dashboard reports 16 open questions although there are four unique terminal questions. Three questions were copied into architecture, contracts, protocols, porting, and reimplementation-spec under phase-specific IDs. At least one supposedly runtime-only terminal question was directly answerable from source: `src/FreeAgent.Server/SessionRegistry.cs` states that process restart drops the in-memory registry while disk files survive. The raw-HTTP retry question could also have been narrowed through targeted source plus platform documentation instead of being copied unchanged through five phases.
 
-- [ ] Preserve one canonical question ID and record phase ownership/history as lineage rather than cloning the question.
-- [ ] Deduplicate equivalent legacy questions in status/dashboard summaries while retaining provenance.
+- [x] Preserve one canonical question ID and record phase ownership/history as lineage rather than cloning the question. (#48, #49)
+- [x] Deduplicate equivalent legacy questions in status/dashboard summaries while retaining provenance. (#48)
 - [ ] Add a targeted open-question closure sweep before porting and terminal synthesis; require evidence that source, tests, docs, or platform semantics were checked before labeling an item `needs-runtime-test`.
 - [ ] Let the porting bundle identify a deep-read trigger for every inherited open question, not only protocol/acceptance gaps.
-- [ ] When `current_phase: complete`, report terminal unresolved questions rather than `Open questions (current phase): 0`.
+- [x] When `current_phase: complete`, report terminal unresolved questions rather than `Open questions (current phase): 0`. (#47)
 - [ ] Distinguish unresolved evidence questions from answered/routed/closed history.
 
 ### Make closeouts idempotent
 
 The FreeAgent contracts phase has both a blank framework-created closeout stub and a later populated closeout, with two `THREAD_LOG.md` entries.
 
-- [ ] Use a stable phase closeout identity or update the framework-created stub instead of creating a second date-based file.
-- [ ] Prevent duplicate thread-log entries programmatically rather than relying on prompt discipline.
-- [ ] Do not surface empty template closeouts as valid dashboard closeouts.
-- [ ] Use framework timestamps for filenames and metadata.
+- [x] Use a stable phase closeout identity or update the framework-created stub instead of creating a second date-based file. (#46)
+- [x] Prevent duplicate thread-log entries programmatically rather than relying on prompt discipline. (#46)
+- [x] Do not surface empty template closeouts as valid dashboard closeouts. (#46)
+- [x] Use framework timestamps for filenames and metadata. (#46)
 
 ### Tighten validation and dashboard semantics
 
 - [ ] Make `PASS WITH GAPS` require at least one machine-readable gap/open item, or explain that the status comes from coverage disposition even when every criterion row passes.
-- [ ] Ensure phase completion preserves `PARTIAL` honestly without making resolved downstream gaps look permanently unresolved.
+- [x] Ensure phase completion preserves `PARTIAL` honestly without making resolved downstream gaps look permanently unresolved. (#48, #49)
 - [ ] Label undeclared/optional secondary outputs as `not produced (optional)`, not `bad` or `missing`, unless the pipeline marks them required.
-- [ ] Regenerate the dashboard after framework-owned status mutations, or show a prominent actionable refresh state rather than relying on a subtle staleness warning.
+- [x] Regenerate the dashboard after framework-owned status mutations, or show a prominent actionable refresh state rather than relying on a subtle staleness warning. (#46)
 - [ ] Explain the mechanical/semantic defect split directly on dashboard phase cards: early context-light scan versus later contract-informed analysis.
 - [ ] Keep unavailable token accounting neutral; do not turn provider-reported zero token counts into measured usage.
 - [ ] Clarify the Strategic Alignment Hook behavior when a user resumes without answering: apply the documented auto-default or ask again, but do not leave the phase to infer the policy.

@@ -232,7 +232,7 @@ Beyond the slash commands, the Pi extension layers on:
 
 **Per-phase usage tracking.** Each phase run is appended to `.codecarto/workflow/.usage.local.yaml`. `/codecarto-usage` reports cumulative + per-phase token, runtime, tool-use, and compaction totals, including threshold/overflow/manual triggers and successful/failed/aborted outcomes.
 
-**Tool interception.** `bash` is blocked outright; `edit` and `write` are confined to `.codecarto/`. Same rules apply to phase sub-agents.
+**Tool interception.** `bash` is blocked outright; `edit` and `write` are confined to `.codecarto/`, plus the configured, marker-validated CodeCartographer library when one is configured. Same rules apply to phase sub-agents.
 
 ### Slash commands
 
@@ -246,6 +246,7 @@ Beyond the slash commands, the Pi extension layers on:
 | `/codecarto-validate [phase]` | Validate a phase output against completion criteria |
 | `/codecarto-complete [phase]` | Validate and atomically apply the phase handoff, canonical status, closeout, and log entry |
 | `/codecarto-skill <name>` | Run a post-pipeline skill once all phases are complete |
+| `/codecarto-publish` | Publish the reimplementation spec to the configured library after reviewing an explicit confirmation preview |
 | `/codecarto-usage` | Cumulative + per-phase token usage |
 | `/codecarto-dashboard [--narrate]` | Regenerate `.codecarto/dashboard.html`; `--narrate` for the LLM executive summary |
 

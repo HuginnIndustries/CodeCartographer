@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
+const { writeMarker } = await import(pathToFileURL(`${REPO_ROOT}/core/library.ts`).href);
 
 function createHarness(cwd) {
 	const events = new Map();
@@ -119,5 +120,32 @@ test("/codecarto-open activates an existing workspace without resetting durable 
 		assert.deepEqual(pi.activeTools, ["read", "grep", "find", "ls", "edit", "write"]);
 		assert.match(pi.sessionName, /^CodeCartographer:/);
 		assert.match(ui.notifications.at(-1).message, /Opened existing CodeCartographer workspace/);
+	});
+});
+
+test("/codecarto-publish publishes the reimplementation spec and allows configured-library writes", async () => {
+	await withTempRepo(async (cwd) => {
+		const libraryPath = await mkdtemp(join(tmpdir(), "cc-pi-library-"));
+		try {
+			await writeMarker(libraryPath, { schema_version: 1, name: "pi-test-library", namespaced: false });
+			const { commands, events, ctx, ui } = createHarness(cwd);
+			await events.get("session_start")({}, ctx);
+			await commands.get("codecarto-init").handler("", ctx);
+			await writeFile(join(cwd, ".codecarto", "workflow", "config.yaml"), [
+				"library:",
+				`  path: ${libraryPath}`,
+				"  publish_confirm: true",
+			].join("\n"), "utf8");
+			const specPath = join(cwd, ".codecarto", "findings", "reimplementation-spec", "reimplementation-spec.md");
+			await writeFile(specPath, "# Reimplementation Spec\n\n## System Summary\n\nA publishable test system.\n", "utf8");
+
+			await commands.get("codecarto-publish").handler("", ctx);
+
+			assert.match(ui.notifications.at(-1).message, /^Published /);
+			assert.match(await readFile(join(libraryPath, "index.yaml"), "utf8"), /A publishable test system/);
+			assert.equal(await events.get("tool_call")({ toolName: "write", input: { path: join(libraryPath, "notes.md") } }, ctx), undefined);
+		} finally {
+			await rm(libraryPath, { recursive: true, force: true });
+		}
 	});
 });
