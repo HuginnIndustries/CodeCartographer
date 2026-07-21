@@ -34,6 +34,7 @@ import {
 	PACKAGE_VERSION,
 	PhasePreflightError,
 	runPhasePreflight,
+	type PhasePreflightResult,
 	type PipelinePhase,
 	type UsageRunStatus,
 	type ValidationOverall,
@@ -49,6 +50,8 @@ import {
 export interface RunSinglePhaseOptions {
 	llmSteerEnabled: boolean;
 	signal?: AbortSignal;
+	/** Preflight validated by the caller so prompt construction does not repeat it. */
+	preflight?: PhasePreflightResult;
 	/**
 	 * True when this phase is being driven by `/codecarto-next --auto`. The flag
 	 * propagates into `buildPhasePrompt` so interactive hooks (notably the
@@ -83,7 +86,10 @@ export async function runSinglePhase(
 	phase: PipelinePhase,
 	options: RunSinglePhaseOptions,
 ): Promise<SinglePhaseResult> {
-	let prompt = await buildPhasePrompt(state, phase, false, { auto: options.auto === true });
+	let prompt = await buildPhasePrompt(state, phase, false, {
+		auto: options.auto === true,
+		preflight: options.preflight,
+	});
 
 	if (options.llmSteerEnabled) {
 		if (ctx.hasUI) ctx.ui.notify(`Customizing ${phase.id} prompt via LLM rewriter…`, "info");
@@ -336,8 +342,9 @@ export async function runAuto(
 			});
 		}
 
+		let preflight: PhasePreflightResult;
 		try {
-			await runPhasePreflight(state, phase);
+			preflight = await runPhasePreflight(state, phase);
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
 			return finish({
@@ -359,6 +366,7 @@ export async function runAuto(
 			llmSteerEnabled,
 			signal: options.signal,
 			auto: true,
+			preflight,
 		});
 
 		// Accumulate tokens whether the phase succeeded, was aborted, or errored.

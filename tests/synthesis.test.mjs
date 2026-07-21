@@ -152,6 +152,20 @@ test("checked proposal unlocks merge and finalization with confirmed refs in the
 	}
 });
 
+test("a precomputed result prevents prompt building from repeating preflight", async () => {
+	const proposalPath = join(workspace, ".codecarto", "findings", "goal-synthesis", "proposal.md");
+	await writeFile(proposalPath, "| [x] | `event-router` | v1 |\n", "utf8");
+	const phase = resolvePhase(state, "spec-merge");
+	const preflight = await runPhasePreflight(state, phase);
+
+	// Change the input after the caller's successful check. A prompt using the
+	// supplied result must not read it again; a self-contained prompt still does.
+	await writeFile(proposalPath, "| [ ] | `event-router` | v1 |\n", "utf8");
+	const prompt = await buildPhasePrompt(state, phase, true, { preflight });
+	assert.match(prompt, /event-router@v1/);
+	await assert.rejects(buildPhasePrompt(state, phase, true), /no library entries are confirmed/);
+});
+
 test("preflight rejects a checked entry version that is not in the library", async () => {
 	const proposalPath = join(workspace, ".codecarto", "findings", "goal-synthesis", "proposal.md");
 	await writeFile(proposalPath, "| [x] | `event-router` | v99 |\n", "utf8");

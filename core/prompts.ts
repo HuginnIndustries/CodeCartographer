@@ -11,7 +11,7 @@ import type {
 	WorkspaceState,
 } from "./types.ts";
 import { pathExists } from "./utils.ts";
-import { runPhasePreflight } from "./synthesis.ts";
+import { runPhasePreflight, type PhasePreflightResult } from "./synthesis.ts";
 
 export function describeEntry(entry: OpenQuestionEntry | CarryForwardEntry): string {
 	const parts: string[] = [];
@@ -34,6 +34,13 @@ export function collectRoutedCarryForward(state: WorkspaceState, targetPhaseId: 
 
 export interface BuildPhasePromptOptions {
 	/**
+	 * A result the caller already validated immediately before prompt building.
+	 * Pi uses this to preserve its caller-specific preflight error handling
+	 * without repeating the same filesystem reads. Callers that omit it (MCP
+	 * and direct/forced prompting) remain self-contained and run preflight here.
+	 */
+	preflight?: PhasePreflightResult;
+	/**
 	 * Set when the phase is being run inside `/codecarto-next --auto` (or any
 	 * other non-interactive driver). Suppresses interactive hooks that would
 	 * otherwise pause the sub-agent to ask the user a question — those hooks
@@ -50,7 +57,7 @@ export async function buildPhasePrompt(
 	forced: boolean,
 	options: BuildPhasePromptOptions = {},
 ): Promise<string> {
-	const preflight = await runPhasePreflight(state, phase);
+	const preflight = options.preflight ?? await runPhasePreflight(state, phase);
 	const synthesisWorkflow = state.pipeline.workflow_name === "evidence-backed-project-synthesis";
 	const lines = [
 		`Read .codecarto/GUIDE.md and continue the CodeCartographer workflow for the phase \`${phase.id}\`.`,
