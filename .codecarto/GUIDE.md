@@ -200,7 +200,7 @@ post_pipeline:
     description: Capture restart behavior against a packaged build after the pipeline is complete.
 ```
 
-`kind` is one of: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`, or a post-pipeline work kind such as `spike` or `amendment`. Every new `carry_forward.target_phase` must be an ID in the active pipeline. Every `post_pipeline` entry requires a stable ID. The downstream phase records resolved carry-forward IDs in `carry_forward_closures`; completion removes those entries atomically.
+`kind` is one of: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`, or a post-pipeline work kind such as `spike` or `amendment`. Every new `carry_forward.target_phase` must be an ID in the active pipeline. Every `post_pipeline` entry requires a stable ID. Open questions should carry a stable `id` (e.g. `q-loadconfig-ambiguity`); if omitted, the framework auto-assigns one. When a later phase resolves an open question, list its id in `open_question_closures` to remove it from all phases. The downstream phase records resolved carry-forward IDs in `carry_forward_closures`; completion removes those entries atomically.
 
 ## Phase Selection Logic
 
@@ -230,7 +230,7 @@ When a session starts:
 When a session finishes durable work:
 
 1. Run the validation step described in `workflow/VALIDATE.md`. Append a validation block to the output.
-2. Write `scratch/handoffs/<phase>.yaml` with `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, `post_pipeline`, and `decisions`, plus `closeout_summary` and optional multiline `closeout_content`. Omitted arrays default to empty; malformed collection shapes fail completion.
+2. Write `scratch/handoffs/<phase>.yaml` with `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, `open_question_closures`, `post_pipeline`, and `decisions`, plus `closeout_summary` and optional multiline `closeout_content`. Omitted arrays default to empty; malformed collection shapes fail completion.
 3. Record 2-3 key observations in the handoff's `owner_notes` (e.g., row counts, notable decisions, scope of analysis). Do not provide a canonical timestamp; the host clock owns timestamps.
 4. Run `/codecarto-complete` (or `codecarto_complete`). The framework atomically updates `workflow/status.yaml`, writes or updates one canonical closeout, and appends one idempotent `THREAD_LOG.md` entry. Do not edit those files directly.
 5. Store the durable output in the declared `findings/` path.
