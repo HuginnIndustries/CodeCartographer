@@ -9,7 +9,7 @@
 [![npm version](https://img.shields.io/npm/v/codecartographer-pi.svg)](https://www.npmjs.com/package/codecartographer-pi)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 
-> **A structured pipeline for reverse-engineering unfamiliar codebases with an LLM.** Drop it into any repo, point an LLM at the guide, and walk away with a layered analysis: architecture map, behavioral contracts, protocol documentation, defect report, porting bundle, and a language-agnostic reimplementation spec. Every finding is evidence-tagged. Every phase output is validated before the next one starts.
+> **Evidence-backed software cartography for coding agents.** Turn an unfamiliar repository into validated architecture, contracts, defects, and a reimplementation specification—then combine explicitly confirmed specifications with a product vision to produce a provenance-backed implementation plan.
 
 ```text
 ●  CodeCartographer
@@ -34,7 +34,7 @@
 | **Opt-in LLM steering** of the next phase's seed prompt | `/codecarto-next --llm-steer` |
 | **Forward synthesis** — vision + confirmed library specs → provenance-backed project plan | `pipeline-synthesis.yaml` |
 
-> **Forward-flow synthesis is available on the development branch.** Publish completed reimplementation specs from Pi or MCP, then run the `synthesis` pipeline to turn a product vision and explicitly confirmed library entries into a conflict-aware `project-plan.md` with a decision-level provenance ledger.
+Publish completed reimplementation specs from Pi or MCP, then run the `synthesis` pipeline to turn a product vision and explicitly confirmed library entries into a conflict-aware `project-plan.md` with a decision-level provenance ledger.
 
 OpenAI Build Week reviewers: see the [new-vs-existing scope and one-command demo](docs/build-week-2026.md).
 
@@ -42,7 +42,7 @@ OpenAI Build Week reviewers: see the [new-vs-existing scope and one-command demo
 
 ## Install
 
-Three surfaces, in recommended order. All three share the same `core/` and produce byte-identical phase prompts — but the user experience differs by surface, and new features (live widget, dashboard, auto-runner, the upcoming library + synthesis workflows) land on Pi first, MCP second, drop-in last.
+Three surfaces, in recommended order. All three share the same `core/` and produce byte-identical phase prompts. Pi provides the richest orchestration UX; Pi and MCP both support the executable library and synthesis workflows; drop-in mode provides the analysis framework without those runtime operations.
 
 1. **Pi extension** — recommended for interactive use. First-class UX.
 2. **MCP server** — for Claude Code, Codex, opencode, Cursor, Claude Desktop, and any other MCP-capable agent.
@@ -85,6 +85,8 @@ Add to your host config (`~/.config/claude-code/config.json`, `claude_desktop_co
   }
 }
 ```
+
+Official MCP Registry server name: `io.github.huginnindustries/codecartographer`.
 
 ### Drop-in template (one-off / evaluation)
 

@@ -4,7 +4,11 @@ Working tracker for the synthesis-phases upgrade. Supersedes the
 implementation plan in [`docs/design-synthesis-phases.md`](./design-synthesis-phases.md)
 (kept as the historical record of the original proposal).
 
-Status: planning approved 2026-05-14. Implementation not yet started.
+Status: core library, Pi/MCP publication, and the four-phase synthesis workflow
+shipped in v0.12.0 on 2026-07-21. `pipeline-spec-mutate.yaml`, dashboard library
+state, and schema stabilization remain planned. This is the implementation-era
+tracker; [CHANGELOG.md](../CHANGELOG.md), [ROADMAP.md](./ROADMAP.md), and
+[build-week-2026.md](./build-week-2026.md) are authoritative for shipped behavior.
 
 ## Context
 

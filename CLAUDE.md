@@ -24,8 +24,8 @@ Node >= 20 is the floor; CI tests on Node 22 and 24. There is no linter.
 CodeCartographer is one framework shipped through **three delivery surfaces** that produce byte-identical phase prompts and validation behavior. The numbering below reflects code-architecture (source-of-truth-out) ordering; the user-facing recommendation ordering in README.md is different — see "Surface priority" below.
 
 1. **`.codecarto/`** — the drop-in template (Markdown + YAML, no executable code). This is both the source of truth committed in this repo *and* the directory that gets copied into a user's target repo on `codecarto-init`. `core/workspace.ts` exposes it as `packagedWorkspaceDir`, resolved at runtime by walking up from `core/` to find the nearest `package.json`.
-2. **`extensions/codecarto/`** — Pi extension. Registers `/codecarto-*` slash commands, runs phases as isolated `AgentSession` sub-agents (`auto-runner.ts`), renders the live widget (`agent-widget.ts`), and writes the HTML dashboard (`dashboard-writer.ts`). The `tool_call` hook in `index.ts` blocks `bash` outright and confines `edit`/`write` to `.codecarto/`. *(Hook is scheduled to gain a configurable `library_path` allow-list entry in the M2 milestone of [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md) — that change is security-adjacent; review carefully when it lands.)*
-3. **`mcp-server/`** — MCP server exposing the same operations as seven JSON-RPC tools over stdio. Never spawns sub-agents; returns prompt text for the host to dispatch.
+2. **`extensions/codecarto/`** — Pi extension. Registers `/codecarto-*` slash commands, runs phases as isolated `AgentSession` sub-agents (`auto-runner.ts`), renders the live widget (`agent-widget.ts`), and writes the HTML dashboard (`dashboard-writer.ts`). The `tool_call` hook in `index.ts` blocks `bash` outright and confines `edit`/`write` to `.codecarto/` plus the configured library path.
+3. **`mcp-server/`** — MCP server exposing ten workflow and library operations as JSON-RPC tools over stdio. Never spawns sub-agents; returns prompt text for the host to dispatch.
 
 Both wrappers import everything they share from `core/index.ts` (barrel re-export). **If you add a primitive used by both surfaces, it goes in `core/` and must be re-exported through `index.ts`.** Wrapper-specific logic (UI, sub-agent lifecycle, MCP plumbing) stays in the wrapper.
 
@@ -34,8 +34,8 @@ Both wrappers import everything they share from `core/index.ts` (barrel re-expor
 The byte-identical-prompts invariant above is a *code-architecture* property — all three surfaces ship the same phase prompts and the same validation logic, and the invariant tests catch any drift. But the three surfaces are **not** equally polished from a user perspective, and README.md / CHANGELOG / new-feature UX work should treat them in this order:
 
 1. **Pi extension (recommended user surface).** First-class UX: slash commands, live widget, isolated sub-agents, auto-runner, dashboard, per-phase usage tracking, opt-in LLM steering. New features land here first.
-2. **MCP server (for other coding agents).** Same prompts, same validation, same outputs. Intended for Claude Code, Codex, opencode, Cursor, and any other MCP-capable host. The host drives; the framework provides phase prompts and (in upcoming milestones) library tools. New features reach parity here second.
-3. **Drop-in template (one-off / evaluation).** Pure `.codecarto/` markdown + YAML, no executable code. For trying CodeCartographer in any repo before installing anything. Library and synthesis workflows (planned in [`docs/synthesis-roadmap.md`](docs/synthesis-roadmap.md)) are **not available** in pure drop-in mode — those require Pi or MCP. The analysis side works fully drop-in.
+2. **MCP server (for other coding agents).** Same prompts, same validation, same outputs. Intended for Claude Code, Codex, opencode, Cursor, and any other MCP-capable host. The host drives; the framework provides phase prompts plus library publish/list/reindex operations. New features reach parity here second.
+3. **Drop-in template (one-off / evaluation).** Pure `.codecarto/` markdown + YAML, no executable code. For trying CodeCartographer in any repo before installing anything. Library and synthesis workflows are **not available** in pure drop-in mode — those require Pi or MCP. The analysis side works fully drop-in.
 
 When adding a feature, the question to ask is "does this work on all three surfaces, or only the executable ones?" Pure prompt + template work lands in `.codecarto/` and propagates to all three. Anything that needs runtime code (publish, dashboard, sub-agents) only lands on Pi and MCP, with documentation in the drop-in path explaining the limitation.
 
@@ -48,10 +48,12 @@ When adding a feature, the question to ask is "does this work on all three surfa
 - `core/dashboard.ts` — single-file HTML renderer for `.codecarto/dashboard.html` (no JS, no external assets, light/dark via `prefers-color-scheme`).
 - `core/usage.ts` — per-phase token/duration log at `.codecarto/workflow/.usage.local.yaml`.
 - `core/orchestrator-config.ts` — loads `.codecarto/workflow/config.yaml` (the `orchestrator.llm_steer_next_phase` flag lives here).
+- `core/library.ts` — versioned library discovery, publication, reads, listing, reindexing, and optional git commits shared by Pi and MCP.
+- `core/synthesis.ts` — vision/library/proposal preflight and exact confirmed-version resolution for the four-phase synthesis workflow.
 
 ### Pipeline shape
 
-Pipelines are YAML DAGs in `.codecarto/workflow/pipeline*.yaml`. Each `PipelinePhase` declares `depends_on`, `primary_output`, `required_reads`, `completion_criteria`, etc. The active variant is the `pipeline:` field in `status.yaml`; six variants ship today and the default is `pipeline-full-with-deep-audit.yaml`. Phases form a DAG (contracts and protocols run in parallel after architecture), not a linear chain — `getNextEligiblePhase` walks `phase_order` and picks the first non-`complete` phase whose deps are all `complete`.
+Pipelines are YAML DAGs in `.codecarto/workflow/pipeline*.yaml`. Each `PipelinePhase` declares `depends_on`, `primary_output`, `required_reads`, `completion_criteria`, etc. The active variant is the `pipeline:` field in `status.yaml`; six analysis variants plus the forward-synthesis pipeline ship today, and the default is `pipeline-full-with-deep-audit.yaml`. Phases form a DAG (contracts and protocols run in parallel after architecture), not a linear chain — `getNextEligiblePhase` walks `phase_order` and picks the first non-`complete` phase whose deps are all `complete`.
 
 ### Invariant tests are the load-bearing guardrail
 

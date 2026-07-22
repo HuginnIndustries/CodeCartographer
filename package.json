@@ -1,14 +1,19 @@
 {
   "name": "codecartographer-pi",
-  "version": "0.12.0",
-  "description": "CodeCartographer packaged for Pi as an extension-driven workflow wrapper.",
+  "version": "0.12.1",
+  "mcpName": "io.github.huginnindustries/codecartographer",
+  "description": "Evidence-backed reverse engineering and human-gated software planning for Pi and MCP coding agents.",
   "type": "module",
   "keywords": [
     "pi-package",
     "pi",
     "codecartographer",
     "reverse-engineering",
-    "llm"
+    "llm",
+    "mcp",
+    "software-planning",
+    "code-analysis",
+    "synthesis"
   ],
   "license": "MIT",
   "author": "James Sesler",
