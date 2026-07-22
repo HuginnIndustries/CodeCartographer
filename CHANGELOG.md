@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.2] — 2026-07-22
+
+### Fixed
+
+- Corrected the case-sensitive MCP Registry namespace to match the GitHub organization owner grant, keeping `package.json`, `server.json`, and the README aligned.
+
 ## [0.12.1] — 2026-07-22
 
 ### Added
