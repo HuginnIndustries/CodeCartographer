@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-07-22
+
+### Added
+
+- Official MCP Registry metadata and release invariants that keep the registry server name, npm package, stdio transport, binary, version, and discoverability keywords aligned.
+
+### Changed
+
+- Repositioned the npm package and README around both evidence-backed reverse engineering and human-gated forward synthesis instead of describing the package as a Pi-only workflow wrapper.
+- Added MCP, software-planning, code-analysis, and synthesis discovery metadata for the npm and MCP ecosystems.
+- Removed stale README language that described the shipped library and synthesis workflows as development-branch or upcoming functionality.
+
 ## [0.12.0] — 2026-07-21
 
 ### Added
