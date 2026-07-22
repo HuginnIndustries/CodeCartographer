@@ -27,6 +27,25 @@ The original implementation plan called for a standalone CLI. That role is now f
 
 Open future-facing items:
 
+### Launch proof package (active)
+
+The v0.12.2 npm, GitHub, website, and official MCP Registry release gates are
+complete. The next launch milestone is durable, inspectable proof before any
+short-lived promotional channel:
+
+- [ ] Publish the CodeCartographer self-analysis case study.
+- [ ] Publish the forward-synthesis case study, including the unchecked proposal,
+      human confirmation, conflict ledger, and provenance-backed project plan.
+- [ ] Publish the pinned `sindresorhus/p-map` analysis before Product Hunt.
+- [ ] Capture the real dashboard and provenance-ledger screenshots and complete
+      the concise walkthrough or video.
+- [ ] Prepare Show HN, DevHunt, OpenAI Developer Community, and Product Hunt
+      assets only after their proof and account-readiness gates pass.
+
+The authoritative requirements, reproduction metadata, status, and channel
+sequencing live in the
+[v0.12.x discoverability and launch plan](plans/2026-07-21-v0.12.1-discoverability-launch.md).
+
 ### Forward-flow synthesis (shipped in v0.12.0)
 
 A library + synthesis pipeline turns CodeCartographer from analysis-only into analysis + synthesis: accumulate `reimplementation-spec.md` artifacts in a git-trackable library, then synthesize a `project-plan.md` from a vision plus explicitly confirmed, version-pinned entries.
