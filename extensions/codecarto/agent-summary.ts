@@ -80,7 +80,7 @@ function formatTrailer(input: PhaseSummaryInput): string {
 		lines.push(`Phase transcript: \`${input.sessionFile}\` (open via \`/resume\`).`);
 	}
 	if (input.status === "completed") {
-		lines.push("Run `/codecarto-validate` to check the output, then `/codecarto-complete` to advance.");
+		lines.push("Auto-validating and completing the phase — check the status widget for the result.");
 	}
 	return lines.join("\n");
 }

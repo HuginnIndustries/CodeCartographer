@@ -30,14 +30,13 @@ test("completed phase summary includes header, stats, excerpt, trailer", () => {
 	assert.match(out, /1m30s/);
 	assert.match(out, /Documented the public API surface\./);
 	assert.match(out, /Phase transcript:/);
-	assert.match(out, /\/codecarto-validate/);
-	assert.match(out, /\/codecarto-complete/);
+	assert.match(out, /Auto-validating and completing the phase/);
 });
 
 test("aborted phase summary uses 'aborted' header and skips the validate trailer", () => {
 	const out = buildPhaseSummary({ ...baseInput, status: "aborted" });
 	assert.match(out, /\*\*Phase `blueprint` aborted\.\*\*/);
-	assert.doesNotMatch(out, /\/codecarto-validate/);
+	assert.doesNotMatch(out, /Auto-validating and completing the phase/);
 });
 
 test("error phase summary includes the error message and skips excerpt/trailer", () => {
@@ -50,7 +49,7 @@ test("error phase summary includes the error message and skips excerpt/trailer",
 	assert.match(out, /\*\*Phase `blueprint` failed\.\*\*/);
 	assert.match(out, /model timed out after 60s/);
 	assert.doesNotMatch(out, /Documented the public API surface/);
-	assert.doesNotMatch(out, /\/codecarto-validate/);
+	assert.doesNotMatch(out, /Auto-validating and completing the phase/);
 });
 
 test("response text over the budget is truncated with an explanatory tail", () => {
@@ -77,7 +76,7 @@ test("zero-activity phase emits an explicit 'no activity' marker", () => {
 test("missing sessionFile drops the transcript line but keeps the validate trailer", () => {
 	const out = buildPhaseSummary({ ...baseInput, sessionFile: undefined });
 	assert.doesNotMatch(out, /Phase transcript:/);
-	assert.match(out, /\/codecarto-validate/);
+	assert.match(out, /Auto-validating and completing the phase/);
 });
 
 test("token formatting handles k and M thresholds", () => {

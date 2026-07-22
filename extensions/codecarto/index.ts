@@ -410,7 +410,57 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			// Fire-and-forget: keep the TUI responsive while the sub-agent works.
 			// runSinglePhase handles all side effects (steering message, notify,
 			// phase summary, recordUsage, dashboard regen, clearPhase linger).
+			// After the sub-agent finishes, auto-validate and auto-complete the
+			// phase so status.yaml advances without requiring the user to manually
+			// run /codecarto-validate then /codecarto-complete. This mirrors what
+			// the auto loop (runAuto) does after each phase.
 			void runSinglePhase(ctx, pi, state, phase, { llmSteerEnabled, signal: ctx.signal, preflight })
+				.then(async (result) => {
+					if (result.status !== "completed") return;
+
+					// Refresh state from disk — the sub-agent may have written
+					// findings that the validator needs to read.
+					const stateForValidation = (await getWorkspaceState(ctx.cwd)) ?? state;
+					const validation = await validatePhaseOutput(stateForValidation, phase.id).catch(
+						(error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+					);
+
+					if (validation instanceof Error) {
+						if (ctx.hasUI) ctx.ui.notify(`Auto-validation error for ${phase.id}: ${validation.message}`, "warning");
+						lastFeedbackLines = [`Validation error: ${validation.message}`, "Run `/codecarto-validate` then `/codecarto-complete` manually."];
+						return;
+					}
+
+					if (validation.overall === "FAIL" || validation.overall === "MISSING") {
+						if (ctx.hasUI) ctx.ui.notify(`Phase ${phase.id} validation: ${validation.overall}. Fix the output, then re-run /codecarto-next.`, "warning");
+						lastFeedbackLines = buildValidationSummary(validation);
+						return;
+					}
+
+					// PASS or PASS WITH GAPS — auto-complete the phase.
+					try {
+						const { updatedState, closeoutNotice } = await autoCompletePhase(ctx, validation);
+						if (ctx.hasUI) {
+							ctx.ui.notify(`Phase ${phase.id} auto-completed (validation: ${validation.overall}).`, validation.overall === "PASS WITH GAPS" ? "warning" : "info");
+							if (closeoutNotice) ctx.ui.notify(closeoutNotice, "info");
+						}
+						lastFeedbackLines = [
+							`Completed phase: ${validation.phaseId}`,
+							`Validation: ${validation.overall}`,
+							`Next phase: ${updatedState.status.current_phase}`,
+						];
+						if (closeoutNotice) lastFeedbackLines.push(closeoutNotice);
+					} catch (error: unknown) {
+						const message = error instanceof Error ? error.message : String(error);
+						if (ctx.hasUI) ctx.ui.notify(`Auto-completion failed for ${phase.id}: ${message}. Run /codecarto-complete manually.`, "warning");
+						lastFeedbackLines = [`Auto-completion failed: ${message}`, "Run `/codecarto-complete` manually."];
+					}
+				})
+				.catch((error: unknown) => {
+					const message = error instanceof Error ? error.message : String(error);
+					if (ctx.hasUI) ctx.ui.notify(`Post-phase processing error for ${phase.id}: ${message}`, "warning");
+					lastFeedbackLines = [`Post-phase error: ${message}`];
+				})
 				.finally(() => {
 					// Refresh the status widget after the phase resolves so the
 					// "Open questions / Carry-forward / Next" lines reflect any

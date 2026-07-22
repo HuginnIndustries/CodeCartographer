@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.3] — 2026-07-22
+
+### Fixed
+
+- Single-shot `/codecarto-next` (without `--auto`) now auto-validates and auto-completes the phase after the sub-agent finishes, instead of leaving `status.yaml` stuck at `pending` and requiring the user to manually run `/codecarto-validate` then `/codecarto-complete`. The `--auto` loop already did this; the single-shot path now matches.
+
 ## [0.12.2] — 2026-07-22
 
 ### Fixed
