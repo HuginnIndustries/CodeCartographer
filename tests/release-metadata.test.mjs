@@ -26,6 +26,11 @@ test("MCP Registry metadata identifies the published stdio package", () => {
 		server.$schema ?? "",
 		/^https:\/\/static\.modelcontextprotocol\.io\/schemas\/[^/]+\/server\.schema\.json$/,
 	);
+	assert.equal(
+		pkg.mcpName,
+		"io.github.HuginnIndustries/codecartographer",
+		"MCP Registry GitHub organization namespaces are case-sensitive",
+	);
 	assert.equal(server.name, pkg.mcpName, "server.json name must match npm mcpName ownership marker");
 	assert.equal(server.title, "CodeCartographer");
 	assert.equal(server.websiteUrl, "https://codecarto.dev/");

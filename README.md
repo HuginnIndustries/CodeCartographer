@@ -86,7 +86,7 @@ Add to your host config (`~/.config/claude-code/config.json`, `claude_desktop_co
 }
 ```
 
-Official MCP Registry server name: `io.github.huginnindustries/codecartographer`.
+Official MCP Registry server name: `io.github.HuginnIndustries/codecartographer`.
 
 ### Drop-in template (one-off / evaluation)
 
