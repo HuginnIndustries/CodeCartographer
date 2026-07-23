@@ -657,6 +657,37 @@ export async function handleLibraryInit(args: { library_path: string; name?: str
 	});
 }
 
+export async function handleVision(args: { cwd: string; raw_text: string }) {
+	const cwd = await validateCwd(args.cwd);
+	const workspaceDir = join(cwd, ".codecarto");
+	const interviewPath = join(workspaceDir, "findings", "vision-capture", "INTERVIEW.md");
+	const visionPath = join(workspaceDir, "inputs", "vision.md");
+
+	if (!(await pathExists(interviewPath))) {
+		throw new McpError(ErrorCode.InvalidRequest, "Vision interview skill not found. Run codecarto_init with the synthesis pipeline first.");
+	}
+
+	const interviewSkill = await readFile(interviewPath, "utf8");
+	const prompt = [
+		"Read the interview skill below and use it to structure the user's raw product text into a vision brief.",
+		"",
+		interviewSkill,
+		"",
+		"The user's raw product text is:",
+		"",
+		args.raw_text,
+		"",
+		`Write the synthesized brief to ${visionPath}.`,
+	].join("\n");
+
+	return textResult(prompt, {
+		cwd,
+		visionPath,
+		interviewPath,
+		note: "Feed this prompt to your agent. The agent will write the structured vision brief to inputs/vision.md.",
+	});
+}
+
 export async function handleConfig(args: { cwd?: string }) {
 	const config = args.cwd
 		? await loadCodecartoConfig(join(args.cwd, ".codecarto"))
@@ -871,6 +902,19 @@ const TOOLS = [
 		},
 	},
 	{
+		name: "codecarto_vision",
+		description:
+			"Generate a structured vision brief from raw product text using the guided interview skill. Returns a prompt the host should feed to its agent to write inputs/vision.md. Requires a synthesis workspace (run codecarto_init with the synthesis pipeline first).",
+		inputSchema: {
+			type: "object",
+			properties: {
+				cwd: { type: "string", description: "Absolute path to the target repository with a .codecarto/ synthesis workspace." },
+				raw_text: { type: "string", description: "The user's raw product text — audience, problem, desired outcomes, constraints, non-goals." },
+			},
+			required: ["cwd", "raw_text"],
+		},
+	},
+	{
 		name: "codecarto_library_init",
 		description:
 			"Initialize a CodeCartographer library at the given path: create the directory, write the .codecarto-library marker, and write the library.path into the user-global config. Idempotent — safe to re-run on an existing library. Pass a namespace to create a namespaced (shared) library.",
@@ -911,6 +955,7 @@ const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 	codecarto_library_reindex: handleLibraryReindex,
 	codecarto_library_init: handleLibraryInit,
 	codecarto_config: handleConfig,
+	codecarto_vision: handleVision,
 };
 
 // ---------- server bootstrap ----------
