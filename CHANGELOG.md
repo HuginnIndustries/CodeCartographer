@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.6] — 2026-07-23
+
+### Added
+
+- `/codecarto-library-init <path> [--namespace <name>]` (Pi) and `codecarto_library_init` (MCP) command to initialize a CodeCartographer library: creates the directory, writes the `.codecarto-library` marker, and writes the config. Idempotent — safe to re-run on an existing library. Closes the first-publish dead end.
+- `/codecarto-config` (Pi) and `codecarto_config` (MCP) command to show the effective merged configuration (library.path, namespace, publish_confirm, llm_steer_next_phase) and whether the library marker was found.
+
 ## [0.12.5] — 2026-07-23
 
 ### Added
