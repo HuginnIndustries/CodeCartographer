@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.8] — 2026-07-23
+
+### Added
+
+- MCP `codecarto_open` tool — activate existing workspace without resetting state (parity with Pi `/codecarto-open`).
+- MCP `codecarto_usage` tool — cumulative and per-phase token usage telemetry (parity with Pi `/codecarto-usage`).
+- MCP `codecarto_dashboard` tool — regenerate `.codecarto/dashboard.html` (parity with Pi `/codecarto-dashboard`).
+- MCP `codecarto_list_skills` tool — list available post-pipeline skills (parity with Pi `/codecarto-skill` with no args).
+
 ## [0.12.7] — 2026-07-23
 
 ### Added
