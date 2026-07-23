@@ -5,9 +5,9 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireLock, applyHandoff, normalizeStatus, parseHandoff } from "./status.ts";
+import { acquireLock, applyHandoff, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
 import type { PhaseHandoff, PipelineFile, StatusFile, WorkspaceState } from "./types.ts";
 import { pathExists } from "./utils.ts";
 import { loadYamlFile, stringifySimpleYaml } from "./yaml.ts";
@@ -142,6 +142,77 @@ export async function updateStatusAtomically(
 		}
 
 		return nextState;
+	} finally {
+		await lock.release();
+	}
+}
+
+/**
+ * Switch the active pipeline in-place without deleting findings, handoffs,
+ * usage data, closeouts, or checkpoints. Phases that exist in both the old
+ * and new pipelines preserve their completion status, owner notes, open
+ * questions, and carry-forward entries. Phases unique to the new pipeline
+ * start as pending. Phases unique to the old pipeline are dropped from
+ * status.yaml (but their findings remain on disk under findings/).
+ */
+export async function switchPipeline(
+	cwd: string,
+	newPipelinePath: string,
+): Promise<{ state: WorkspaceState; carried: string[]; dropped: string[]; newPhases: string[] }> {
+	const workspaceDir = join(cwd, ".codecarto");
+	const statusPath = join(workspaceDir, "workflow", "status.yaml");
+	const lockPath = `${statusPath}.lock`;
+	const lock = await acquireLock(lockPath);
+
+	try {
+		const currentState = await getWorkspaceState(cwd);
+		if (!currentState) {
+			throw new Error("CodeCartographer workspace not found. Run /codecarto-init first.");
+		}
+
+		const resolvedPipelinePath = join(workspaceDir, newPipelinePath);
+		if (!(await pathExists(resolvedPipelinePath))) {
+			throw new Error(`Pipeline not found: ${newPipelinePath}`);
+		}
+
+		const newPipeline = await loadYamlFile<PipelineFile>(resolvedPipelinePath);
+		const freshStatus = createEmptyStatus(basename(cwd), newPipelinePath, newPipeline);
+
+		// Preserve phase data for phases that exist in both old and new pipelines.
+		const carried: string[] = [];
+		const oldPhases = currentState.status.phases;
+		for (const phaseId of newPipeline.phase_order) {
+			if (oldPhases[phaseId]) {
+				freshStatus.phases[phaseId] = { ...oldPhases[phaseId] };
+				if (oldPhases[phaseId].status === "complete") {
+					carried.push(phaseId);
+				}
+			}
+		}
+
+		// Track phases that were in the old pipeline but not the new one.
+		const dropped = currentState.pipeline.phase_order.filter(
+			(phaseId) => !newPipeline.phase_order.includes(phaseId),
+		);
+		const newPhases = newPipeline.phase_order.filter(
+			(phaseId) => !currentState.pipeline.phase_order.includes(phaseId),
+		);
+
+		// Preserve post_pipeline entries from the old status.
+		freshStatus.post_pipeline = currentState.status.post_pipeline;
+
+		freshStatus.last_updated = new Date().toISOString();
+
+		assertCanonicalStatus(freshStatus);
+		const serialized = `${stringifySimpleYaml(freshStatus)}\n`;
+		const tempPath = `${statusPath}.${process.pid}.${Date.now()}.tmp`;
+		await writeFile(tempPath, serialized, "utf8");
+		await rename(tempPath, statusPath);
+
+		const state = await getWorkspaceState(cwd);
+		if (!state) throw new Error("Failed to reload workspace state after pipeline switch.");
+
+		return { state, carried, dropped, newPhases };
 	} finally {
 		await lock.release();
 	}

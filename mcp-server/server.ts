@@ -61,6 +61,7 @@ import {
 	resolvePipelineChoice,
 	type StatusFile,
 	stringifySimpleYaml,
+	switchPipeline,
 
 	validatePhaseOutput,
 	type WorkspaceState,
@@ -219,6 +220,33 @@ export async function handleStatus(args: { cwd: string }) {
 		carryForwardTotal: totalCarryForward,
 		postPipelinePending,
 		nextActions: state.status.next_actions,
+	});
+}
+
+export async function handleSwitchPipeline(args: { cwd: string; pipeline: string }) {
+	const cwd = await validateCwd(args.cwd);
+	const state = await requireWorkspace(cwd);
+
+	const pipelineChoice = resolvePipelineChoice(args.pipeline);
+	if (!pipelineChoice) {
+		throw new McpError(ErrorCode.InvalidRequest, `Unknown pipeline: ${args.pipeline}`);
+	}
+
+	if (state.status.pipeline === pipelineChoice) {
+		return textResult(`Already on pipeline: ${getPipelineLabel(pipelineChoice)}`, { pipeline: getPipelineLabel(pipelineChoice) });
+	}
+
+	const result = await switchPipeline(cwd, pipelineChoice);
+	const lines = [`Switched pipeline: ${getPipelineLabel(pipelineChoice)}`];
+	if (result.carried.length > 0) lines.push(`Phases preserved (completed): ${result.carried.join(", ")}`);
+	if (result.newPhases.length > 0) lines.push(`New phases: ${result.newPhases.join(", ")}`);
+	if (result.dropped.length > 0) lines.push(`Phases not in new pipeline: ${result.dropped.join(", ")} (findings remain on disk)`);
+
+	return textResult(lines.join("\n"), {
+		pipeline: getPipelineLabel(pipelineChoice),
+		carried: result.carried,
+		newPhases: result.newPhases,
+		dropped: result.dropped,
 	});
 }
 
@@ -621,6 +649,22 @@ const TOOLS = [
 		},
 	},
 	{
+		name: "codecarto_switch_pipeline",
+		description:
+			"Switch the active pipeline in-place without losing findings, handoffs, usage data, or phase progress. Phases that exist in both the old and new pipelines preserve their completion status. Phases unique to the new pipeline start as pending. Pass a pipeline alias (e.g. lite, full, synthesis) or a workflow/*.yaml path.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				cwd: { type: "string", description: "Absolute path to the target repository." },
+				pipeline: {
+					type: "string",
+					description: "Pipeline alias (e.g. lite, full, synthesis, architecture-only, defect-scan) or workflow/*.yaml path.",
+				},
+			},
+			required: ["cwd", "pipeline"],
+		},
+	},
+	{
 		name: "codecarto_status",
 		description: "Show the current CodeCartographer phase, active pipeline, and progress for a target repository.",
 		inputSchema: {
@@ -763,6 +807,7 @@ const TOOLS = [
 const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 	codecarto_init: handleInit,
 	codecarto_status: handleStatus,
+	codecarto_switch_pipeline: handleSwitchPipeline,
 	codecarto_next: handleNext,
 	codecarto_phase: handlePhase,
 	codecarto_validate: handleValidate,

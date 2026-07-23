@@ -222,7 +222,7 @@ The default is a 7-phase run that splits the defect scan into a mechanical early
 | **Architecture only** | 1 | Quick structural overview |
 | **Synthesis** | 4 | Turn a product vision and confirmed library specifications into a provenance-backed implementation plan |
 
-Set the active pipeline by editing `workflow/status.yaml`'s `pipeline:` field, or pass it as the argument to `/codecarto-init`.
+Switch the active pipeline with `/codecarto-switch-pipeline <variant>` (Pi) or `codecarto_switch_pipeline` (MCP). This rewrites `status.yaml` in-place without deleting findings, handoffs, usage data, or closeouts. Phases that exist in both the old and new pipelines preserve their completion status.
 
 **On disk:**
 
@@ -287,6 +287,7 @@ Beyond the slash commands, the Pi extension layers on:
 |---|---|
 | `/codecarto-init [variant]` | Copy `.codecarto/` into the current repository, select pipeline variant |
 | `/codecarto-open` | Activate an existing `.codecarto/` workspace in a new Pi session without resetting durable state |
+| `/codecarto-switch-pipeline <variant>` | Switch the active pipeline in-place without losing findings or progress |
 | `/codecarto-status` | Current phase, progress, open questions |
 | `/codecarto-next [--auto [--strict]] [--llm-steer \| --no-llm-steer]` | Spawn the next eligible phase as a sub-agent. After the sub-agent finishes, auto-validates and auto-completes the phase so `status.yaml` advances without manual steps. `--auto` walks the full pipeline end-to-end (same validate + complete + advance loop, repeated); `--strict` flips the `PASS WITH GAPS` rule from "advance" to "pause". |
 | `/codecarto-phase <id>` | Force a specific phase, even out of pipeline order |
