@@ -62,10 +62,12 @@ import {
 	type StatusFile,
 	stringifySimpleYaml,
 	switchPipeline,
-
 	validatePhaseOutput,
 	type WorkspaceState,
+	writeLibraryConfig,
 } from "../core/index.ts";
+import { initLibrary } from "../core/library.ts";
+import { loadUserConfig, resolveUserConfigPath } from "../core/orchestrator-config.ts";
 
 // ---------- input helpers ----------
 
@@ -625,6 +627,72 @@ export async function handleLibraryReindex(args: Record<string, unknown>) {
 	);
 }
 
+export async function handleLibraryInit(args: { library_path: string; name?: string; namespace?: string; cwd?: string }) {
+	if (!args.library_path || typeof args.library_path !== "string") {
+		throw new McpError(ErrorCode.InvalidParams, "library_path is required.");
+	}
+
+	const libraryPath = args.library_path;
+	const namespaced = !!args.namespace;
+
+	const result = await initLibrary(libraryPath, {
+		name: args.name,
+		namespaced,
+	});
+
+	// Write config to user-global location
+	const configPath = resolveUserConfigPath();
+	await writeLibraryConfig(configPath, libraryPath, args.namespace ?? null);
+
+	const msg = result.alreadyExisted
+		? `Library already exists at ${libraryPath} (marker preserved). Config written to ${configPath}.`
+		: `Created library at ${libraryPath} with marker "${result.marker.name}". Config written to ${configPath}.`;
+
+	return textResult(msg, {
+		libraryPath,
+		markerName: result.marker.name,
+		namespaced: result.marker.namespaced,
+		alreadyExisted: result.alreadyExisted,
+		configPath,
+	});
+}
+
+export async function handleConfig(args: { cwd?: string }) {
+	const config = args.cwd
+		? await loadCodecartoConfig(join(args.cwd, ".codecarto"))
+		: await loadUserConfig();
+
+	const userConfigPath = resolveUserConfigPath();
+	const workspaceConfigPath = args.cwd ? join(args.cwd, ".codecarto", "workflow", "config.yaml") : null;
+
+	let markerStatus = "not configured";
+	if (config.library.path) {
+		const marker = await discoverLibrary(config.library.path);
+		markerStatus = marker ? `found ("${marker.name}", namespaced: ${marker.namespaced})` : "MISSING";
+	}
+
+	return textResult(
+		[
+			"Effective CodeCartographer configuration:",
+			`  library.path: ${config.library.path ?? "(not set)"}`,
+			`  library.namespace: ${config.library.namespace ?? "(not set)"}`,
+			`  library.publish_confirm: ${config.library.publish_confirm}`,
+			`  orchestrator.llm_steer_next_phase: ${config.orchestrator.llm_steer_next_phase}`,
+			`  Library marker: ${markerStatus}`,
+			`  User-global config: ${userConfigPath}`,
+			`  Workspace config: ${workspaceConfigPath ?? "(no cwd provided)"}`,
+		].join("\n"),
+		{
+			libraryPath: config.library.path,
+			libraryNamespace: config.library.namespace,
+			publishConfirm: config.library.publish_confirm,
+			llmSteerNextPhase: config.orchestrator.llm_steer_next_phase,
+			userConfigPath,
+			workspaceConfigPath,
+		},
+	);
+}
+
 // ---------- tool registry ----------
 
 const TOOLS = [
@@ -802,6 +870,31 @@ const TOOLS = [
 			},
 		},
 	},
+	{
+		name: "codecarto_library_init",
+		description:
+			"Initialize a CodeCartographer library at the given path: create the directory, write the .codecarto-library marker, and write the library.path into the user-global config. Idempotent — safe to re-run on an existing library. Pass a namespace to create a namespaced (shared) library.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				library_path: { type: "string", description: "Absolute path for the library directory." },
+				name: { type: "string", description: "Library name (defaults to the directory basename)." },
+				namespace: { type: "string", description: "Default namespace for a namespaced (shared) library." },
+			},
+			required: ["library_path"],
+		},
+	},
+	{
+		name: "codecarto_config",
+		description:
+			"Show the effective merged CodeCartographer configuration (library.path, library.namespace, publish_confirm, llm_steer_next_phase) and whether the library marker was found. Pass cwd to include workspace-level config in the merge.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				cwd: { type: "string", description: "Absolute path to a repository with a .codecarto/ workspace (optional)." },
+			},
+		},
+	},
 ] as const;
 
 const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
@@ -816,6 +909,8 @@ const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 	codecarto_publish: handlePublish,
 	codecarto_library_list: handleLibraryList,
 	codecarto_library_reindex: handleLibraryReindex,
+	codecarto_library_init: handleLibraryInit,
+	codecarto_config: handleConfig,
 };
 
 // ---------- server bootstrap ----------

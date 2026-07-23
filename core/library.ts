@@ -26,7 +26,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { isPlainObject, pathExists } from "./utils.ts";
 import { parseSimpleYaml, stringifySimpleYaml } from "./yaml.ts";
 
@@ -168,6 +168,49 @@ function normalizeMarker(raw: Record<string, unknown> | LibraryMarker): LibraryM
 
 function isVisibility(v: string): v is LibraryVisibility {
 	return v === "internal" || v === "shared" || v === "public";
+}
+
+// ─── Library initialization ────────────────────────────────────────────────
+
+export interface InitLibraryOptions {
+	/** Library name (defaults to basename of the path). */
+	name?: string;
+	/** Visibility level. Default "internal". */
+	visibility?: LibraryVisibility;
+	/** Whether this is a namespaced (shared) library. Default false. */
+	namespaced?: boolean;
+}
+
+export interface InitLibraryResult {
+	libraryPath: string;
+	marker: LibraryMarker;
+	/** True if the marker already existed (idempotent re-run). */
+	alreadyExisted: boolean;
+}
+
+/**
+ * Initialize a CodeCartographer library at the given path: create the
+ * directory if needed, write the `.codecarto-library` marker if missing,
+ * and return the marker. Idempotent — re-running on an existing library
+ * is safe and preserves the existing marker.
+ */
+export async function initLibrary(libraryPath: string, options: InitLibraryOptions = {}): Promise<InitLibraryResult> {
+	const existing = await discoverLibrary(libraryPath);
+	if (existing) {
+		return { libraryPath, marker: existing, alreadyExisted: true };
+	}
+
+	const name = options.name?.trim() || basename(libraryPath);
+	const marker: LibraryMarker = {
+		schema_version: MARKER_SCHEMA_VERSION,
+		name,
+		namespaced: options.namespaced ?? false,
+		visibility: options.visibility ?? "internal",
+		created_at: new Date().toISOString(),
+	};
+
+	await writeMarker(libraryPath, marker);
+	return { libraryPath, marker, alreadyExisted: false };
 }
 
 // ─── Slug helpers ───────────────────────────────────────────────────────────
