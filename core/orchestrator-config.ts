@@ -17,8 +17,9 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { PathLike } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { expandTilde, pathExists } from "./utils.ts";
-import { loadYamlFile } from "./yaml.ts";
+import { loadYamlFile, parseSimpleYaml, stringifySimpleYaml } from "./yaml.ts";
 
 export interface OrchestratorConfig {
 	/** When true, /codecarto-next runs an LLM rewriter to produce a seed prompt
@@ -151,4 +152,34 @@ function cloneDefault(): CodecartoConfig {
 		orchestrator: { ...DEFAULT_CONFIG.orchestrator },
 		library: { ...DEFAULT_CONFIG.library },
 	};
+}
+
+/**
+ * Write a `library:` block into a config file (user-global or workspace).
+ * Creates the file and parent directories if needed. Preserves any existing
+ * `orchestrator:` block. Overwrites the `library:` block if present.
+ */
+export async function writeLibraryConfig(
+	configPath: string,
+	libraryPath: string,
+	namespace: string | null = null,
+	publishConfirm = true,
+): Promise<void> {
+	let existing: Record<string, unknown> = {};
+	if (await pathExists(configPath)) {
+		try {
+			const raw = await readFile(configPath, "utf8");
+			existing = parseSimpleYaml(raw) as Record<string, unknown>;
+		} catch {
+			// Malformed file — start fresh
+		}
+	}
+
+	const library: Record<string, unknown> = { path: libraryPath, publish_confirm: publishConfirm };
+	if (namespace) library.namespace = namespace;
+
+	const updated: Record<string, unknown> = { ...existing, library };
+	const dir = configPath.includes("/") ? configPath.slice(0, configPath.lastIndexOf("/")) : ".";
+	await mkdir(dir, { recursive: true });
+	await writeFile(configPath, `${stringifySimpleYaml(updated)}\n`, "utf8");
 }

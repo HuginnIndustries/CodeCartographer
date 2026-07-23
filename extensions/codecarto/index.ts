@@ -1,4 +1,5 @@
 import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -47,7 +48,10 @@ import {
 	switchPipeline,
 	validatePhaseOutput,
 	type WorkspaceState,
+	writeLibraryConfig,
 } from "../../core/index.ts";
+import { initLibrary } from "../../core/library.ts";
+import { resolveUserConfigPath, USER_CONFIG_DIR } from "../../core/orchestrator-config.ts";
 
 const STATUS_WIDGET_ID = "codecarto-widget";
 const STATUS_LINE_ID = "codecarto-status";
@@ -729,6 +733,74 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(`Unable to publish: ${message}`, "error");
 			}
+		},
+	});
+
+	pi.registerCommand("codecarto-library-init", {
+		description: "Initialize a CodeCartographer library and configure it: /codecarto-library-init <path> [--namespace <name>]",
+		handler: async (args, ctx) => {
+			const parts = args.trim().split(/\s+/);
+			const pathArg = parts[0];
+			const namespaceIdx = parts.indexOf("--namespace");
+			const namespace = namespaceIdx >= 0 ? parts[namespaceIdx + 1] : null;
+
+			if (!pathArg) {
+				ctx.ui.notify("Usage: /codecarto-library-init <path> [--namespace <name>]", "warning");
+				return;
+			}
+
+			const libraryPath = pathArg.startsWith("~") ? join(homedir(), pathArg.slice(1)) : resolve(pathArg);
+
+			try {
+				const result = await initLibrary(libraryPath, {
+					namespaced: !!namespace,
+					...(namespace ? {} : {}),
+				});
+
+				// Write the config to the user-global location
+				const configPath = resolveUserConfigPath();
+				await writeLibraryConfig(configPath, libraryPath, namespace);
+
+				const msg = result.alreadyExisted
+					? `Library already exists at ${libraryPath} (marker preserved). Config updated.`
+					: `Created library at ${libraryPath} with marker "${result.marker.name}".`;
+				lastFeedbackLines = [msg, `Config written to ${configPath}`];
+				if (ctx.hasUI) {
+					ctx.ui.notify(msg, "info");
+					ctx.ui.notify(`Config written to ${configPath}`, "info");
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Library init failed: ${message}`, "error");
+			}
+		},
+	});
+
+	pi.registerCommand("codecarto-config", {
+		description: "Show the effective merged CodeCartographer configuration (global + workspace)",
+		handler: async (_args, ctx) => {
+			const state = await ensureWorkspaceState(ctx);
+			const config = await loadCodecartoConfig(state ? state.workspaceDir : join(ctx.cwd, ".codecarto"));
+
+			const lines = [
+				"Effective CodeCartographer configuration:",
+				`  library.path: ${config.library.path ?? "(not set)"}`,
+				`  library.namespace: ${config.library.namespace ?? "(not set)"}`,
+				`  library.publish_confirm: ${config.library.publish_confirm}`,
+				`  orchestrator.llm_steer_next_phase: ${config.orchestrator.llm_steer_next_phase}`,
+				"",
+				`  User-global config: ${resolveUserConfigPath()}`,
+				`  Workspace config: ${state ? join(state.workspaceDir, "workflow/config.yaml") : "(no workspace)"}`,
+			];
+
+			if (config.library.path) {
+				const marker = await discoverLibrary(config.library.path);
+				lines.push(`  Library marker: ${marker ? `found ("${marker.name}", namespaced: ${marker.namespaced})` : "MISSING — run /codecarto-library-init"}`);
+			}
+
+			lastFeedbackLines = lines;
+			if (state) setUiState(ctx, state, lastFeedbackLines);
+			ctx.ui.notify("Configuration shown in status widget.", "info");
 		},
 	});
 

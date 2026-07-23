@@ -295,6 +295,8 @@ Beyond the slash commands, the Pi extension layers on:
 | `/codecarto-complete [phase]` | Validate and atomically apply the phase handoff, canonical status, closeout, and log entry |
 | `/codecarto-skill <name>` | Run a post-pipeline skill once all phases are complete |
 | `/codecarto-publish` | Publish the reimplementation spec to the configured library after reviewing an explicit confirmation preview |
+| `/codecarto-library-init <path> [--namespace <name>]` | Create a library directory with marker and write the config — fixes the first-publish dead end |
+| `/codecarto-config` | Show the effective merged configuration (global + workspace) and library marker status |
 | `/codecarto-usage` | Cumulative + per-phase token usage |
 | `/codecarto-dashboard [--narrate]` | Regenerate `.codecarto/dashboard.html`; `--narrate` for the LLM executive summary |
 
