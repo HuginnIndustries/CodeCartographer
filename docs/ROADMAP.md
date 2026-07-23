@@ -2,7 +2,7 @@
 
 This document tracks future-facing work. For the current shipped surface, see [README.md](../README.md).
 
-## Where We Are (v0.12.2)
+## Where We Are (v0.12.3)
 
 Already shipped:
 
@@ -29,7 +29,7 @@ Open future-facing items:
 
 ### Launch proof package (active)
 
-The v0.12.2 npm, GitHub, website, and official MCP Registry release gates are
+The v0.12.3 npm, GitHub, website, and official MCP Registry release gates are
 complete. The next launch milestone is durable, inspectable proof before any
 short-lived promotional channel:
 
