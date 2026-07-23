@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.11] — 2026-07-23
+
+### Fixed
+
+- MCP `codecarto_publish` arbitrary file read via `spec_path` (security). The `readSpecArg` function accepted any absolute file path for `spec_path` without enforcing containment, allowing an MCP client to read any file on the filesystem (e.g. `/etc/passwd`). Added path containment check using `isWithinPathResolved`: `spec_path` must be within the workspace `.codecarto/` directory or the configured library path. Regression tests verify both rejection of paths outside allowed roots and acceptance of paths within the workspace. Discovered during the v0.12.9 self-analysis case study security triage.
+
 ## [0.12.10] — 2026-07-23
 
 ### Fixed
