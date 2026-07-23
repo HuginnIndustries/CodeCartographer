@@ -44,6 +44,7 @@ import {
 	runPhasePreflight,
 	type StatusFile,
 	stringifySimpleYaml,
+	switchPipeline,
 	validatePhaseOutput,
 	type WorkspaceState,
 } from "../../core/index.ts";
@@ -325,6 +326,58 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			lastFeedbackLines = [`Current phase: ${nextPhase}`, `Pipeline: ${getPipelineLabel(state.status.pipeline)}`];
 			setUiState(ctx, state, lastFeedbackLines);
 			ctx.ui.notify(`CodeCartographer phase: ${nextPhase}`, "info");
+		},
+	});
+
+	pi.registerCommand("codecarto-switch-pipeline", {
+		description: "Switch the active pipeline without losing findings or progress: /codecarto-switch-pipeline <variant>",
+		getArgumentCompletions: (prefix) => {
+			const items = Object.keys(PIPELINE_ALIASES)
+				.filter((value) => value.startsWith(prefix))
+				.map((value) => ({ value, label: value }));
+			return items.length > 0 ? items : null;
+		},
+		handler: async (args, ctx) => {
+			const trimmedArgs = args.trim();
+			if (!trimmedArgs) {
+				ctx.ui.notify("Usage: /codecarto-switch-pipeline <variant> (e.g. lite, full, synthesis)", "warning");
+				return;
+			}
+
+			const pipelineChoice = resolvePipelineChoice(trimmedArgs);
+			if (!pipelineChoice) {
+				ctx.ui.notify(`Unknown pipeline: ${trimmedArgs}`, "error");
+				return;
+			}
+
+			const state = await ensureWorkspaceState(ctx);
+			if (!state) return;
+
+			const currentPipeline = state.status.pipeline;
+			if (currentPipeline === pipelineChoice) {
+				ctx.ui.notify(`Already on pipeline: ${getPipelineLabel(pipelineChoice)}`, "info");
+				return;
+			}
+
+			try {
+				const result = await switchPipeline(ctx.cwd, pipelineChoice);
+				const lines = [
+					`Switched pipeline: ${getPipelineLabel(pipelineChoice)}`,
+				];
+				if (result.carried.length > 0) lines.push(`Phases preserved (completed): ${result.carried.join(", ")}`);
+				if (result.newPhases.length > 0) lines.push(`New phases: ${result.newPhases.join(", ")}`);
+				if (result.dropped.length > 0) lines.push(`Phases not in new pipeline: ${result.dropped.join(", ")} (findings remain on disk)`);
+
+				lastFeedbackLines = lines;
+				await refreshWorkspaceUi(ctx, lastFeedbackLines);
+				ctx.ui.notify(`Switched to pipeline: ${getPipelineLabel(pipelineChoice)}`, "info");
+				void writeDashboard(ctx.cwd, PACKAGE_VERSION);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				lastFeedbackLines = [message];
+				setUiState(ctx, state, lastFeedbackLines);
+				ctx.ui.notify(message, "error");
+			}
 		},
 	});
 
