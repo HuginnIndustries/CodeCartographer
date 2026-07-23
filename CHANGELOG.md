@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.7] — 2026-07-23
+
+### Added
+
+- `/codecarto-vision` (Pi) and `codecarto_vision` (MCP) command to run a guided product discovery interview before the synthesis pipeline. A new `INTERVIEW.md` skill in `findings/vision-capture/` guides the LLM through structured questions (audience, problem, outcomes, scope, constraints, success measures) and writes a rich brief to `inputs/vision.md`. The Pi version is interactive (conducted in the orchestrator chat); the MCP version takes raw text and returns a prompt for the host's agent.
+
 ## [0.12.6] — 2026-07-23
 
 ### Added
