@@ -43,6 +43,7 @@ import {
 	getPipelineLabel,
 	getWorkspaceState,
 	isValidSlug,
+	isWithinPathResolved,
 	type LibraryIndexEntry,
 	type LibraryVisibility,
 	listEntries,
@@ -429,7 +430,7 @@ function buildGenerationFromArg(model_metadata: unknown): EntryGeneration {
 	return out;
 }
 
-async function readSpecArg(args: { spec?: unknown; spec_path?: unknown }): Promise<string> {
+async function readSpecArg(args: { spec?: unknown; spec_path?: unknown; cwd?: unknown }, allowedRoots: string[] = []): Promise<string> {
 	if (typeof args.spec === "string" && args.spec.length > 0) return args.spec;
 	if (typeof args.spec_path === "string" && args.spec_path.length > 0) {
 		if (!isAbsolute(args.spec_path)) {
@@ -437,6 +438,21 @@ async function readSpecArg(args: { spec?: unknown; spec_path?: unknown }): Promi
 		}
 		if (!(await pathExists(args.spec_path))) {
 			throw new McpError(ErrorCode.InvalidParams, `spec_path does not exist: ${args.spec_path}`);
+		}
+		// Enforce path containment: spec_path must be within an allowed root
+		// (cwd's .codecarto/ or the configured library path) to prevent
+		// arbitrary file reads.
+		if (allowedRoots.length > 0) {
+			const resolvedSpecPath = await canonicalPath(args.spec_path);
+			const withinAllowed = await Promise.all(
+				allowedRoots.map((root) => isWithinPathResolved(resolvedSpecPath, root)),
+			);
+			if (!withinAllowed.some((result) => result)) {
+				throw new McpError(
+					ErrorCode.InvalidParams,
+					`spec_path must be within the workspace (.codecarto/) or the configured library path. Got: ${args.spec_path}`,
+				);
+			}
 		}
 		return readFile(args.spec_path, "utf8");
 	}
@@ -487,7 +503,13 @@ export async function handlePublish(args: Record<string, unknown>) {
 		);
 	}
 
-	const spec = await readSpecArg(args);
+	// Build allowed roots for spec_path containment: workspace .codecarto/ and library path
+	const allowedRoots: string[] = [libraryPath];
+	if (typeof args.cwd === "string" && args.cwd.trim() !== "") {
+		allowedRoots.push(join(args.cwd.trim(), ".codecarto"));
+	}
+
+	const spec = await readSpecArg(args, allowedRoots);
 	if (typeof args.source_repo !== "string" || args.source_repo.trim() === "") {
 		throw new McpError(ErrorCode.InvalidParams, "source_repo is required");
 	}
