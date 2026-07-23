@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.5] — 2026-07-23
+
+### Added
+
+- `/codecarto-switch-pipeline <variant>` (Pi) and `codecarto_switch_pipeline` (MCP) command to switch the active pipeline in-place without losing findings, handoffs, usage data, closeouts, or phase progress. Phases that exist in both the old and new pipelines preserve their completion status. Replaces the README's broken advice to hand-edit `status.yaml`.
+
+### Changed
+
+- README pipeline switching instructions now point to the new command instead of telling users to hand-edit the framework-owned `status.yaml`.
+
 ## [0.12.4] — 2026-07-23
 
 ### Fixed
