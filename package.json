@@ -1,6 +1,6 @@
 {
   "name": "codecartographer-pi",
-  "version": "0.12.8",
+  "version": "0.12.9",
   "mcpName": "io.github.HuginnIndustries/codecartographer",
   "description": "Evidence-backed reverse engineering and human-gated software planning for Pi and MCP coding agents.",
   "type": "module",

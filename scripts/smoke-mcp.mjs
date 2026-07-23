@@ -87,15 +87,23 @@ async function setupFixture() {
 
 const EXPECTED_TOOLS = [
 	"codecarto_complete",
+	"codecarto_config",
+	"codecarto_dashboard",
 	"codecarto_init",
+	"codecarto_library_init",
 	"codecarto_library_list",
 	"codecarto_library_reindex",
+	"codecarto_list_skills",
 	"codecarto_next",
+	"codecarto_open",
 	"codecarto_phase",
 	"codecarto_publish",
 	"codecarto_skill",
 	"codecarto_status",
+	"codecarto_switch_pipeline",
+	"codecarto_usage",
 	"codecarto_validate",
+	"codecarto_vision",
 ];
 
 async function step(name, fn) {

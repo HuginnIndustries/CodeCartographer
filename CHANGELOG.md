@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.9] — 2026-07-23
+
+### Fixed
+
+- Smoke test now includes all 18 MCP tools in EXPECTED_TOOLS, fixing the CI release workflow that was stuck at the smoke-test step since v0.12.5. The previous hardcoded list only had 10 tools and used `assert.deepEqual`, causing a hard failure when the server returned additional tools.
+
 ## [0.12.8] — 2026-07-23
 
 ### Added
