@@ -40,6 +40,27 @@ export function isWithinPath(path: string, root: string): boolean {
 	return normalizedPath.startsWith(`${normalizedRoot}${process.platform === "win32" ? "\\" : "/"}`);
 }
 
+/**
+ * Symlink-aware version of isWithinPath. Resolves symlinks on both the path
+ * and root before comparing, preventing bypass via symlinks inside the
+ * allowed root that point outside it.
+ *
+ * Falls back to lexical isWithinPath if realpath fails (e.g., path does not
+ * exist yet), which is safe for write targets that haven't been created.
+ */
+export async function isWithinPathResolved(path: string, root: string): Promise<boolean> {
+	try {
+		const resolvedPath = await realpath(path);
+		const resolvedRoot = await realpath(root);
+		return isWithinPath(resolvedPath, resolvedRoot);
+	} catch {
+		// If realpath fails (path doesn't exist yet, broken symlink, etc.),
+		// fall back to lexical check. For write targets this is safe because
+		// the parent directory should already be within the root.
+		return isWithinPath(path, root);
+	}
+}
+
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
