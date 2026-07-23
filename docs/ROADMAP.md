@@ -33,14 +33,22 @@ The v0.12.3 npm, GitHub, website, and official MCP Registry release gates are
 complete. The next launch milestone is durable, inspectable proof before any
 short-lived promotional channel:
 
-- [ ] Publish the CodeCartographer self-analysis case study.
-- [ ] Publish the forward-synthesis case study, including the unchecked proposal,
-      human confirmation, conflict ledger, and provenance-backed project plan.
-- [ ] Publish the pinned `sindresorhus/p-map` analysis before Product Hunt.
-- [ ] Capture the real dashboard and provenance-ledger screenshots and complete
-      the concise walkthrough or video.
-- [ ] Prepare Show HN, DevHunt, OpenAI Developer Community, and Product Hunt
-      assets only after their proof and account-readiness gates pass.
+1. [ ] Publish the CodeCartographer self-analysis case study from an immutable
+       v0.12.3 checkout using `full-with-deep-audit`, with configuration,
+       artifacts, verified claims, reproduction commands, validation results,
+       runtime, and available token/cost data.
+2. [ ] Publish the forward-synthesis case study, visibly demonstrating the
+       unchecked proposal, blocked transition, human confirmation, exact input
+       versions, conflict dispositions, complete provenance path, and final
+       project plan.
+3. [ ] Capture the real dashboard, proposal, conflict, provenance, and plan
+       visuals; export channel-ready variants and complete the 90–150 second
+       walkthrough/video.
+4. [ ] Pass the Show HN readiness checklist and launch it independently of
+       Product Hunt account readiness.
+5. [ ] Publish the pinned `sindresorhus/p-map` analysis before Product Hunt.
+6. [ ] Prepare DevHunt, OpenAI Developer Community, and Product Hunt only after
+       each channel's proof, asset, and account-readiness gate passes.
 
 The authoritative requirements, reproduction metadata, status, and channel
 sequencing live in the
