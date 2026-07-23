@@ -250,6 +250,40 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("codecarto-vision", {
+		description: "Run a guided product discovery interview to produce inputs/vision.md for the synthesis pipeline",
+		handler: async (_args, ctx) => {
+			const interviewPath = join(ctx.cwd, ".codecarto", "findings", "vision-capture", "INTERVIEW.md");
+			if (!(await pathExists(interviewPath))) {
+				ctx.ui.notify("Vision interview skill not found. Run /codecarto-init synthesis first.", "warning");
+				return;
+			}
+
+			const interviewSkill = await readFile(interviewPath, "utf8");
+			const inputsDir = join(ctx.cwd, ".codecarto", "inputs");
+			const visionPath = join(inputsDir, "vision.md");
+			const visionExists = await pathExists(visionPath);
+
+			const prompt = [
+				"Read the interview skill below and conduct a guided product discovery interview with the user.",
+				"",
+				interviewSkill,
+				"",
+				`The vision brief should be written to .codecarto/inputs/vision.md${visionExists ? " (it already exists — review and improve it based on the interview)" : " (it does not exist yet — create it)"}.`,
+				"After the interview, write the synthesized brief and tell the user to run /codecarto-init synthesis followed by /codecarto-next to start the pipeline.",
+			].join("\n");
+
+			if (ctx.isIdle()) {
+				pi.sendUserMessage(prompt);
+			} else {
+				pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+			}
+
+			lastFeedbackLines = ["Vision interview started — answer the questions in chat."];
+			ctx.ui.notify("Vision interview queued — answer the questions in the chat.", "info");
+		},
+	});
+
 	pi.registerCommand("codecarto-init", {
 		description: "Initialize .codecarto/ in the current repository",
 		getArgumentCompletions: (prefix) => {
