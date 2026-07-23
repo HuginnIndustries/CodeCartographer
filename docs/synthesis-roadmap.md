@@ -246,6 +246,10 @@ MCP, with structural defense on the confirmation gate.
         sections. Section headers borrowed from SwarmLord build-spec
         as design inspiration only.
   - [ ] `.codecarto/templates/vision.md`.
+  - [ ] `.codecarto/findings/vision-capture/INTERVIEW.md` — pre-pipeline
+        guided discovery interview skill for `/codecarto-vision`. Conducts
+        a conversational interview to draw out a rich vision brief before
+        the synthesis pipeline starts.
 - [ ] `spec-merge` phase (mandatory, not optional):
   - [ ] `.codecarto/findings/spec-merge/SKILL.md` — reads library
         entries selected later in the proposal phase. Round-trip

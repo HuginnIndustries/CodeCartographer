@@ -55,9 +55,13 @@ The LLM reads your source code directly from the repository root. No symlinking 
 
 ## Step 2: Choose a Pipeline
 
-The default is `workflow/pipeline-full-with-audit.yaml` — the full 6-phase pipeline with defect scan. If that's what you want, skip to Step 3.
+The default is `workflow/pipeline-full-with-deep-audit.yaml` — the full 7-phase pipeline with split defect scan. If that's what you want, skip to Step 3.
 
-To use a different pipeline, open `.codecarto/workflow/status.yaml` and change the `pipeline` field. The comments in the file tell you which phases to add or remove to match.
+To use a different pipeline, you have two options:
+
+- **Pi extension:** Run `/codecarto-switch-pipeline <variant>` — switches in-place without losing findings or progress.
+- **MCP server:** Call `codecarto_switch_pipeline` with the pipeline alias.
+- **Drop-in template:** Open `.codecarto/workflow/status.yaml` and change the `pipeline` field.
 
 Here's how to decide:
 

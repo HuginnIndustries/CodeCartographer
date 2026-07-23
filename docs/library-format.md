@@ -37,6 +37,29 @@ A directory is a valid library if and only if it contains a file named
 by reading the configured `library_path` and checking for this marker;
 nothing about the parent path is interpreted.
 
+### Creating a library
+
+The easiest way is the init command:
+
+- **Pi:** `/codecarto-library-init <path> [--namespace <name>]`
+- **MCP:** `codecarto_library_init` with `library_path` (and optional `namespace`)
+
+This creates the directory, writes the marker file, and writes the
+`library.path` into your config (`~/.codecarto/config.yaml`). It is
+idempotent — safe to re-run on an existing library.
+
+You can also create one manually:
+
+1. Create the directory: `mkdir -p ~/codecarto-library`
+2. Write the marker file (see format below)
+3. Set `library.path` in `~/.codecarto/config.yaml`:
+
+```yaml
+library:
+  path: ~/codecarto-library
+  publish_confirm: true
+```
+
 ### Marker file format
 
 ```json
