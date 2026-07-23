@@ -74,7 +74,7 @@ test("synthesis alias initializes the four-phase forward workflow", () => {
 
 test("vision capture refuses the placeholder brief and includes a completed brief", async () => {
 	const phase = resolvePhase(state, "vision-capture");
-	await assert.rejects(buildPhasePrompt(state, phase, false), /vision brief.*still empty/i);
+	await assert.rejects(buildPhasePrompt(state, phase, false), /vision brief.*empty or only contains comments/i);
 	await writeFile(
 		join(workspace, ".codecarto", "inputs", "vision.md"),
 		"# Vision brief\n\nHelp platform teams turn several proven service designs into one auditable implementation plan.\n",

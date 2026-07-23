@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.4] — 2026-07-23
+
+### Fixed
+
+- MCP server handshake now reports `PACKAGE_VERSION` instead of a hardcoded stale `0.2.0` string that hadn't been updated since early development.
+- `/codecarto-init` on an existing workspace now backs up the old `.codecarto/` to `.codecarto-backup-TIMESTAMP/` instead of permanently deleting it with `rm -rf`. The confirmation dialog now explicitly warns about data loss and suggests `/codecarto-open` as a non-destructive alternative. The MCP `codecarto_init` tool with `force: true` also backs up instead of deleting, and its tool description now enumerates what is affected.
+- Synthesis preflight error messages now include actionable remediation guidance: the missing-vision error references `templates/vision.md`, the missing-library error includes an example config and marker JSON, the empty-library error names the commands to run, and the confirmed-selection error names the file to edit.
+
+### Changed
+
+- `/codecarto-publish` error messages for missing or misconfigured library now mention the required `.codecarto-library` marker file, not just the config path.
+
 ## [0.12.3] — 2026-07-22
 
 ### Fixed

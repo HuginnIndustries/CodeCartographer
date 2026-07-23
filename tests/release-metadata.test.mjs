@@ -62,3 +62,11 @@ test("npm metadata describes both product directions and preserves discovery ter
 		assert.ok(pkg.keywords?.includes(keyword), `package.json keywords must include ${keyword}`);
 	}
 });
+
+test("MCP server handshake uses PACKAGE_VERSION, not a hardcoded stale string", async () => {
+	const serverSrc = await readFile(join(REPO_ROOT, "mcp-server", "server.ts"), "utf8");
+	// The bootstrap must reference PACKAGE_VERSION, not a hardcoded version literal.
+	assert.match(serverSrc, /version:\s*PACKAGE_VERSION/, "buildServer must use PACKAGE_VERSION for the handshake");
+	// Ensure no stale hardcoded version remains in the Server constructor.
+	assert.doesNotMatch(serverSrc, /new Server\([^)]*version:\s*["']0\.\d/, "Server constructor must not hardcode a version string");
+});

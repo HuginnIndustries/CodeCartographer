@@ -19,7 +19,7 @@ import {
 	ListToolsRequestSchema,
 	McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 
 import {
@@ -143,10 +143,11 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 		if (!args.force) {
 			throw new McpError(
 				ErrorCode.InvalidRequest,
-				`A .codecarto/ directory already exists at ${targetWorkspaceDir}. Pass force: true to overwrite it.`,
+				`A .codecarto/ directory already exists at ${targetWorkspaceDir}. Pass force: true to back it up and reinitialize. Warning: this moves all existing findings, handoffs, usage data, closeouts, and phase progress to a .codecarto-backup-TIMESTAMP/ directory.`,
 			);
 		}
-		await rm(targetWorkspaceDir, { recursive: true, force: true });
+		const backupDir = join(cwd, `.codecarto-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+		await rename(targetWorkspaceDir, backupDir);
 	}
 
 	if (!(await pathExists(targetWorkspaceDir))) {
@@ -602,7 +603,7 @@ const TOOLS = [
 	{
 		name: "codecarto_init",
 		description:
-			"Initialize a CodeCartographer workspace (.codecarto/) in a target repository. Copies the packaged framework template and writes a fresh status.yaml for the chosen pipeline. Errors if .codecarto/ already exists unless force is true.",
+			"Initialize a CodeCartographer workspace (.codecarto/) in a target repository. Copies the packaged framework template and writes a fresh status.yaml for the chosen pipeline. If .codecarto/ already exists, pass force: true to back up the existing workspace to .codecarto-backup-TIMESTAMP/ and create a fresh one. Warning: backing up moves all existing findings, handoffs, usage data, closeouts, and phase progress to the backup directory.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -613,7 +614,7 @@ const TOOLS = [
 				},
 				force: {
 					type: "boolean",
-					description: "Overwrite an existing .codecarto/ directory if present (default false).",
+					description: "Back up and overwrite an existing .codecarto/ directory if present (default false).",
 				},
 			},
 			required: ["cwd"],
@@ -776,7 +777,7 @@ const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 
 export function buildServer() {
 	const server = new Server(
-		{ name: "codecartographer", version: "0.2.0" },
+		{ name: "codecartographer", version: PACKAGE_VERSION },
 		{ capabilities: { tools: {} } },
 	);
 

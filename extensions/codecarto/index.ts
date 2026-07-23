@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -273,11 +273,13 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				const sameWorkspace = normalizeForComparison(await canonicalPath(targetWorkspaceDir)) === normalizeForComparison(await canonicalPath(sourceWorkspaceDir));
 				if (!sameWorkspace) {
 					const overwrite = await ctx.ui.confirm(
-						"CodeCartographer already exists",
-						"A .codecarto/ directory already exists in this repository. Overwrite it?",
+						"CodeCartographer already exists — data will be lost",
+						"A .codecarto/ directory already exists in this repository. Re-initializing will back up the existing workspace to .codecarto-backup-TIMESTAMP/ and create a fresh one. All phase findings, handoffs, usage data, closeouts, and progress will be moved to the backup. Consider /codecarto-open to reattach without resetting. Continue?",
 					);
 					if (!overwrite) return;
-					await rm(targetWorkspaceDir, { recursive: true, force: true });
+					const backupDir = join(ctx.cwd, `.codecarto-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+					await rename(targetWorkspaceDir, backupDir);
+					if (ctx.hasUI) ctx.ui.notify(`Backed up existing workspace to ${basename(backupDir)}/`, "info");
 				}
 			}
 
@@ -615,12 +617,12 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			const config = await loadCodecartoConfig(state.workspaceDir);
 			if (!config.library.path) {
-				ctx.ui.notify("No library.path is configured. Set it in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml.", "error");
+				ctx.ui.notify("No library.path is configured. Create a library directory with a .codecarto-library marker, then set library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml.", "error");
 				return;
 			}
 			const marker = await discoverLibrary(config.library.path);
 			if (!marker) {
-				ctx.ui.notify(`No CodeCartographer library at ${config.library.path} (missing .codecarto-library).`, "error");
+				ctx.ui.notify(`No CodeCartographer library at ${config.library.path} (missing .codecarto-library). Create a .codecarto-library marker file in that directory.`, "error");
 				return;
 			}
 

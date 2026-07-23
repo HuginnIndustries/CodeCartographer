@@ -118,14 +118,14 @@ export async function runPhasePreflight(
 		if (!(await pathExists(visionPath))) {
 			throw new PhasePreflightError(
 				phase.id,
-				`the vision brief is missing at .codecarto/${SYNTHESIS_VISION_INPUT_PATH}. Create it before starting synthesis.`,
+				`the vision brief is missing at .codecarto/${SYNTHESIS_VISION_INPUT_PATH}. Create that file and describe your product intent (audience, problem, desired outcome, constraints, non-goals). See .codecarto/templates/vision.md for the expected structure.`,
 			);
 		}
 		const rawVision = await readFile(visionPath, "utf8");
 		if (!hasMeaningfulVisionContent(rawVision)) {
 			throw new PhasePreflightError(
 				phase.id,
-				`the vision brief at .codecarto/${SYNTHESIS_VISION_INPUT_PATH} is still empty. Describe the audience, problem, and desired outcome, then retry.`,
+				`the vision brief at .codecarto/${SYNTHESIS_VISION_INPUT_PATH} appears to be empty or only contains comments. Write your product intent into that file — at minimum: who the product is for, what problem it solves, and what outcome you want. See .codecarto/templates/vision.md for the full structure.`,
 			);
 		}
 	}
@@ -135,21 +135,21 @@ export async function runPhasePreflight(
 		if (!config.library.path) {
 			throw new PhasePreflightError(
 				phase.id,
-				"no library.path is configured. Set it in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml.",
+				"no library.path is configured. Create a library directory with a .codecarto-library marker file, then set library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml. Example config:\n  library:\n    path: ~/codecarto-library\n    publish_confirm: true",
 			);
 		}
 		const marker = await discoverLibrary(config.library.path);
 		if (!marker) {
 			throw new PhasePreflightError(
 				phase.id,
-				`no CodeCartographer library was found at ${config.library.path} (missing .codecarto-library).`,
+				`no CodeCartographer library was found at ${config.library.path} (missing .codecarto-library). Create a .codecarto-library marker file in that directory with: {"schema_version": 1, "name": "personal-library", "visibility": "internal", "namespaced": false}`,
 			);
 		}
 		const entries = await listEntries(config.library.path);
 		if (entries.length === 0) {
 			throw new PhasePreflightError(
 				phase.id,
-				`the configured library at ${config.library.path} has no entries. Publish at least one reimplementation spec first.`,
+				`the configured library at ${config.library.path} has no entries. Run a reverse-engineering pipeline (e.g. /codecarto-init full-with-deep-audit) on a source repository, then use /codecarto-publish to publish at least one reimplementation spec into the library before starting synthesis.`,
 			);
 		}
 		result.libraryPath = config.library.path;
@@ -170,7 +170,7 @@ export async function runPhasePreflight(
 		if (result.confirmedSelections.length === 0) {
 			throw new PhasePreflightError(
 				phase.id,
-				`no library entries are confirmed in .codecarto/${SYNTHESIS_PROPOSAL_PATH}. Change at least one [ ] checkbox to [x], then retry.`,
+				`no library entries are confirmed in .codecarto/${SYNTHESIS_PROPOSAL_PATH}. Open that file and change at least one [ ] checkbox to [x] for the entry you want to include, then retry.`,
 			);
 		}
 		const available = new Map(result.libraryEntries.map((entry) => [entry.ref, entry]));
@@ -179,7 +179,7 @@ export async function runPhasePreflight(
 			if (!entry || !entry.versions.includes(selection.version)) {
 				throw new PhasePreflightError(
 					phase.id,
-					`confirmed selection ${selection.ref}@v${selection.version} is not present in the configured library. Re-run the proposal phase or correct the checked row.`,
+					`confirmed selection ${selection.ref}@v${selection.version} is not present in the configured library. Edit .codecarto/${SYNTHESIS_PROPOSAL_PATH} to correct the checked row (change [x] back to [ ] or update the version), or re-run the goal-synthesis-propose phase to regenerate the proposal.`,
 				);
 			}
 			selection.specPath = specPathForVersion(result.libraryPath!, selection.ref, selection.version);
