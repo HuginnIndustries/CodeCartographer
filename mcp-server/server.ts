@@ -28,6 +28,8 @@ import {
 	buildValidationSummary,
 	canonicalPath,
 	completeValidatedPhase,
+	computePerPhaseTotals,
+	computeTotals,
 	createEmptyStatus,
 
 	DEFAULT_PIPELINE_PATH,
@@ -46,6 +48,7 @@ import {
 	listEntries,
 	listSkillNames,
 	loadCodecartoConfig,
+	loadUsage,
 	loadYamlFile,
 	normalizeForComparison,
 
@@ -68,6 +71,7 @@ import {
 } from "../core/index.ts";
 import { initLibrary } from "../core/library.ts";
 import { loadUserConfig, resolveUserConfigPath } from "../core/orchestrator-config.ts";
+import { writeDashboard } from "../extensions/codecarto/dashboard-writer.ts";
 
 // ---------- input helpers ----------
 
@@ -724,6 +728,67 @@ export async function handleConfig(args: { cwd?: string }) {
 	);
 }
 
+// ---------- MCP parity handlers: open, usage, dashboard, list_skills ----------
+
+export async function handleOpen(args: { cwd: string }) {
+	const cwd = await validateCwd(args.cwd);
+	const workspaceDir = join(cwd, ".codecarto");
+	if (!(await pathExists(join(workspaceDir, "workflow", "status.yaml")))) {
+		throw new McpError(ErrorCode.InvalidRequest, "No existing CodeCartographer workspace found. Run codecarto_init first.");
+	}
+	const state = await requireWorkspace(cwd);
+	const nextPhase = getNextEligiblePhase(state)?.id ?? "complete";
+	return textResult(
+		`Opened existing CodeCartographer workspace: ${getPipelineLabel(state.status.pipeline)}. Current phase: ${nextPhase}.`,
+		{ pipeline: getPipelineLabel(state.status.pipeline), currentPhase: nextPhase },
+	);
+}
+
+export async function handleUsage(args: { cwd: string }) {
+	const cwd = await validateCwd(args.cwd);
+	const state = await requireWorkspace(cwd);
+	const usage = await loadUsage(state.workspaceDir);
+	if (usage.runs.length === 0) {
+		return textResult("No phase runs recorded yet.", { runs: 0 });
+	}
+	const totals = computeTotals(usage);
+	const perPhase = computePerPhaseTotals(usage);
+	const lines: string[] = [
+		`Total runs: ${totals.runs}`,
+		`Total tokens: ${totals.tokens.input} in / ${totals.tokens.output} out / ${totals.tokens.cache_write} cache-write`,
+		`Total duration: ${totals.duration_ms}ms / ${totals.tool_uses} tool uses`,
+		"",
+		"Per-phase totals:",
+	];
+	for (const [phaseId, t] of perPhase) {
+		lines.push(`  ${phaseId}: ${t.runs} run(s), ${t.tokens.input + t.tokens.output} tokens, ${t.tool_uses} tool uses, ${t.duration_ms}ms`);
+	}
+	return textResult(lines.join("\n"), {
+		runs: totals.runs,
+		tokens: totals.tokens,
+		toolUses: totals.tool_uses,
+		durationMs: totals.duration_ms,
+		perPhase: Object.fromEntries(perPhase),
+	});
+}
+
+export async function handleDashboard(args: { cwd: string }) {
+	const cwd = await validateCwd(args.cwd);
+	await requireWorkspace(cwd);
+	await writeDashboard(cwd, PACKAGE_VERSION);
+	return textResult("Dashboard regenerated: .codecarto/dashboard.html", { path: ".codecarto/dashboard.html" });
+}
+
+export async function handleListSkills(args: { cwd: string }) {
+	const cwd = await validateCwd(args.cwd);
+	const state = await requireWorkspace(cwd);
+	const skills = await listSkillNames(state.workspaceDir);
+	const lines = skills.length > 0
+		? [`Available skills (${skills.length}):`, ...skills.map((s) => `  - ${s}`)]
+		: ["No skills installed."];
+	return textResult(lines.join("\n"), { skills });
+}
+
 // ---------- tool registry ----------
 
 const TOOLS = [
@@ -939,6 +1004,42 @@ const TOOLS = [
 			},
 		},
 	},
+	{
+		name: "codecarto_open",
+		description: "Activate an existing CodeCartographer workspace without resetting state. Returns the current pipeline and phase.",
+		inputSchema: {
+			type: "object",
+			properties: { cwd: { type: "string", description: "Absolute path to the target repository." } },
+			required: ["cwd"],
+		},
+	},
+	{
+		name: "codecarto_usage",
+		description: "Show cumulative and per-phase token usage from local phase runs.",
+		inputSchema: {
+			type: "object",
+			properties: { cwd: { type: "string", description: "Absolute path to the target repository." } },
+			required: ["cwd"],
+		},
+	},
+	{
+		name: "codecarto_dashboard",
+		description: "Regenerate .codecarto/dashboard.html from the current workspace state.",
+		inputSchema: {
+			type: "object",
+			properties: { cwd: { type: "string", description: "Absolute path to the target repository." } },
+			required: ["cwd"],
+		},
+	},
+	{
+		name: "codecarto_list_skills",
+		description: "List available post-pipeline skills installed in the workspace.",
+		inputSchema: {
+			type: "object",
+			properties: { cwd: { type: "string", description: "Absolute path to the target repository." } },
+			required: ["cwd"],
+		},
+	},
 ] as const;
 
 const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
@@ -956,6 +1057,10 @@ const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 	codecarto_library_init: handleLibraryInit,
 	codecarto_config: handleConfig,
 	codecarto_vision: handleVision,
+	codecarto_open: handleOpen,
+	codecarto_usage: handleUsage,
+	codecarto_dashboard: handleDashboard,
+	codecarto_list_skills: handleListSkills,
 };
 
 // ---------- server bootstrap ----------
