@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.12.10] — 2026-07-23
+
+### Fixed
+
+- Symlink sandbox bypass in `isWithinPath` (security). The Pi extension's tool-call sandbox used lexical path comparison (`resolve()`) without resolving symlinks, allowing a sub-agent to create a symlink inside `.codecarto/` pointing to a file outside the allowed root and write through it. Added `isWithinPathResolved` which uses `realpath` before comparison, and updated the Pi tool-call hook to use it. Regression tests verify both the vulnerability (documented) and the fix. Discovered during the v0.12.9 self-analysis case study, independently confirmed, and fixed with regression coverage.
+
 ## [0.12.9] — 2026-07-23
 
 ### Fixed

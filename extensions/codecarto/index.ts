@@ -27,6 +27,7 @@ import {
 	getPipelineLabel,
 	getWorkspaceState,
 	isWithinPath,
+	isWithinPathResolved,
 	listSkillNames,
 	loadCodecartoConfig,
 	loadUsage,
@@ -217,7 +218,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (config.library.path && await discoverLibrary(config.library.path)) {
 				allowedRoots.push(await canonicalPath(config.library.path));
 			}
-			if (!allowedRoots.some((allowedRoot) => isWithinPath(targetPath, allowedRoot))) {
+			const withinAllowed = await Promise.all(
+			allowedRoots.map((allowedRoot) => isWithinPathResolved(targetPath, allowedRoot)),
+		);
+		if (!withinAllowed.some((result) => result)) {
 				if (ctx.hasUI) {
 					ctx.ui.notify(`Blocked ${event.toolName} outside .codecarto/ or configured library: ${inputPath}`, "warning");
 				}
