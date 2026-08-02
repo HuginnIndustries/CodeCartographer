@@ -9,7 +9,7 @@
 [![npm version](https://img.shields.io/npm/v/codecartographer-pi.svg)](https://www.npmjs.com/package/codecartographer-pi)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 
-> **Evidence-backed software cartography for coding agents.** Turn an unfamiliar repository into validated architecture, contracts, defects, and a reimplementation specification—then combine explicitly confirmed specifications with a product vision to produce a provenance-backed implementation plan.
+> **Understand an unfamiliar codebase with an AI agent — and get a validated spec you can rebuild from.** CodeCartographer turns a repository into layered architecture, behavioral contracts, defect findings, and a language-agnostic reimplementation spec, with each phase validated before the next one runs. Works with Pi, Claude Code, Cursor, Codex, or any MCP-capable agent.
 
 ```text
 ●  CodeCartographer
@@ -18,6 +18,24 @@
 └─ ⠹  contracts phase       ⟳ 11 · 37 tool uses · 335.1k tokens · 40.1s
        ⎿ extracting behavioral contracts from server/index.ts…
 ```
+
+<p align="center">
+  <img src="docs/demo-dashboard-hero.png" alt="CodeCartographer dashboard — a mid-run pipeline with architecture and defect-scan phases complete, contracts in progress, per-phase token and tool-use telemetry.">
+</p>
+
+---
+
+## Why CodeCartographer
+
+Asking an LLM to "analyze this repo" loses context halfway through, hallucinates findings, and leaves no artifact the next session can pick up. CodeCartographer fixes three things:
+
+1. **The filesystem is the memory, not the conversation.** Each phase writes a smaller, templated, evidence-tagged artifact to `.codecarto/findings/`. Later phases re-read the specific upstream files they need. A new session — or a context compaction — picks up from `status.yaml` without losing progress.
+
+2. **Every phase is validated before the pipeline advances.** Completion criteria are real: a `FAIL` output stops the run. You can't accidentally build a reimplementation spec on top of hallucinated architecture.
+
+3. **The output is a spec, not a chat log.** The final `reimplementation-spec.md` is language-agnostic, module-inventoried, and carries acceptance scenarios plus known unknowns. Hand it to another agent to rebuild from.
+
+Every finding is tagged with an evidence level: `observed fact`, `strong inference`, `portability hazard`, or `open question`.
 
 ---
 
@@ -35,6 +53,8 @@
 | **Forward synthesis** — vision + confirmed library specs → provenance-backed project plan | `pipeline-synthesis.yaml` |
 
 Publish completed reimplementation specs from Pi or MCP, then run the `synthesis` pipeline to turn a product vision and explicitly confirmed library entries into a conflict-aware `project-plan.md` with a decision-level provenance ledger.
+
+> **If CodeCartographer saves you a day of codebase archaeology, star the repo** — it helps the next person find it.
 
 OpenAI Build Week reviewers: see the [new-vs-existing scope and one-command demo](docs/build-week-2026.md).
 
@@ -69,6 +89,8 @@ pi -e /absolute/path/to/CodeCartographer/extensions/codecarto/index.ts
 ### MCP server (for other coding agents)
 
 Use this when your coding agent isn't Pi — Claude Code, Codex, opencode, Cursor, Claude Desktop, or anything else that speaks MCP. The host drives the conversation and runs the LLM; CodeCartographer provides phase prompts, validation, and experimental library publish/list/reindex operations.
+
+> **30-second setup for Claude Code, Cursor, Codex, and Claude Desktop: see the [MCP quickstart](docs/mcp-quickstart.md).**
 
 ```bash
 npm install --global codecartographer-pi
