@@ -28,7 +28,7 @@ const { readFileSync } = await import("node:fs");
 const pipelineYaml = readFileSync(pipelineSrc, "utf8");
 await writeFile(join(workflow, "pipeline-full-with-deep-audit.yaml"), pipelineYaml, "utf8");
 
-// ── status.yaml: mid-run, architecture + defect-scan-mech complete, contracts running ─
+// ── status.yaml: mid-run, architecture + defect-scan-mechanical complete, contracts running ─
 const now = new Date().toISOString();
 const statusYaml = `project_name: express-starter
 schema_version: 1
@@ -36,14 +36,14 @@ pipeline: workflow/pipeline-full-with-deep-audit.yaml
 current_phase: contracts
 last_updated: ${now}
 next_actions:
-  - "Review the architecture map at findings/architecture/architecture.md"
-  - "Confirm or reject the 3 high-severity defects in findings/defect-scan/"
+  - "Review the architecture map at findings/architecture/architecture-map.md"
+  - "Confirm or reject the 3 high-severity defects in findings/defect-scan-mechanical/"
   - "Run /codecarto-next to continue the contracts phase"
 phases:
   architecture:
     status: complete
     outputs_present:
-      - findings/architecture/architecture.md
+      - findings/architecture/architecture-map.md
     owner_notes:
       - "Layered MVC confirmed; router/service/model separation is clean"
     open_questions:
@@ -55,10 +55,10 @@ phases:
       - target_phase: contracts
         kind: defer-to-phase
         description: "v1 surface decision needed before contracts can finalize endpoint coverage"
-  defect-scan-mech:
+  defect-scan-mechanical:
     status: complete
     outputs_present:
-      - findings/defect-scan/defects.md
+      - findings/defect-scan-mechanical/mechanical-defects.md
     owner_notes:
       - "3 high-severity, 7 medium, 12 low — all with file:line evidence"
   defect-scan-sem:
@@ -85,7 +85,7 @@ await writeFile(join(workflow, "status.yaml"), statusYaml, "utf8");
 
 // ── Findings: realistic hand-authored artifacts ─────────────────────────────
 await mkdir(join(findings, "architecture"), { recursive: true });
-await mkdir(join(findings, "defect-scan"), { recursive: true });
+await mkdir(join(findings, "defect-scan-mechanical"), { recursive: true });
 await mkdir(join(findings, "contracts"), { recursive: true });
 
 const archMd = [
@@ -110,7 +110,7 @@ const archMd = [
   `\`observed fact\` (layer boundaries), \`strong inference\` (v1 deprecation intent), \`open question\` (concurrent refresh).`,
   ``,
 ].join("\n");
-await writeFile(join(findings, "architecture", "architecture.md"), archMd, "utf8");
+await writeFile(join(findings, "architecture", "architecture-map.md"), archMd, "utf8");
 
 const defectsMd = [
   `# Defect report — express-starter`,
@@ -126,7 +126,7 @@ const defectsMd = [
   `9 medium findings omitted for brevity — see full report.`,
   ``,
 ].join("\n");
-await writeFile(join(findings, "defect-scan", "defects.md"), defectsMd, "utf8");
+await writeFile(join(findings, "defect-scan-mechanical", "mechanical-defects.md"), defectsMd, "utf8");
 
 // contracts/artifact.md intentionally absent — phase is in-progress (shows realistic state)
 
@@ -142,68 +142,58 @@ const archDate = new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString().slice(
 await writeFile(join(closeouts, `${archDate}-architecture.md`), archCloseout, "utf8");
 
 const defectCloseout = [
-  `# Closeout — defect-scan-mech phase`,
+  `# Closeout — defect-scan-mechanical phase`,
   ``,
   `## Summary`,
   `Mechanical defect scan complete. 3 high-severity findings (SQL injection, token rotation, migration transaction gap), all with file:line evidence. Semantic scan pending.`,
   ``,
 ].join("\n");
 const defectDate = new Date(Date.now() - 1000 * 60 * 60 * 10).toISOString().slice(0, 10);
-await writeFile(join(closeouts, `${defectDate}-defect-scan-mech.md`), defectCloseout, "utf8");
+await writeFile(join(closeouts, `${defectDate}-defect-scan-mechanical.md`), defectCloseout, "utf8");
 
 // ── Usage log (realistic token/tool/duration telemetry) ─────────────────────
 const archTs = new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString();
 const defectTs = new Date(Date.now() - 1000 * 60 * 60 * 10).toISOString();
-const contractTs = new Date(Date.now() - 1000 * 60 * 5).toISOString();
-const usageYaml = `- phase: architecture
-  timestamp: ${archTs}
-  status: complete
-  turn_count: 25
-  tool_uses: 76
-  tokens:
-    input: 980000
-    output: 28000
-    cache_write: 14000
-  duration_ms: 268000
-  session_file: .codecarto/scratch/sessions/architecture.jsonl
-  compactions:
-    successful: 1
-    failed: 0
-    aborted: 0
-    reasons:
-      threshold: 1
-      overflow: 0
-      manual: 0
-- phase: defect-scan-mech
-  timestamp: ${defectTs}
-  status: complete
-  turn_count: 39
-  tool_uses: 91
-  tokens:
-    input: 2400000
-    output: 24000
-    cache_write: 9000
-  duration_ms: 425000
-  session_file: .codecarto/scratch/sessions/defect-scan-mech.jsonl
-  compactions:
-    successful: 2
-    failed: 0
-    aborted: 0
-    reasons:
-      threshold: 2
-      overflow: 0
-      manual: 0
-- phase: contracts
-  timestamp: ${contractTs}
-  status: in-progress
-  turn_count: 11
-  tool_uses: 37
-  tokens:
-    input: 335100
-    output: 8200
-    cache_write: 1200
-  duration_ms: 40100
-  session_file: .codecarto/scratch/sessions/contracts.jsonl
+const usageYaml = `version: 1
+runs:
+  - phase: architecture
+    timestamp: ${archTs}
+    status: completed
+    turn_count: 25
+    tool_uses: 76
+    duration_ms: 268000
+    tokens:
+      input: 980000
+      output: 28000
+      cache_write: 14000
+    session_file: .codecarto/scratch/sessions/architecture.jsonl
+    compactions:
+      successful: 1
+      failed: 0
+      aborted: 0
+      reasons:
+        threshold: 1
+        overflow: 0
+        manual: 0
+  - phase: defect-scan-mechanical
+    timestamp: ${defectTs}
+    status: completed
+    turn_count: 39
+    tool_uses: 91
+    duration_ms: 425000
+    tokens:
+      input: 2400000
+      output: 24000
+      cache_write: 9000
+    session_file: .codecarto/scratch/sessions/defect-scan-mechanical.jsonl
+    compactions:
+      successful: 2
+      failed: 0
+      aborted: 0
+      reasons:
+        threshold: 2
+        overflow: 0
+        manual: 0
 `;
 await writeFile(join(workflow, ".usage.local.yaml"), usageYaml, "utf8");
 

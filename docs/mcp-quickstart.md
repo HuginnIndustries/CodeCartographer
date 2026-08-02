@@ -140,11 +140,12 @@ Pass `pipeline: "<variant>"` to `codecarto_init` to choose. See the [pipeline va
 
 ## What you get
 
-- `findings/architecture/architecture.md` — layers, dependency direction, public surfaces
-- `findings/defect-scan/defects.md` — logic, security, concurrency, API bugs with file:line evidence
-- `findings/contracts/contracts.md` — behavioral contracts with defaults and acceptance tests
-- `findings/protocols/protocols.md` — event flows, state machines, persistence formats
-- `findings/porting/porting-bundle.md` — synthesis bundle with priority rankings
+- `findings/architecture/architecture-map.md` — layers, dependency direction, public surfaces
+- `findings/defect-scan-mechanical/mechanical-defects.md` — logic, security, concurrency, API bugs with file:line evidence
+- `findings/contracts/behavioral-contracts.md` — behavioral contracts with defaults and acceptance tests
+- `findings/protocols/protocols-and-state.md` — event flows, state machines, persistence formats
+- `findings/defect-scan-semantic/semantic-defects.md` — deeper semantic defects, run after protocols
+- `findings/porting/reverse-engineering-bundle.md` — synthesis bundle with priority rankings
 - `findings/reimplementation-spec/reimplementation-spec.md` — the final build spec
 
 Every finding is tagged: `observed fact`, `strong inference`, `portability hazard`, or `open question`.
