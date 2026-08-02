@@ -16,6 +16,9 @@ docs/demo-workspace/
 docs/demo-dashboard.png
 docs/demo-dashboard-full.png
 
+# Internal planning notes — kept local, not published to the public repo.
+docs/visibility-roadmap.md
+
 # Local env / secrets
 .env
 .env.local
