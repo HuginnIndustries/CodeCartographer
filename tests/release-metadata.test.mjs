@@ -47,8 +47,15 @@ test("MCP Registry metadata identifies the published stdio package", () => {
 });
 
 test("npm metadata describes both product directions and preserves discovery terms", () => {
-	assert.match(pkg.description, /evidence-backed reverse engineering/i);
-	assert.match(pkg.description, /software planning/i);
+	// Assert on the two product directions, not on exact marketing phrasing —
+	// pinning the literal sentence means every copy change is a test edit, and
+	// the description then rots because updating it looks like breaking a test.
+	assert.match(
+		pkg.description,
+		/codebase|reverse[- ]engineer/i,
+		"description must cover the analysis direction",
+	);
+	assert.match(pkg.description, /plan/i, "description must cover the planning/synthesis direction");
 
 	const requiredKeywords = [
 		"codecartographer",
@@ -57,6 +64,13 @@ test("npm metadata describes both product directions and preserves discovery ter
 		"software-planning",
 		"code-analysis",
 		"synthesis",
+		// Mirror the GitHub repo topics set in #77 so the two discovery
+		// surfaces stay aligned.
+		"codebase",
+		"ai-agent",
+		"context-engineering",
+		"code-understanding",
+		"spec-driven",
 	];
 	for (const keyword of requiredKeywords) {
 		assert.ok(pkg.keywords?.includes(keyword), `package.json keywords must include ${keyword}`);
