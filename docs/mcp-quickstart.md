@@ -8,11 +8,13 @@ CodeCartographer works with any MCP-capable agent. The MCP server returns phase 
 npm install --global codecartographer-pi
 ```
 
-Verify:
+Verify the binary is on your `PATH`:
 
 ```bash
-codecarto-mcp --version
+which codecarto-mcp
 ```
+
+`codecarto-mcp` is a stdio MCP server — running it directly will start it and wait for JSON-RPC input rather than printing anything. That's expected; your agent launches it for you. Press Ctrl-C if you started it by hand.
 
 ## Step 2 — Add to your agent
 
@@ -20,7 +22,15 @@ Pick your agent below and paste the config block into the right file. That's it.
 
 ### Claude Code
 
-Edit `~/.config/claude-code/config.json`:
+Add it with the CLI — no config file editing needed:
+
+```bash
+claude mcp add codecartographer -- codecarto-mcp
+```
+
+Add `--scope user` to make it available in every project instead of just the current one. To check it registered, run `claude mcp list`.
+
+To share the server with everyone working on a repo, commit a `.mcp.json` at the repo root instead:
 
 ```json
 {
@@ -40,7 +50,7 @@ Use the codecartographer MCP server to analyze this repo. Start with codecarto_i
 
 ### Cursor
 
-Edit `~/.cursor/config.json` (or `~/.config/cursor/config.json` on Linux):
+Edit `~/.cursor/mcp.json` for all projects, or `.cursor/mcp.json` in a repo root for just that project:
 
 ```json
 {
@@ -60,16 +70,11 @@ Use the codecartographer MCP tools to analyze this codebase. Start with codecart
 
 ### Codex (OpenAI)
 
-Edit `~/.codex/config.json`:
+Codex uses TOML, not JSON. Add this to `~/.codex/config.toml`:
 
-```json
-{
-  "mcpServers": {
-    "codecartographer": {
-      "command": "codecarto-mcp"
-    }
-  }
-}
+```toml
+[mcp_servers.codecartographer]
+command = "codecarto-mcp"
 ```
 
 Then in the repo you want to analyze:
@@ -96,13 +101,15 @@ Then ask Claude to analyze a repo's code (point it at a local checkout).
 
 ### opencode
 
-Edit `~/.config/opencode/config.json`:
+opencode uses an `mcp` key with its own shape — not `mcpServers`, and `command` is an array. Edit `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "codecartographer": {
-      "command": "codecarto-mcp"
+      "type": "local",
+      "command": ["codecarto-mcp"],
+      "enabled": true
     }
   }
 }
