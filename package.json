@@ -2,7 +2,7 @@
   "name": "codecartographer-pi",
   "version": "0.12.11",
   "mcpName": "io.github.HuginnIndustries/codecartographer",
-  "description": "Evidence-backed reverse engineering and human-gated software planning for Pi and MCP coding agents.",
+  "description": "Turn an unfamiliar codebase into a validated reimplementation spec, then synthesize confirmed specs and a product vision into a traceable plan.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -13,7 +13,12 @@
     "mcp",
     "software-planning",
     "code-analysis",
-    "synthesis"
+    "synthesis",
+    "codebase",
+    "ai-agent",
+    "context-engineering",
+    "code-understanding",
+    "spec-driven"
   ],
   "license": "MIT",
   "author": "James Sesler",
