@@ -64,5 +64,8 @@
   },
   "devDependencies": {
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "undici": "^8.10.0"
   }
 }
