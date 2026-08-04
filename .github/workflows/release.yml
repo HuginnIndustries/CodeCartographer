@@ -71,6 +71,26 @@ jobs:
           else
             npm publish --registry https://registry.npmjs.org/ --provenance --access public
           fi
+      # The MCP Registry listing is a live discovery surface for Claude Code and
+      # Cursor users. It was previously updated by hand and drifted to 0.12.3
+      # while npm was on 0.12.11. Publishing here keeps the two in lockstep.
+      # The io.github.* namespace authenticates via GitHub OIDC, so this needs
+      # no stored secret — `id-token: write` above is sufficient.
+      - name: Publish to the MCP Registry (idempotent)
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.0
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          PUBLISHED=$(curl -sS "https://registry.modelcontextprotocol.io/v0/servers?search=codecartographer" \
+            | python3 -c "import json,sys; print(' '.join(s['server']['version'] for s in json.load(sys.stdin).get('servers', [])))" 2>/dev/null || echo "")
+          if printf '%s' "$PUBLISHED" | tr ' ' '\n' | grep -qx "$VERSION"; then
+            echo "codecartographer $VERSION is already in the MCP Registry; skipping publish"
+            exit 0
+          fi
+          curl -sSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
       - name: Extract release notes from CHANGELOG
         id: notes
         run: |
