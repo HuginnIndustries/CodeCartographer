@@ -430,11 +430,26 @@ function buildGenerationFromArg(model_metadata: unknown): EntryGeneration {
 	return out;
 }
 
-async function readSpecArg(args: { spec?: unknown; spec_path?: unknown; cwd?: unknown }, allowedRoots: string[] = []): Promise<string> {
+// `allowedRoots` is deliberately required and must be non-empty whenever
+// spec_path is used. It previously defaulted to `[]`, which made containment
+// opt-in: a caller that omitted it would read any absolute path the client
+// asked for, silently reopening the arbitrary-file-read class of bug fixed in
+// v0.12.11. Containment is now the default posture and an empty root set is a
+// programming error rather than a bypass.
+export async function readSpecArg(
+	args: { spec?: unknown; spec_path?: unknown; cwd?: unknown },
+	allowedRoots: string[],
+): Promise<string> {
 	if (typeof args.spec === "string" && args.spec.length > 0) return args.spec;
 	if (typeof args.spec_path === "string" && args.spec_path.length > 0) {
 		if (!isAbsolute(args.spec_path)) {
 			throw new McpError(ErrorCode.InvalidParams, `spec_path must be absolute, got: ${args.spec_path}`);
+		}
+		if (!Array.isArray(allowedRoots) || allowedRoots.length === 0) {
+			throw new McpError(
+				ErrorCode.InternalError,
+				"refusing to read spec_path without a containment root — this is a caller bug, not a client error",
+			);
 		}
 		if (!(await pathExists(args.spec_path))) {
 			throw new McpError(ErrorCode.InvalidParams, `spec_path does not exist: ${args.spec_path}`);
@@ -442,17 +457,15 @@ async function readSpecArg(args: { spec?: unknown; spec_path?: unknown; cwd?: un
 		// Enforce path containment: spec_path must be within an allowed root
 		// (cwd's .codecarto/ or the configured library path) to prevent
 		// arbitrary file reads.
-		if (allowedRoots.length > 0) {
-			const resolvedSpecPath = await canonicalPath(args.spec_path);
-			const withinAllowed = await Promise.all(
-				allowedRoots.map((root) => isWithinPathResolved(resolvedSpecPath, root)),
+		const resolvedSpecPath = await canonicalPath(args.spec_path);
+		const withinAllowed = await Promise.all(
+			allowedRoots.map((root) => isWithinPathResolved(resolvedSpecPath, root)),
+		);
+		if (!withinAllowed.some((result) => result)) {
+			throw new McpError(
+				ErrorCode.InvalidParams,
+				`spec_path must be within the workspace (.codecarto/) or the configured library path. Got: ${args.spec_path}`,
 			);
-			if (!withinAllowed.some((result) => result)) {
-				throw new McpError(
-					ErrorCode.InvalidParams,
-					`spec_path must be within the workspace (.codecarto/) or the configured library path. Got: ${args.spec_path}`,
-				);
-			}
 		}
 		return readFile(args.spec_path, "utf8");
 	}
