@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CodeCartographer MCP — Spec 2026-07-28 Upgrade Evaluation</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-card-alt: #1c2128;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent-dim: #1f6feb;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --orange: #e8873c;
+  }
+  [data-theme="light"] {
+    --bg: #ffffff;
+    --bg-card: #f6f8fa;
+    --bg-card-alt: #eaeef2;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --accent: #0969da;
+    --accent-dim: #0550ae;
+    --green: #1a7f37;
+    --yellow: #9a6700;
+    --red: #cf222e;
+    --purple: #8250df;
+    --orange: #bc4c00;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 0;
+  }
+  .container { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem; }
+  h1 { font-size: 2rem; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.15rem; margin: 1.5rem 0 0.75rem; color: var(--accent); }
+  h4 { font-size: 1rem; margin: 1rem 0 0.5rem; color: var(--text); }
+  .subtitle { color: var(--text-dim); font-size: 0.95rem; margin-bottom: 2rem; }
+
+  /* Summary cards */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .summary-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+  }
+  .summary-card .label { color: var(--text-dim); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.5rem; }
+  .summary-card .value { font-size: 1.5rem; font-weight: 600; }
+  .summary-card .value.green { color: var(--green); }
+  .summary-card .value.yellow { color: var(--yellow); }
+  .summary-card .value.red { color: var(--red); }
+  .summary-card .value.accent { color: var(--accent); }
+  .summary-card .detail { color: var(--text-dim); font-size: 0.85rem; margin-top: 0.25rem; }
+
+  /* Status badges */
+  .badge {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+  .badge-green { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  .badge-yellow { background: rgba(210,153,34,0.15); color: var(--yellow); border: 1px solid rgba(210,153,34,0.3); }
+  .badge-red { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid rgba(248,81,73,0.3); }
+  .badge-purple { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
+  .badge-orange { background: rgba(232,135,60,0.15); color: var(--orange); border: 1px solid rgba(232,135,60,0.3); }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th { text-align: left; padding: 0.6rem 0.75rem; background: var(--bg-card-alt); border-bottom: 2px solid var(--border); color: var(--text-dim); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: var(--bg-card); }
+  td code { font-size: 0.85rem; }
+
+  /* Code blocks */
+  pre {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin: 0.75rem 0;
+  }
+  code {
+    font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
+    background: var(--bg-card-alt);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+  pre code { background: none; padding: 0; }
+
+  /* Info boxes */
+  .info-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 6px;
+    padding: 1rem 1.25rem;
+    margin: 1rem 0;
+  }
+  .info-box.warning { border-left-color: var(--yellow); }
+  .info-box.danger { border-left-color: var(--red); }
+  .info-box.success { border-left-color: var(--green); }
+  .info-box .title { font-weight: 600; margin-bottom: 0.5rem; }
+  .info-box ul { margin: 0.5rem 0 0 1.5rem; }
+  .info-box li { margin: 0.25rem 0; }
+
+  /* Architecture diagram */
+  .arch-diagram {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 2rem 1rem;
+    margin: 1rem 0;
+    text-align: center;
+    overflow-x: auto;
+  }
+  .arch-diagram pre {
+    background: none;
+    border: none;
+    text-align: left;
+    display: inline-block;
+    color: var(--text-dim);
+  }
+
+  /* Progress bar */
+  .progress-bar {
+    height: 8px;
+    background: var(--bg-card-alt);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 0.5rem 0;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s;
+  }
+
+  /* Footer */
+  footer {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .summary-grid { grid-template-columns: 1fr; }
+    table { font-size: 0.8rem; }
+    th, td { padding: 0.4rem 0.5rem; }
+  }
+
+  /* Theme toggle */
+  .theme-toggle {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.4rem 0.8rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text);
+    z-index: 100;
+  }
+  .theme-toggle:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="toggleTheme()">🌓 Toggle Theme</button>
+
+<div class="container">
+
+<!-- ─── Header ─── -->
+<h1>CodeCartographer MCP Server — Spec 2026-07-28 Upgrade Evaluation</h1>
+<p class="subtitle">
+  Generated by Hermes Agent · August 9, 2026 · Evaluation only — no code changes were made ★
+</p>
+
+<!-- ─── Executive Summary ─── -->
+<h2>📊 Executive Summary</h2>
+
+<div class="summary-grid">
+  <div class="summary-card">
+    <div class="label">Current SDK Version</div>
+    <div class="value">@modelcontextprotocol/sdk 1.30.0</div>
+    <div class="detail">Protocol: <code>2025-11-25</code> (legacy era) — to be replaced</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">Target SDK Version</div>
+    <div class="value green">@modelcontextprotocol/server 2.0.0</div>
+    <div class="detail">Published ~July 27, 2026 · Beta · 2026-07-28 spec</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">Server Package Version</div>
+    <div class="value">codecartographer-pi 0.12.11</div>
+    <div class="detail">MIT License · HuginnIndustries</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">MCP Tools Exposed</div>
+    <div class="value">18</div>
+    <div class="detail">All via stdio transport</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">Overall Upgrade Effort</div>
+    <div class="value yellow">Moderate</div>
+    <div class="detail">SDK restructured (v1→v2) + codemod available</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">Estimated Touch Points</div>
+    <div class="value yellow">~8-12 files</div>
+    <div class="detail">Import rewrites + result shape + new discover handler</div>
+  </div>
+</div>
+
+<div class="info-box warning">
+  <div class="title">✅ SDK v2.0.0 Published — Major Package Restructuring</div>
+  <p>The TypeScript SDK has been published as <strong>v2.0.0</strong> (~July 27, 2026) with full support for the <strong>2026-07-28</strong> spec. However, it's a <strong>major restructure</strong> — the old monolithic <code>@modelcontextprotocol/sdk</code> package has been split into multiple scoped packages:</p>
+  <table style="margin: 0.75rem 0; font-size: 0.85rem;">
+    <thead><tr><th>Old (v1.30.0)</th><th>New (v2.0.0)</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>@modelcontextprotocol/sdk</code></td><td><code>@modelcontextprotocol/server</code></td><td>Server-side code (tools, transports)</td></tr>
+      <tr><td><code>@modelcontextprotocol/sdk</code></td><td><code>@modelcontextprotocol/client</code></td><td>Client-side code</td></tr>
+      <tr><td>(internal)</td><td><code>@modelcontextprotocol/core</code></td><td>Shared Zod schemas (spec + OAuth)</td></tr>
+      <tr><td>(internal)</td><td><code>@modelcontextprotocol/server-legacy</code></td><td>Backward-compat with v1 <code>initialize</code> era</td></tr>
+      <tr><td>—</td><td><code>@modelcontextprotocol/codemod</code></td><td>Automated import rewriter for v1→v2 migration</td></tr>
+      <tr><td>—</td><td><code>@modelcontextprotocol/node</code>, <code>hono</code>, <code>express</code>, <code>fastify</code></td><td>Transport adapters</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top: 0.5rem;">Key facts from the release notes:</p>
+  <ul>
+    <li><strong>Beta release</strong> — "First beta release of SDK v2 with support for the MCP 2026-07-28 specification revision"</li>
+    <li><strong>Codemod available</strong> — <code>@modelcontextprotocol/codemod</code> automates import rewrites from v1 paths to v2 package roots</li>
+    <li><strong>Migration guides</strong> — <code>docs/migration/upgrade-to-v2.md</code> (v1→v2) and <code>docs/migration/support-2026-07-28.md</code> (spec adoption)</li>
+    <li><strong><code>server/discover</code> built in</strong> — <code>DiscoverResult</code>, <code>_meta['io.modelcontextprotocol/serverInfo']</code> aligned with spec PR #3002</li>
+    <li><strong>Legacy support</strong> — <code>@modelcontextprotocol/server-legacy</code> provides dual-era backward compatibility</li>
+    <li><strong>Breaking type changes</strong> — <code>DiscoverResult</code> no longer has body <code>serverInfo</code> (moved to <code>_meta</code>); <code>clientInfo</code> is now optional (SHOULD, not MUST)</li>
+  </ul>
+  <p style="margin-top: 0.5rem;"><strong>Impact on CodeCartographer:</strong> The <code>package.json</code> dependency <code>"@modelcontextprotocol/sdk": "^1.29.0"</code> must be replaced with <code>"@modelcontextprotocol/server": "^2.0.0"</code>, and all imports in <code>server.ts</code> must be rewritten. The codemod automates most of this.</p>
+</div>
+
+<!-- ─── Current Server Architecture ─── -->
+<h2>🏗️ Current Server Architecture</h2>
+
+<div class="arch-diagram">
+<pre>
+┌─────────────────────────────────────────────────────────────┐
+│                   CodeCartographer MCP Server                 │
+│                    (mcp-server/server.ts)                     │
+│                                                               │
+│  ┌─────────────┐    ┌──────────────┐    ┌──────────────────┐  │
+│  │  bin.mjs    │──▶ │  buildServer │──▶ │ StdioServerTransport │
+│  │  (entry)   │    │  (Server     │    │ (SDK stdio.js)   │  │
+│  └─────────────┘    │   class)     │    └──────────────────┘  │
+│                     └──────┬───────┘                           │
+│                            │                                   │
+│              ┌─────────────┼─────────────┐                    │
+│              ▼             ▼             ▼                    │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐           │
+│  │ListToolsReq  │ │CallToolReq   │ │  18 Handlers │           │
+│  │  Schema      │ │  Schema      │ │  (HANDLERS)   │           │
+│  │  (SDK)       │ │  (SDK)       │ │               │           │
+│  └──────────────┘ └──────────────┘ └──────────────┘           │
+│                                                       │       │
+│  ┌──────────────────────────────────────────────────┐ │       │
+│  │  TOOLS array (18 tool definitions)                │ │       │
+│  │  name + description + inputSchema (JSON Schema)   │ │       │
+│  └──────────────────────────────────────────────────┘ │       │
+│                                                       │       │
+│  ┌──────────────────────────────────────────────────┐ │       │
+│  │  Imports from ../core/index.ts (barrel)           │ │       │
+│  │  buildPhasePrompt, validatePhaseOutput, etc.      │ │       │
+│  └──────────────────────────────────────────────────┘ │       │
+└─────────────────────────────────────────────────────────────┘
+</pre>
+</div>
+
+<h3>Key Files in Scope</h3>
+<table>
+  <thead>
+    <tr><th>File</th><th>Role</th><th>Upgrade Impact</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>mcp-server/server.ts</code> (1,134 lines)</td>
+      <td>Main server: 18 tool definitions, handlers, bootstrap</td>
+      <td><span class="badge badge-red">Major rewrite</span></td>
+    </tr>
+    <tr>
+      <td><code>mcp-server/bin.mjs</code> (11 lines)</td>
+      <td>Entry point, imports <code>startStdioServer()</code></td>
+      <td><span class="badge badge-green">Minimal</span></td>
+    </tr>
+    <tr>
+      <td><code>package.json</code></td>
+      <td>SDK dependency <code>^1.29.0</code>, resolved to 1.30.0</td>
+      <td><span class="badge badge-yellow">Bump version</span></td>
+    </tr>
+    <tr>
+      <td><code>server.json</code></td>
+      <td>MCP registry metadata, schema ref <code>2025-12-11</code></td>
+      <td><span class="badge badge-yellow">Update schema ref</span></td>
+    </tr>
+    <tr>
+      <td><code>tsconfig.json</code></td>
+      <td>TypeScript config (strict off, .ts extensions)</td>
+      <td><span class="badge badge-green">No change</span></td>
+    </tr>
+    <tr>
+      <td><code>tests/*.mjs</code> (8+ test files)</td>
+      <td>Tests import handlers directly from <code>server.ts</code></td>
+      <td><span class="badge badge-orange">Update assertions</span></td>
+    </tr>
+    <tr>
+      <td><code>core/index.ts</code> (barrel)</td>
+      <td>Shared primitives (no MCP wire protocol)</td>
+      <td><span class="badge badge-green">No change</span></td>
+    </tr>
+    <tr>
+      <td><code>scripts/smoke-mcp.mjs</code></td>
+      <td>End-to-end MCP smoke test against published pkg</td>
+      <td><span class="badge badge-yellow">Update protocol expectations</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─── Spec Change Analysis ─── -->
+<h2>📋 Spec 2026-07-28 Change Analysis vs. Current Server</h2>
+
+<p>The 2026-07-28 revision introduces <strong>9 major changes</strong> and <strong>12 minor changes</strong>. Below is each major change mapped to its impact on the CodeCartographer MCP server.</p>
+
+<!-- Change 1 -->
+<h3>1. Removal of Protocol-Level Sessions & <code>Mcp-Session-Id</code> Header</h3>
+<p><strong>SEP-2575</strong> · <span class="badge badge-red">Breaking</span> <span class="badge badge-green">SDK v2 handles</span></p>
+<table>
+  <tbody>
+    <tr><td style="width: 140px; font-weight: 600;">Spec requires</td><td>No session state. List endpoints (<code>tools/list</code>) no longer vary per-connection. Cross-call state uses explicit server-minted handles as ordinary tool arguments.</td></tr>
+    <tr><td style="font-weight: 600;">Current state</td><td>The server is already <em>effectively</em> stateless — every tool takes an absolute <code>cwd</code> parameter and operates on filesystem state. The <code>Server</code> class from the SDK manages the <code>initialize</code> handshake and session internally, but CodeCartographer's handlers don't rely on it.</td></tr>
+    <tr><td style="font-weight: 600;">Impact</td><td><strong>Low for application logic, handled by SDK v2.</strong> The new <code>@modelcontextprotocol/server</code> v2.0.0 removes the <code>initialize</code> handshake and implements the stateless protocol. For dual-era support, <code>@modelcontextprotocol/server-legacy</code> preserves backward compat.</td></tr>
+    <tr><td style="font-weight: 600;">Effort</td><td>Minimal code change if SDK upgrades cleanly; otherwise requires removing the SDK's <code>Server</code> class and implementing raw JSON-RPC message handling.</td></tr>
+  </tbody>
+</table>
+
+<!-- Change 2 -->
+<h3>2. Stateless Protocol: Remove <code>initialize</code> Handshake, Add Per-Request <code>_meta</code></h3>
+<p><strong>SEP-2575</strong> · <span class="badge badge-red">Breaking</span> <span class="badge badge-green">SDK v2 handles</span></p>
+<table>
+  <tbody>
+    <tr><td style="width: 140px; font-weight: 600;">Spec requires</td>
+      <td>
+        Every request <strong>MUST</strong> include in <code>_meta</code>:
+        <ul>
+          <li><code>io.modelcontextprotocol/protocolVersion</code> (required) — e.g. <code>"2026-07-28"</code></li>
+          <li><code>io.modelcontextprotocol/clientCapabilities</code> (required)</li>
+          <li><code>io.modelcontextprotocol/clientInfo</code> (optional, SHOULD include — demoted from required per spec PR #3002)</li>
+        </ul>
+        Servers <strong>SHOULD</strong> include <code>io.modelcontextprotocol/serverInfo</code> in each result's <code>_meta</code>.
+      </td>
+    </tr>
+    <tr><td style="font-weight: 600;">Current state</td><td>The SDK's <code>Server</code> class handles <code>initialize</code> internally, exchanging protocol version and capabilities in a handshake. No per-request <code>_meta</code> is processed. The <code>buildServer()</code> function constructs <code>new Server({name, version}, {capabilities: {tools: {}}})</code> — the SDK does the rest.</td></tr>
+    <tr><td style="font-weight: 600;">Impact</td><td><strong>Handled by SDK v2.</strong> The new <code>@modelcontextprotocol/server</code> v2.0.0 implements per-request <code>_meta</code> processing, stamps <code>serverInfo</code> on every response, and aligns with spec PR #3002 (<code>serverInfo</code> in result <code>_meta</code>, not body). The server code only needs the import rewrite + <code>package.json</code> update.</td></tr>
+    <tr><td style="font-weight: 600;">Code location</td><td><code>server.ts:1103-1128</code> — <code>buildServer()</code> and <code>startStdioServer()</code></td></tr>
+  </tbody>
+</table>
+
+<!-- Change 3 -->
+<h3>3. New <code>server/discover</code> RPC (MUST Implement)</h3>
+<p><strong>SEP-2575</strong> · <span class="badge badge-red">Required</span> <span class="badge badge-green">SDK v2 built-in</span></p>
+<table>
+  <tbody>
+    <tr><td style="width: 140px; font-weight: 600;">Spec requires</td>
+      <td>
+        Servers <strong>MUST</strong> implement <code>server/discover</code> RPC. Returns:
+        <ul>
+          <li><code>supportedVersions</code> — array of protocol versions</li>
+          <li><code>capabilities</code> — what the server supports (tools, resources, prompts)</li>
+          <li><code>_meta['io.modelcontextprotocol/serverInfo']</code> — name + version</li>
+          <li><code>instructions</code> — optional LLM guidance</li>
+          <li><code>ttlMs</code> + <code>cacheScope</code> — caching hints</li>
+        </ul>
+      </td>
+    </tr>
+    <tr><td style="font-weight: 600;">Current state</td><td>No <code>server/discover</code> handler exists. The server relies entirely on the SDK's <code>initialize</code> handshake.</td></tr>
+    <tr><td style="font-weight: 600;">Impact</td><td>Must add a new handler that returns server metadata. This is a <strong>new ~30-line handler</strong> plus registration in the SDK's request handler map.</td></tr>
+    <tr><td style="font-weight: 600;">Implementation sketch</td>
+      <td>
+<pre><code>// New handler to add
+function handleDiscover() {
+  return {
+    resultType: "complete",
+    supportedVersions: ["2026-07-28"],
+    capabilities: { tools: {} },
+    _meta: {
+      "io.modelcontextprotocol/serverInfo": {
+        name: "codecartographer",
+        version: PACKAGE_VERSION,
+      },
+    },
+    instructions: "CodeCartographer reverse-engineering framework.",
+    ttlMs: 3600000,
+    cacheScope: "public",
+  };
+}</code></pre>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- Change 4 -->
+<h3>4. Replace <code>subscriptions/listen</code> for Change Notifications</h3>
+<p><strong>SEP-2575</strong> · <span class="badge badge-green">Not applicable</span></p>
+<table>
+  <tbody>
+    <tr><td style="width: 140px; font-weight: 600;">Spec requires</td><td>Replace HTTP GET endpoint and <code>resources/subscribe</code>/<code>resources/unsubscribe</code> with <code>subscriptions/listen</code>.</td></tr>
+    <tr><td style="font-weight: 600;">Current state</td><td>CodeCartographer's server only exposes <code>tools</code> capability — no resources, no subscriptions, no <code>listChanged</code> notifications. The server is stdio-only and purely request/response.</td></tr>
+    <tr><td style="font-weight: 600;">Impact</td><td><strong>None.</strong> This change doesn't apply — the server doesn't use subscriptions or change notifications.</td></tr>
+  </tbody>
+</table>
+
+<!-- Change 5 -->
+<h3>5. Remove <code>ping</code>, <code>logging/setLevel</code>, <code>notifications/roots/list_changed</code></h3>
+<p><strong>SEP-2575</strong> · <span class="badge badge-green">Not applicable</span></p>
+<table>
+  <tbody>
+    <tr><td style="width: 140px; font-weight: 600;">Spec requires</td><td>Remove <code>ping</code>, <code>logging/setLevel</code>, <code>notifications/roots/list_changed</code>. Log level set per-request via <code>_meta</code>.</td></tr>
+    <tr><td style="font-weight: 600;">Current state</td><td>Server doesn't implement any of these. No logging, no roots, no ping handler.</td></tr>
+    <tr><td style="font-weight: 600;">Impact</td><td><strong>None.</strong> No code to remove.</td></tr>
+  </tbody>
+</table>
+
+<!-- Change 6 -->
+<h3>6. Tasks Extension (<code>io.modelcontextprotocol/tasks</code>)</h3>
+<p><strong>SEP-1686/2663</strong> · <span class="badge badge-yellow">Optional</span> <span class="badge badge-purple">New extension</span></p>
+<table>
+  <tbody>
+    <tr><td style="width: 140px; font-weight: 600;">Spec requires</td><td>Tasks extension is now official. Provides async long-running ops with polling (<code>tasks/get</code>), mid-flight input (<code>tasks/update</code>), durable handles. Servers <em>MAY</em> implement it.</td></tr>
+    <tr><td style="font-weight: 600;">Current state</td><td>No tasks extension. All operations are synchronous request/response — the server returns prompt text and the host drives execution.</td></tr>
+    <tr><td style="font-weight: 600;">Impact</td><td><strong>Optional future enhancement.</strong> Could be useful for long-running pipeline phases that need polling, but not required for spec compliance.</td></tr>
+  </tbody>
+</table>
+
+<!-- Change 7 -->
+<h3>7. Multi Round-Trip Requests (MRTR) Pattern</h3>
+<p><strong>SEP-2322</strong> · <span class="badge badge-yellow">Optional for this server</span> <span class="badge badge-purple">New pattern</span></p>
+<table>
+  <tbody>
+    <tr><td style="width: 140px; font-weight: 600;">Spec requires</td><td>
+      Servers <strong>MAY</strong> respond to <code>tools/call</code> with <code>InputRequiredResult</code> (<code>resultType: "input_required"</code>) to request additional input (elicitation, sampling, roots). Client retries with <code>inputResponses</code> + <code>requestState</code>.
+    </td></tr>
+    <tr><td style="font-weight: 600;">Current state</td><td>All 18 tools return plain text results via <code>textResult()</code> helper. No input-required flows. The server is purely synchronous: call → get prompt text → host executes.</td></tr>
+    <tr><td style="font-weight: 600;">Impact</td><td><strong>Not required</strong> — servers MAY use MRTR but don't have to. If added later, the <code>textResult()</code> helper and handler return types would need to support the <code>InputRequiredResult</code> shape.</td></tr>
+    <tr><td style="font-weight: 600;">Code location</td><td><code>server.ts:105-111</code> — <code>textResult()</code> helper would need a sibling for MRTR results</td></tr>
+  </tbody>
+</table>
+
+<!-- Change 8 -->
+<h3>8. <code>resultType</code> Field on All Results</h3>
+<p><strong>SEP-2322</strong> · <span class="badge badge-red">Required</span> <span class="badge badge-green">SDK v2 handles</span></p>
+<table>
+  <tbody>
+    <tr><td style="width: 140px; font-weight: 600;">Spec requires</td><td>
+      Every result <strong>MUST</strong> include <code>resultType: "complete"</code> (for normal results) or <code>resultType: "input_required"</code> (for MRTR). Clients MUST treat absent <code>resultType</code> as <code>"complete"</code> for backward compatibility.
+    </td></tr>
+    <tr><td style="font-weight: 600;">Current state</td><td>
+      The <code>textResult()</code> helper returns:
+<pre><code>{ content: [{ type: "text", text }] }</code></pre>
+      No <code>resultType</code> field. The SDK's <code>CallToolRequestSchema</code> response type doesn't include it.
+    </td></tr>
+    <tr><td style="font-weight: 600;">Impact</td><td>
+      <strong>Handled by SDK v2.</strong> The new SDK's 2026-era wire schemas require <code>resultType</code> on results. If the SDK doesn't add it automatically on tool call results, the <code>textResult()</code> helper is the single point of change:
+<pre><code>function textResult(text, structured) {
+  return {
+    resultType: "complete",
+    content: [{ type: "text", text }],
+    ...(structured ? { structuredContent: structured } : {}),
+  };
+}</code></pre>
+    </td></tr>
+    <tr><td style="font-weight: 600;">Code location</td><td><code>server.ts:105-111</code></td></tr>
+  </tbody>
+</table>
+
+<!-- Change 9 -->
+<h3>9. Remove SSE Stream Resumability & <code>Last-Event-ID</code></h3>
+<p><strong>SEP-2575</strong> · <span class="badge badge-green">Not applicable</span></p>
+<table>
+  <tbody>
+    <tr><td style="width: 140px; font-weight: 600;">Spec requires</td><td>Remove SSE resumability from Streamable HTTP transport.</td></tr>
+    <tr><td style="font-weight: 600;">Current state</td><td>Server is stdio-only. No HTTP transport, no SSE.</td></tr>
+    <tr><td style="font-weight: 600;">Impact</td><td><strong>None.</strong></td></tr>
+  </tbody>
+</table>
+
+<!-- ─── Minor Changes ─── -->
+<h2>📋 Minor Spec Changes Impact</h2>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>Change</th><th>SEP</th><th>Applies?</th><th>Impact</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td>
+      <td><code>extensions</code> field in <code>ClientCapabilities</code> / <code>ServerCapabilities</code></td>
+      <td>SEP-2133</td>
+      <td><span class="badge badge-yellow">Optional</span></td>
+      <td>Only needed if Tasks or MCP Apps extensions are implemented. For basic tools-only compliance: not required.</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>OpenTelemetry trace context in <code>_meta</code></td>
+      <td>SEP-414</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>Server doesn't implement tracing. Optional future enhancement.</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>Deterministic tool ordering in <code>tools/list</code></td>
+      <td>—</td>
+      <td><span class="badge badge-green">Already compliant</span></td>
+      <td>The <code>TOOLS</code> array is a static <code>const</code> — order is already deterministic.</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td>Standard MCP request headers (<code>Mcp-Method</code>, <code>Mcp-Name</code>) on HTTP</td>
+      <td>SEP-2243</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>Server is stdio-only. HTTP headers don't apply.</td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td><code>ttlMs</code> + <code>cacheScope</code> on <code>tools/list</code> results</td>
+      <td>SEP-2549</td>
+      <td><span class="badge badge-red">Required</span></td>
+      <td>The <code>tools/list</code> handler returns <code>{ tools: TOOLS }</code> without caching hints. Must add <code>ttlMs</code> and <code>cacheScope</code>. Since tools are static, <code>ttlMs: Infinity</code> / <code>cacheScope: "public"</code> would be appropriate.</td>
+    </tr>
+    <tr>
+      <td>6</td>
+      <td>Resource not found error code change (<code>-32002</code> → <code>-32602</code>)</td>
+      <td>—</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>Server doesn't expose resources.</td>
+    </tr>
+    <tr>
+      <td>7</td>
+      <td><code>iss</code> parameter in authorization responses</td>
+      <td>SEP-2468</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>No auth on stdio transport.</td>
+    </tr>
+    <tr>
+      <td>8</td>
+      <td><code>application_type</code> in Dynamic Client Registration</td>
+      <td>SEP-837</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>No auth.</td>
+    </tr>
+    <tr>
+      <td>9</td>
+      <td>Client credentials bound to authorization server</td>
+      <td>SEP-2352</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>No auth.</td>
+    </tr>
+    <tr>
+      <td>10</td>
+      <td>JSON Schema 2020-12 as default dialect; <code>$ref</code> resolution rules</td>
+      <td>SEP-2106</td>
+      <td><span class="badge badge-yellow">Verify</span></td>
+      <td>Tool <code>inputSchema</code> objects use plain JSON Schema without <code>$schema</code>. Under 2026-07-28, these default to 2020-12 (previously Draft-07). The schemas are simple (<code>type: "object"</code> with <code>properties</code>, <code>required</code>, <code>enum</code>) and are valid in both dialects — no change needed, but should verify no Draft-07-only features are used.</td>
+    </tr>
+    <tr>
+      <td>11</td>
+      <td>Remove <code>notifications/elicitation/complete</code> + <code>elicitationId</code></td>
+      <td>—</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>Server doesn't use elicitation.</td>
+    </tr>
+    <tr>
+      <td>12</td>
+      <td>Error code renumbering (<code>-32001</code>→<code>-32020</code>, <code>-32003</code>→<code>-32021</code>, <code>-32004</code>→<code>-32022</code>)</td>
+      <td>—</td>
+      <td><span class="badge badge-yellow">Verify</span></td>
+      <td>Server uses <code>ErrorCode.InvalidParams</code> (<code>-32602</code>), <code>ErrorCode.InternalError</code> (<code>-32603</code>), <code>ErrorCode.InvalidRequest</code> (<code>-32600</code>), <code>ErrorCode.MethodNotFound</code> (<code>-32601</code>). These are standard JSON-RPC codes, not in the renumbered range. <strong>Safe.</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─── Deprecated Features ─── -->
+<h2>🚫 Deprecated Features Check</h2>
+
+<table>
+  <thead>
+    <tr><th>Deprecated Feature</th><th>SEP</th><th>Used by CodeCartographer?</th><th>Action Needed</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Roots</strong> — client provides root directories</td>
+      <td>SEP-2577</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>None. Server takes <code>cwd</code> as an explicit tool parameter — the recommended migration path.</td>
+    </tr>
+    <tr>
+      <td><strong>Sampling</strong> — <code>sampling/createMessage</code></td>
+      <td>SEP-2577</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>None. Server returns prompt text; host owns the LLM connection (by design).</td>
+    </tr>
+    <tr>
+      <td><strong>Logging</strong> — <code>notifications/message</code></td>
+      <td>SEP-2577</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>None. Server logs to <code>stderr</code> only (via <code>console.error</code> in <code>bin.mjs</code>), which is the recommended migration.</td>
+    </tr>
+    <tr>
+      <td><strong>Dynamic Client Registration</strong> (RFC 7591)</td>
+      <td>PR #2858</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>None. No auth.</td>
+    </tr>
+    <tr>
+      <td><strong>HTTP+SSE transport</strong></td>
+      <td>SEP-2596</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>None. Stdio only.</td>
+    </tr>
+    <tr>
+      <td><strong><code>includeContext</code> values</strong></td>
+      <td>SEP-2596</td>
+      <td><span class="badge badge-green">No</span></td>
+      <td>None.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="info-box success">
+  <div class="title">✅ Clean Slate on Deprecations</div>
+  <p>CodeCartographer's server uses <strong>none</strong> of the deprecated features. Its design — explicit <code>cwd</code> parameter, prompt-text results, stderr logging — already follows the recommended migration paths. No deprecation cleanup is needed.</p>
+</div>
+
+<!-- ─── Required Changes Checklist ─── -->
+<h2>✅ Required Changes Checklist</h2>
+
+<p>Items needed for <strong>full 2026-07-28 compliance</strong>, ordered by dependency:</p>
+
+<table>
+  <thead>
+    <tr><th style="width: 50px;">#</th><th style="width: 80px;">Priority</th><th style="width: 100px;">Category</th><th>Change</th><th style="width: 120px;">Files Affected</th><th style="width: 100px;">Effort</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td>
+      <td><span class="badge badge-yellow">P0</span></td>
+      <td>SDK Upgrade</td>
+      <td>Replace <code>@modelcontextprotocol/sdk ^1.29.0</code> → <code>@modelcontextprotocol/server ^2.0.0</code> + <code>@modelcontextprotocol/core ^2.0.0</code>. Run the <code>@modelcontextprotocol/codemod</code> to rewrite imports. Follow <code>docs/migration/upgrade-to-v2.md</code> for breaking changes.</td>
+      <td><code>package.json</code>, <code>server.ts</code></td>
+      <td><span class="badge badge-yellow">Moderate</span></td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td><span class="badge badge-red">P0</span></td>
+      <td>Discovery</td>
+      <td>Implement <code>server/discover</code> RPC handler. Returns <code>supportedVersions</code>, <code>capabilities</code>, <code>serverInfo</code>, <code>instructions</code>, caching hints.</td>
+      <td><code>server.ts</code></td>
+      <td><span class="badge badge-green">~30 lines</span></td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td><span class="badge badge-red">P0</span></td>
+      <td>Result Type</td>
+      <td>Add <code>resultType: "complete"</code> to all tool call results. Single point of change in <code>textResult()</code> helper.</td>
+      <td><code>server.ts:105-111</code></td>
+      <td><span class="badge badge-green">1 line</span></td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td><span class="badge badge-yellow">P1</span></td>
+      <td>Caching Hints</td>
+      <td>Add <code>ttlMs</code> + <code>cacheScope</code> to <code>tools/list</code> response. Tools are static → <code>ttlMs: 0</code> or large value, <code>cacheScope: "public"</code>.</td>
+      <td><code>server.ts:1109</code></td>
+      <td><span class="badge badge-green">2 lines</span></td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td><span class="badge badge-yellow">P1</span></td>
+      <td>Per-Request _meta</td>
+      <td>Processed by SDK v2 automatically. The new <code>@modelcontextprotocol/server</code> handles per-request <code>_meta</code> validation and stamps <code>serverInfo</code> on responses. No application code needed unless custom handling is desired.</td>
+      <td><code>server.ts</code></td>
+      <td><span class="badge badge-green">SDK-level</span></td>
+    </tr>
+    <tr>
+      <td>6</td>
+      <td><span class="badge badge-yellow">P1</span></td>
+      <td>Server Info in Results</td>
+      <td>Handled by SDK v2 — stamps <code>_meta['io.modelcontextprotocol/serverInfo']</code> on every response automatically. The <code>buildServer()</code> constructor already passes <code>{name, version}</code> which the SDK uses.</td>
+      <td><code>server.ts:1103-1107</code></td>
+      <td><span class="badge badge-green">SDK-level</span></td>
+    </tr>
+    <tr>
+      <td>7</td>
+      <td><span class="badge badge-yellow">P2</span></td>
+      <td>Registry Schema</td>
+      <td>Update <code>server.json</code> <code>$schema</code> from <code>2025-12-11</code> to the new spec version URL.</td>
+      <td><code>server.json</code></td>
+      <td><span class="badge badge-green">1 line</span></td>
+    </tr>
+    <tr>
+      <td>8</td>
+      <td><span class="badge badge-orange">P2</span></td>
+      <td>Test Updates</td>
+      <td>Update tests that assert on server behavior (handshake version, result shape). The <code>release-metadata.test.mjs</code> test checks <code>PACKAGE_VERSION</code> usage — verify it still passes with new SDK.</td>
+      <td><code>tests/*.mjs</code></td>
+      <td><span class="badge badge-orange">8+ files</span></td>
+    </tr>
+    <tr>
+      <td>9</td>
+      <td><span class="badge badge-orange">P2</span></td>
+      <td>Smoke Test</td>
+      <td>Update <code>scripts/smoke-mcp.mjs</code> to use the new protocol flow (discover → tools/list → tools/call) instead of initialize handshake.</td>
+      <td><code>scripts/smoke-mcp.mjs</code></td>
+      <td><span class="badge badge-yellow">Moderate</span></td>
+    </tr>
+    <tr>
+      <td>10</td>
+      <td><span class="badge badge-green">P3</span></td>
+      <td>Dual-Era Support</td>
+      <td><em>Optional:</em> Support both legacy (<code>initialize</code>) and modern (per-request <code>_meta</code>) clients for backward compatibility with existing hosts.</td>
+      <td><code>server.ts</code></td>
+      <td><span class="badge badge-yellow">Moderate</span></td>
+    </tr>
+    <tr>
+      <td>11</td>
+      <td><span class="badge badge-green">P3</span></td>
+      <td>Tasks Extension</td>
+      <td><em>Optional:</em> Implement <code>io.modelcontextprotocol/tasks</code> extension for long-running pipeline phases. Would require <code>extensions</code> capability advertisement.</td>
+      <td><code>server.ts</code>, <code>core/</code></td>
+      <td><span class="badge badge-red">Large</span></td>
+    </tr>
+    <tr>
+      <td>12</td>
+      <td><span class="badge badge-green">P3</span></td>
+      <td>MRTR Support</td>
+      <td><em>Optional:</em> Add <code>InputRequiredResult</code> support for tools that need user input mid-flight (e.g., <code>codecarto_vision</code> could elicit structured data).</td>
+      <td><code>server.ts</code></td>
+      <td><span class="badge badge-yellow">Moderate</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─── Tool-by-Tool Impact ─── -->
+<h2>🔧 Tool-by-Tool Impact Assessment</h2>
+
+<p>All 18 tools use the same <code>textResult()</code> helper, so the <code>resultType</code> change is centralized. No individual tool needs logic changes for spec compliance.</p>
+
+<table>
+  <thead>
+    <tr><th>Tool Name</th><th>Input Schema</th><th>Result Type</th><th>Spec Impact</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>codecarto_init</code></td><td>cwd, pipeline?, force?</td><td>text + structured</td><td>None (textResult handles it)</td></tr>
+    <tr><td><code>codecarto_status</code></td><td>cwd</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_switch_pipeline</code></td><td>cwd, pipeline</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_next</code></td><td>cwd</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_phase</code></td><td>cwd, phase</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_validate</code></td><td>cwd, phase?</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_complete</code></td><td>cwd, phase?</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_skill</code></td><td>cwd, name</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_publish</code></td><td>library_path, spec, ...</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_library_list</code></td><td>library_path, filters</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_library_reindex</code></td><td>library_path</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_library_init</code></td><td>library_path, name?, namespace?</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_config</code></td><td>cwd?</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_vision</code></td><td>cwd, raw_text</td><td>text + structured</td><td>Could use MRTR in future</td></tr>
+    <tr><td><code>codecarto_open</code></td><td>cwd</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_usage</code></td><td>cwd</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_dashboard</code></td><td>cwd</td><td>text + structured</td><td>None</td></tr>
+    <tr><td><code>codecarto_list_skills</code></td><td>cwd</td><td>text + structured</td><td>None</td></tr>
+  </tbody>
+</table>
+
+<!-- ─── Compatibility Matrix ─── -->
+<h2>🔗 Host Compatibility Matrix</h2>
+
+<p>How the upgraded server would interact with different host eras:</p>
+
+<table>
+  <thead>
+    <tr><th>Host Era</th><th>Current Server (2025-11-25)</th><th>Upgraded Server (2026-07-28)</th><th>Upgraded Dual-Era Server</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Modern</strong> (per-request _meta)</td>
+      <td><span class="badge badge-red">Fails</span> — server expects initialize</td>
+      <td><span class="badge badge-green">Works</span></td>
+      <td><span class="badge badge-green">Works</span></td>
+    </tr>
+    <tr>
+      <td><strong>Legacy</strong> (initialize handshake)</td>
+      <td><span class="badge badge-green">Works</span> — current behavior</td>
+      <td><span class="badge badge-red">Fails</span> — no initialize handler</td>
+      <td><span class="badge badge-green">Works</span> — dual-era fallback</td>
+    </tr>
+    <tr>
+      <td><strong>Dual-era</strong> (probes with discover)</td>
+      <td><span class="badge badge-yellow">Falls back to legacy</span></td>
+      <td><span class="badge badge-green">Works</span> — discover returns modern</td>
+      <td><span class="badge badge-green">Works</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="info-box warning">
+  <div class="title">⚠️ Risk: Dropping Legacy Host Support</div>
+  <p>If the server upgrades to modern-only (no dual-era), it will break compatibility with hosts that still use the <code>initialize</code> handshake. Given that CodeCartographer's README lists <strong>Claude Code, Codex, opencode, Cursor</strong> as target hosts, the upgrade should verify that each host has migrated to the 2026-07-28 protocol — or implement dual-era support.</p>
+  <p style="margin-top: 0.5rem;"><strong>Recommendation:</strong> Implement dual-era support initially. Once all target hosts confirm modern protocol support, legacy can be dropped.</p>
+</div>
+
+<!-- ─── Migration Plan ─── -->
+<h2>🗺️ Suggested Migration Plan</h2>
+
+<h3>Phase 1: SDK Upgrade (Codemod + Import Rewrites)</h3>
+<div class="info-box">
+  <ul>
+    <li>Install <code>@modelcontextprotocol/server@^2.0.0</code>, <code>@modelcontextprotocol/core@^2.0.0</code>, and <code>@modelcontextprotocol/codemod@^2.0.0</code></li>
+    <li>Run the codemod to rewrite v1 imports → v2 package paths in <code>server.ts</code></li>
+    <li>Follow <code>docs/migration/upgrade-to-v2.md</code> for breaking type changes</li>
+    <li>Follow <code>docs/migration/support-2026-07-28.md</code> for spec adoption details</li>
+    <li>Remove <code>@modelcontextprotocol/sdk</code> from <code>package.json</code></li>
+    <li>Verify <code>npm run build</code> passes with new imports</li>
+    <li>Run <code>npm test</code> — expect some test updates for new result shape</li>
+  </ul>
+</div>
+
+<h3>Phase 2: Core Compliance (Small, Focused PR)</h3>
+<div class="info-box">
+  <ul>
+    <li>Bump <code>@modelcontextprotocol/sdk</code> in <code>package.json</code></li>
+    <li>Add <code>server/discover</code> handler in <code>server.ts</code></li>
+    <li>Add <code>resultType: "complete"</code> to <code>textResult()</code></li>
+    <li>Add <code>ttlMs</code> + <code>cacheScope</code> to <code>tools/list</code> response</li>
+    <li>Update <code>server.json</code> schema reference</li>
+    <li>Update smoke test for new protocol flow</li>
+    <li>Run <code>npm test</code> — expect some test updates for new result shape</li>
+  </ul>
+</div>
+
+<h3>Phase 3: Test & Compatibility (Medium PR)</h3>
+<div class="info-box">
+  <ul>
+    <li>Update <code>release-metadata.test.mjs</code> — server handshake assertions</li>
+    <li>Update <code>publish-path-containment.test.mjs</code> — if result shape changes</li>
+    <li>Update <code>synthesis.test.mjs</code>, <code>resolve-phase.test.mjs</code> — handler imports</li>
+    <li>Add dual-era support if backward compat is needed</li>
+    <li>Test against MCP Inspector with new protocol mode</li>
+    <li>Test against Claude Code / Codex / opencode with new protocol</li>
+  </ul>
+</div>
+
+<h3>Phase 4: Optional Enhancements (Future)</h3>
+<div class="info-box">
+  <ul>
+    <li>Tasks extension for long-running pipeline phases</li>
+    <li>MRTR for <code>codecarto_vision</code> (interactive elicitation)</li>
+    <li>OpenTelemetry trace context propagation</li>
+    <li>HTTP transport with Streamable HTTP (if remote hosting is needed)</li>
+    <li>MCP Registry publication with updated metadata</li>
+  </ul>
+</div>
+
+<!-- ─── Risk Assessment ─── -->
+<h2>⚠️ Risk Assessment</h2>
+
+<table>
+  <thead>
+    <tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>SDK v2 is still in beta — APIs may change</td>
+      <td><span class="badge badge-yellow">Medium</span></td>
+      <td><span class="badge badge-yellow">Moderate</span></td>
+      <td>Pin to exact <code>2.0.0</code>; watch for v2.0.x patch releases with breaking fixes. Use <code>server-legacy</code> as fallback.</td>
+    </tr>
+    <tr>
+      <td>Target hosts haven't upgraded to modern protocol</td>
+      <td><span class="badge badge-yellow">Medium</span></td>
+      <td><span class="badge badge-red">Breaks host integrations</span></td>
+      <td>Implement dual-era server; test each host before dropping legacy</td>
+    </tr>
+    <tr>
+      <td>Test suite breaks on result shape changes</td>
+      <td><span class="badge badge-red">High</span></td>
+      <td><span class="badge badge-yellow">Moderate</span></td>
+      <td>Tests import handlers directly — most bypass wire protocol. Only smoke + metadata tests need updates.</td>
+    </tr>
+    <tr>
+      <td>JSON Schema 2020-12 dialect incompatibility</td>
+      <td><span class="badge badge-green">Low</span></td>
+      <td><span class="badge badge-green">Low</span></td>
+      <td>Tool schemas are simple (type/properties/required/enum). Valid in both Draft-07 and 2020-12.</td>
+    </tr>
+    <tr>
+      <td>Invariant tests (pipeline surface parity) break</td>
+      <td><span class="badge badge-green">Low</span></td>
+      <td><span class="badge badge-red">High</span></td>
+      <td>These test prompt/validation parity between Pi and MCP surfaces — protocol changes shouldn't affect them since core/ is untouched.</td>
+    </tr>
+    <tr>
+      <td><code>structuredContent</code> semantics change under new spec</td>
+      <td><span class="badge badge-yellow">Medium</span></td>
+      <td><span class="badge badge-yellow">Moderate</span></td>
+      <td>Spec says structuredContent can be "any JSON value" (SEP-2106). Current usage returns objects — verify new SDK allows this.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─── What's Already Compliant ─── -->
+<h2>✅ What's Already Compliant</h2>
+
+<div class="info-box success">
+  <div class="title">Good news — these aspects need zero changes!</div>
+  <ul>
+    <li><strong>Stdio transport only</strong> — no HTTP, SSE, or session header changes needed</li>
+    <li><strong>No deprecated features used</strong> — roots, sampling, logging all absent</li>
+    <li><strong>Deterministic tool ordering</strong> — <code>TOOLS</code> is a static array</li>
+    <li><strong>Simple JSON Schemas</strong> — all <code>inputSchema</code> objects are valid in 2020-12</li>
+    <li><strong>Standard error codes</strong> — uses <code>-32602</code>, <code>-32603</code>, <code>-32601</code>, <code>-32600</code> (not in renumbered range)</li>
+    <li><strong>Stateless design</strong> — every tool takes explicit <code>cwd</code>, no session state</li>
+    <li><strong>stderr logging</strong> — already the recommended migration from <code>notifications/message</code></li>
+    <li><strong>Explicit <code>cwd</code> parameter</strong> — already follows the recommended roots migration path</li>
+    <li><strong>Host-owned LLM</strong> — server returns prompt text, doesn't call models (already the sampling migration path)</li>
+    <li><strong>Core/ module untouched</strong> — pipeline, validation, prompts, library logic have no MCP dependencies</li>
+  </ul>
+</div>
+
+<!-- ─── Footer ─── -->
+<footer>
+  <p><strong>CodeCartographer MCP Spec 2026-07-28 Upgrade Evaluation</strong> — Generated by Hermes Agent on August 9, 2026</p>
+  <p>Scope: <code>mcp-server/server.ts</code> (1,134 lines), <code>package.json</code>, <code>server.json</code>, <code>tests/*.mjs</code> (8+ files), <code>scripts/smoke-mcp.mjs</code></p>
+  <p>Spec reference: <code>~/Documents/Github/mcp-spec-2026-07-28/</code> — full clone of modelcontextprotocol/modelcontextprotocol + 144 rendered markdown pages</p>
+  <p style="margin-top: 0.5rem;">This is an evaluation only. No code changes were made. ★</p>
+  <p style="margin-top: 0.25rem;"><em>Updated August 9, 2026 — SDK v2.0.0 availability confirmed; document revised from original "SDK not yet available" assessment.</em></p>
+</footer>
+
+</div>
+
+<script>
+function toggleTheme() {
+  const body = document.body;
+  const current = body.getAttribute('data-theme');
+  if (current === 'light') {
+    body.removeAttribute('data-theme');
+  } else {
+    body.setAttribute('data-theme', 'light');
+  }
+}
+// Auto-detect system preference
+if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+  document.body.setAttribute('data-theme', 'light');
+}
+</script>
+</body>
+</html>
