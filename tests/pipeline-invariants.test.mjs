@@ -192,3 +192,42 @@ test("reimplementation phases use the porting bundle as the default compression 
 		assert.deepEqual(lowerLevel, [], `${pipelineFile} should selectively deep-read lower-level findings instead of requiring them all`);
 	}
 });
+
+// Guard against the pre-v0.12.0 wording resurfacing: phase workflow state is
+// framework-owned, so no pipeline may instruct the agent to edit
+// workflow/status.yaml or append THREAD_LOG.md directly — the phase handoff at
+// scratch/handoffs/<phase>.yaml is the only state channel (issue #83).
+test("no pipeline instructs direct edits of framework-owned state", () => {
+	for (const [pipelineFile, pipeline] of Object.entries(pipelines)) {
+		for (const phase of pipeline.phases) {
+			const lines = [...(phase.handoff_requirements ?? []), ...(phase.completion_criteria ?? [])];
+			for (const line of lines) {
+				assert.ok(
+					!/update\s+workflow\/status\.yaml/i.test(line),
+					`${pipelineFile}:${phase.id} instructs editing framework-owned workflow/status.yaml — route state through scratch/handoffs/<phase>.yaml: "${line}"`,
+				);
+				assert.ok(
+					!/append[^.\n]*THREAD_LOG\.md/i.test(line),
+					`${pipelineFile}:${phase.id} instructs appending framework-owned THREAD_LOG.md — completion writes it from the handoff: "${line}"`,
+				);
+				assert.ok(
+					!/carry_forward\s+in\s+workflow\/status\.yaml/i.test(line),
+					`${pipelineFile}:${phase.id} routes carry_forward entries to status.yaml — route them via the phase handoff: "${line}"`,
+				);
+			}
+			if (phase.handoff_requirements?.length) {
+				assert.ok(
+					phase.handoff_requirements.some((line) => line.includes("scratch/handoffs/") || /phase handoff/i.test(line)),
+					`${pipelineFile}:${phase.id} handoff_requirements never mention the phase handoff`,
+				);
+			}
+		}
+	}
+});
+
+test("NEW_THREAD_BLURB.md matches the framework-owned state contract", async () => {
+	const blurb = await readFile(join(CODECARTO, "NEW_THREAD_BLURB.md"), "utf8");
+	assert.ok(blurb.includes("scratch/handoffs/"), "blurb must route state changes through the phase handoff");
+	assert.ok(!/update\s+`?workflow\/status\.yaml`?:/i.test(blurb), "blurb must not instruct editing framework-owned status.yaml");
+	assert.ok(!/append[^.\n]*THREAD_LOG\.md/i.test(blurb), "blurb must not instruct appending framework-owned THREAD_LOG.md");
+});
