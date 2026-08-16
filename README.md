@@ -92,6 +92,8 @@ Use this when your coding agent isn't Pi — Claude Code, Codex, opencode, Curso
 
 > **30-second setup for Claude Code, Cursor, Codex, and Claude Desktop: see the [MCP quickstart](docs/mcp-quickstart.md).**
 
+> **Teaching an agent to drive it:** call the `codecarto_guide` tool — the server returns the full drive loop, the phase-handoff contract, executor selection, and recovery patterns, with nothing to install. The same content ships as an installable skill at `agent-skill/codecartographer/` for agents that load skills from disk.
+
 ```bash
 npm install --global codecartographer-pi
 ```

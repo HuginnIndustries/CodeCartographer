@@ -29,7 +29,8 @@ function findPackageRoot(start: string): string {
 }
 
 const coreDir = dirname(fileURLToPath(import.meta.url));
-const packageRoot = findPackageRoot(coreDir);
+/** Installed package root. Anchors packaged assets served to clients (template, agent skill). */
+export const packageRoot = findPackageRoot(coreDir);
 
 // Path to the packaged framework template directory. Wrappers copy this on
 // /codecarto-init.
