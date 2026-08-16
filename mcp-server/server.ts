@@ -106,12 +106,17 @@ async function requireWorkspace(cwd: string): Promise<WorkspaceState> {
 	return state;
 }
 
+// MCP clients may read structuredContent in preference to content when both are
+// present. The tools whose payload IS prose — the phase prompts, the guide —
+// therefore have to expose it structurally too, or such a client receives labels
+// and no payload: codecarto_next returned no phase prompt at all (issue #94).
+// Carrying the rendered text under a stable key keeps both client styles whole,
+// and no tool declares an outputSchema that this could violate.
 function textResult(text: string, structured?: Record<string, unknown>) {
-	const result: { content: Array<{ type: "text"; text: string }>; structuredContent?: Record<string, unknown> } = {
-		content: [{ type: "text", text }],
+	return {
+		content: [{ type: "text" as const, text }],
+		structuredContent: { ...structured, text },
 	};
-	if (structured) result.structuredContent = structured;
-	return result;
 }
 
 async function buildMcpPhasePrompt(

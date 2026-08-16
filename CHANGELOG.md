@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-08-16
+
+### Fixed
+
+- Tools whose payload is prose returned nothing usable to MCP clients that read `structuredContent` in preference to `content` (#94). `codecarto_next` returned `{phase, forced}` and no phase prompt, making the pipeline undriveable in such a client; `codecarto_phase`, `codecarto_skill`, `codecarto_vision`, and `codecarto_guide` were affected the same way. `textResult` now carries the rendered text in `structuredContent` under a `text` key, so both client styles receive the payload. Tools whose `structuredContent` already carried their data (`codecarto_status`, `codecarto_validate`, `codecarto_complete`, the library operations) were unaffected and are unchanged apart from the added key.
+- Four of the five predate 0.14.0. The existing gates could not see it: the smoke test and the unit tests both read `content[0].text` directly, so they confirm the payload exists without confirming it survives a client that reads the other field. A new test walks each tool's result and asserts the payload is reachable from `structuredContent` alone.
+
 ## [0.14.0] — 2026-08-16
 
 ### Added
