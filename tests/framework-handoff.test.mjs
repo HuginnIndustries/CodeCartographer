@@ -400,3 +400,49 @@ test("MCP and Pi completion surfaces both delegate to framework-owned handoff co
 		}
 	}
 });
+
+// ---------------------------------------------------------------
+// 9. Handoff presence enforcement (issue #84)
+// ---------------------------------------------------------------
+
+test("completeValidatedPhase refuses when the phase declares handoff_requirements and no handoff exists", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "cc-handoff-"));
+	try {
+		await initWorkspace(cwd);
+		const statusPath = join(cwd, ".codecarto", "workflow", "status.yaml");
+		const before = await readFile(statusPath, "utf8");
+		const { completeValidatedPhase } = await import(pathToFileURL(`${REPO_ROOT}/core/completion.ts`).href);
+		const validation = { phaseId: "architecture", primaryOutput: "findings/architecture/architecture-map.md", outputPath: "", exists: true, hasValidationBlock: true, overall: "PASS", rows: [], gaps: [], errors: [] };
+		await assert.rejects(
+			() => completeValidatedPhase(cwd, validation, "test"),
+			/scratch\/handoffs\/architecture\.yaml/,
+			"refusal must name the expected handoff path",
+		);
+		assert.equal(await readFile(statusPath, "utf8"), before, "refusal must not mutate status");
+		const { readdir } = await import("node:fs/promises");
+		const closeouts = (await readdir(join(cwd, ".codecarto", "closeouts"))).filter((name) => name.endsWith("-architecture.md"));
+		assert.deepEqual(closeouts, [], "refusal must not write a closeout");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("completeValidatedPhase stays lenient when the phase declares no handoff_requirements", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "cc-handoff-"));
+	try {
+		await initWorkspace(cwd);
+		// Strip the declaration from the workspace's pipeline copy: custom
+		// pipelines without handoff_requirements keep the pre-#84 behavior.
+		const pipelinePath = join(cwd, ".codecarto", DEFAULT_PIPELINE_PATH);
+		const pipeline = await loadYamlFile(pipelinePath);
+		for (const phase of pipeline.phases) delete phase.handoff_requirements;
+		await writeFile(pipelinePath, `${stringifySimpleYaml(pipeline)}\n`, "utf8");
+		const { completeValidatedPhase } = await import(pathToFileURL(`${REPO_ROOT}/core/completion.ts`).href);
+		const validation = { phaseId: "architecture", primaryOutput: "findings/architecture/architecture-map.md", outputPath: "", exists: true, hasValidationBlock: true, overall: "PASS", rows: [], gaps: [], errors: [] };
+		await completeValidatedPhase(cwd, validation, "test");
+		const state = await getWorkspaceState(cwd);
+		assert.equal(state.status.phases.architecture.status, "complete");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});

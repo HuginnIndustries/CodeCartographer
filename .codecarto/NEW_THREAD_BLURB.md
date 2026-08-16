@@ -9,7 +9,7 @@ All CodeCartographer files are inside `.codecarto/`. Paths below are relative to
 Read these in order before doing work:
 
 1. `GUIDE.md` - the LLM entry point and session guide
-2. `workflow/status.yaml` - the single source of truth for project progress
+2. `workflow/status.yaml` - current progress and routed items (framework-owned: read it, never edit it)
 3. `CONVENTIONS.md` if present - cross-cutting patterns this project follows
 4. The current phase's existing output file, if present
 5. The current phase's `SKILL.md`
@@ -20,18 +20,17 @@ Where to store results:
 
 - Durable findings: `findings/<phase>/`
 - Rough notes: `scratch/`
-- Workflow status: `workflow/status.yaml` (only status file to update)
-- Per-session closeouts: `closeouts/<YYYY-MM-DD>-<phase-or-module>.md` (use `templates/closeout-template.md`)
-- Cross-session log: append a one-line index entry to `THREAD_LOG.md` pointing at your closeout file
+- State changes (owner notes, open questions, carry-forward routings): `scratch/handoffs/<phase>.yaml` — completion applies it to `workflow/status.yaml`; never edit `status.yaml` directly
+- Closeouts and `THREAD_LOG.md`: framework-owned; supply `closeout_summary` and optional `closeout_content` in the handoff
 
 After completing work:
 
 1. Run validation per `workflow/VALIDATE.md`. Append the validation block to the output.
-2. Update `workflow/status.yaml`: mark the phase `complete`, advance `current_phase` to the next pending phase (or `complete` if all phases are done), and update both `open_questions` (genuinely unknown) and `carry_forward` (deferred to a specific later phase) for the phase. See GUIDE.md "Open Questions vs Carry-Forward" for the entry shape.
-3. Record 2-3 key observations in `owner_notes` for the completed phase.
-4. Write a per-session closeout file at `closeouts/<YYYY-MM-DD>-<phase-or-module>.md`. Append a one-line entry to `THREAD_LOG.md` pointing at it (de-dup discipline: scan the bottom 5 entries first to avoid double-appending).
-5. Store the durable output in the declared `findings/` path.
-6. If the session made cross-cutting decisions or proposed conventions, fill in the closeout's "Decisions Beyond Prompt" and "Proposed Conventions" sections. The orchestrator promotes them to `DECISIONS.md` and `CONVENTIONS.md` respectively.
+2. Write `scratch/handoffs/<phase>.yaml` (see `templates/phase-handoff.yaml`): `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, `open_question_closures`, `post_pipeline`, and `decisions`, plus `closeout_summary` and optional multiline `closeout_content`. See GUIDE.md "Open Questions vs Carry-Forward" for the entry shape.
+3. Record 2-3 key observations in the handoff's `owner_notes`.
+4. Store the durable output in the declared `findings/` path.
+5. Run completion. The framework verifies the primary output and validation, applies the handoff to `workflow/status.yaml`, and writes the closeout and `THREAD_LOG.md` entry.
+6. If the session made cross-cutting decisions or proposed conventions, record them in the handoff's `decisions` array and the closeout content's "Decisions Beyond Prompt" and "Proposed Conventions" sections. The orchestrator promotes them to `DECISIONS.md` and `CONVENTIONS.md` respectively.
 
 ## File-System Sync Warning
 
@@ -44,4 +43,4 @@ To stay safe:
 - **Never chain Edit and bash heredocs against the same file in a single session** — pick one writer and stick with it.
 - Keep test code in a separate file from production code so a sync gap on one doesn't poison the other.
 
-This is not a CodeCartographer issue per se, but the framework's reliance on append-to-narrative-files (`THREAD_LOG.md`, `status.yaml`, large primary outputs) magnifies the cost — every truncated write is a potential silent data loss in a load-bearing place.
+This is not a CodeCartographer issue per se, but the framework's reliance on large narrative files (findings reports, primary outputs) magnifies the cost — every truncated write is a potential silent data loss in a load-bearing place.
