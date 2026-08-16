@@ -279,7 +279,10 @@ test("no framework instruction file tells a session to write framework-owned sta
 		{ re: /record\s+it\s+(?:as|under)[^.\n]*\bin\s+`?(?:workflow\/)?status\.yaml`?/i, why: "record-into-status.yaml" },
 		// Catches the bare filename and the list form:
 		// "update `status.yaml`", "update `CONVENTIONS.md` / `DECISIONS.md` / `workflow/status.yaml`".
-		{ re: /\bupdate\s+(?:`?[\w./-]+`?\s*[/,]\s*)*`?(?:workflow\/)?status\.yaml`?/i, why: "update-status.yaml" },
+		// The list-item class excludes the "/" separator so an item and the
+		// delimiter can never both claim the same character — that ambiguity is
+		// exponential backtracking on input like "-/-/-/…" (js/redos).
+		{ re: /\bupdate\s+(?:`?[\w.-]+`?\s*[/,]\s*)*`?(?:workflow\/)?status\.yaml`?/i, why: "update-status.yaml" },
 		{ re: /\bappend[^.\n]*\bto\s+`?THREAD_LOG\.md`?/i, why: "append-THREAD_LOG.md" },
 		{ re: /\bset\b[^.\n]*\bstatus\b[^.\n]*\bto\s+`?complete`?\s+in\s+status\.yaml/i, why: "set-status-complete" },
 	];
