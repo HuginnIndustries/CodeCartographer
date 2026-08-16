@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Stale-scaffold detection (#85). The template now ships `workflow/scaffold-version.yaml`, stamped with the releasing version and asserted against `package.json` by the release-metadata tests. `codecarto_status` (MCP), the Pi status line, and the phase prompt warn when a workspace's scaffold has no marker (pre-marker scaffolds may predate the v0.12.0 handoff contract), is older than the running framework, or is newer than it. The phase prompt also stops listing `templates/phase-handoff.yaml` as a required read when the file is missing and instead warns that the scaffold predates the handoff contract, naming the handoff path completion will require and the framework-owned files to refresh. Warn-only: unversioned workspaces keep working.
+
 ### Fixed
 
 - Shipped pipeline `handoff_requirements` still instructed agents to `Update workflow/status.yaml.` and `Append a summary entry to THREAD_LOG.md.` — the two edits the v0.12.0 handoff contract forbids, rendered into the same phase prompt that forbids them (#83). All 24 stale triplets across the six phase pipelines now route state through `scratch/handoffs/<phase>.yaml`, the deep-audit routing criterion targets the phase handoff instead of `status.yaml`, and `NEW_THREAD_BLURB.md` is rewritten to the handoff contract. A pipeline invariant test guards against the pre-v0.12.0 wording resurfacing.

@@ -20,6 +20,7 @@ import {
 	computeTotals,
 	createEmptyStatus,
 	DEFAULT_PIPELINE_PATH,
+	describeScaffoldStaleness,
 	deriveSlug,
 	discoverLibrary,
 	type EntryGeneration,
@@ -116,6 +117,9 @@ function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): str
 		`Post-pipeline work: ${postPipelinePending} pending`,
 		`Next: ${nextAction}`,
 	];
+
+	const scaffoldNotice = describeScaffoldStaleness(state);
+	if (scaffoldNotice) lines.push(`Scaffold: ${scaffoldNotice}`);
 
 	if (extraLines.length > 0) {
 		lines.push("", ...extraLines);

@@ -85,6 +85,17 @@ export async function getWorkspaceState(cwd: string): Promise<WorkspaceState | n
 	const pipeline = await loadYamlFile<PipelineFile>(pipelinePath);
 	const status = normalizeStatus(rawStatus, pipeline, pipelineRelativePath, cwd);
 
+	const scaffoldVersionPath = join(workspaceDir, "workflow", "scaffold-version.yaml");
+	let scaffoldVersion: string | undefined;
+	if (await pathExists(scaffoldVersionPath)) {
+		const marker = await loadYamlFile<{ scaffold_version?: unknown }>(scaffoldVersionPath);
+		if (typeof marker.scaffold_version === "string" && marker.scaffold_version.trim()) {
+			scaffoldVersion = marker.scaffold_version.trim();
+		} else if (typeof marker.scaffold_version === "number") {
+			scaffoldVersion = String(marker.scaffold_version);
+		}
+	}
+
 	return {
 		cwd,
 		workspaceDir,
@@ -92,7 +103,49 @@ export async function getWorkspaceState(cwd: string): Promise<WorkspaceState | n
 		pipelinePath,
 		pipeline,
 		status,
+		...(scaffoldVersion !== undefined && { scaffoldVersion }),
 	};
+}
+
+// Numeric x.y.z comparison; null when either side is not a plain dotted triple.
+function compareDottedVersions(a: string, b: string): number | null {
+	const parse = (version: string): number[] | null => {
+		const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+		return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+	};
+	const left = parse(a);
+	const right = parse(b);
+	if (!left || !right) return null;
+	for (let i = 0; i < 3; i++) {
+		if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
+	}
+	return 0;
+}
+
+/**
+ * Human-readable staleness notice for the workspace's .codecarto/ scaffold,
+ * or null when the scaffold matches the running framework. A missing marker
+ * means the scaffold was copied from a release that predates it — those
+ * scaffolds may also predate the v0.12.0 handoff contract, whose GUIDE and
+ * pipelines instruct the exact opposite completion protocol. Warn, never
+ * fail: unversioned workspaces must keep working.
+ */
+export function describeScaffoldStaleness(state: WorkspaceState): string | null {
+	const scaffold = state.scaffoldVersion;
+	if (!scaffold) {
+		return "This workspace's .codecarto/ scaffold has no workflow/scaffold-version.yaml marker (introduced after v0.12.11), so its framework-owned files (GUIDE.md, templates/, workflow/ pipelines and VALIDATE.md) may predate the v0.12.0 handoff contract. Refresh them from the packaged CodeCartographer template.";
+	}
+	const comparison = compareDottedVersions(scaffold, PACKAGE_VERSION);
+	if (comparison === 0) return null;
+	if (comparison === null) {
+		return scaffold === PACKAGE_VERSION
+			? null
+			: `This workspace's scaffold version (${scaffold}) does not match the running framework (${PACKAGE_VERSION}). Refresh the framework-owned files (GUIDE.md, templates/, workflow/) from the packaged template.`;
+	}
+	if (comparison < 0) {
+		return `This workspace's scaffold (v${scaffold}) is older than the running framework (v${PACKAGE_VERSION}). Refresh the framework-owned files (GUIDE.md, templates/, workflow/) from the packaged template to pick up pipeline and template fixes.`;
+	}
+	return `This workspace's scaffold (v${scaffold}) is newer than the running framework (v${PACKAGE_VERSION}). Upgrade CodeCartographer to at least v${scaffold}.`;
 }
 
 export async function updateStatusAtomically(
