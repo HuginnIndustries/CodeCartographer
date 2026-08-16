@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format is based on 
 ### Added
 
 - Agent skill for driving the server, shipped in the package at `agent-skill/codecartographer/` (SKILL.md plus references for pipeline selection, executor choice, the handoff contract, and phase recovery). Copy it into `~/.claude/skills/`, `~/.hermes/skills/`, or wherever your agent loads skills.
+- Three further references covering what to do with a completed run, generalized from patterns proven in a third-party integration: `deep-audit-synthesis.md` (defect dispositions as porting inputs, hazards converted into normative rules and acceptance tests, reporting shape), `kernel-first-rewrite.md` (strategic-assumption classification, the kernel/ports/adapters/extensions ring model, fake-driven acceptance harness before adapters, milestone ordering), and `carrying-results-forward.md` (starting implementation from a completed spec, autonomy boundaries, and publishing a curated `docs/codecarto/` snapshot instead of the raw workspace).
 - `codecarto_guide` MCP tool serving that same skill, so an agent with the server configured can learn the drive loop without installing anything. Takes an optional `topic`; every response lists the others. It needs no workspace — call it before `codecarto_init`.
 
 ### Changed
