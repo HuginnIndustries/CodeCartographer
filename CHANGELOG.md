@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-16
+
+### Added
+
+- Agent skill for driving the server, shipped in the package at `agent-skill/codecartographer/` (SKILL.md plus references for pipeline selection, executor choice, the handoff contract, and phase recovery). Copy it into `~/.claude/skills/`, `~/.hermes/skills/`, or wherever your agent loads skills.
+- `codecarto_guide` MCP tool serving that same skill, so an agent with the server configured can learn the drive loop without installing anything. Takes an optional `topic`; every response lists the others. It needs no workspace — call it before `codecarto_init`.
+
+### Changed
+
+- `docs/mcp-quickstart.md` Step 3 now includes writing the phase handoff, which the canonical flow had omitted since v0.12.0, and points integrators at `codecarto_guide`.
+
+### Why
+
+Integrations were reverse-engineering the drive loop from tool descriptions because no specification shipped. At least one documented writing and repairing `workflow/status.yaml` directly and never mentioned `scratch/handoffs/<phase>.yaml` — guidance that fails outright against the v0.13.0 completion gate. The guide makes the contract explicit and versioned alongside the code that enforces it.
+
 ## [0.13.0] — 2026-08-16
 
 ### Security

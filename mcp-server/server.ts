@@ -38,6 +38,7 @@ import {
 
 	describeScaffoldStaleness,
 	type EntryGeneration,
+	type GuideDocument,
 	type GenerationReasoning,
 	type GenerationSurface,
 	getNextEligiblePhase,
@@ -48,6 +49,8 @@ import {
 	type LibraryIndexEntry,
 	type LibraryVisibility,
 	listEntries,
+	listGuideTopics,
+	readGuide,
 	listSkillNames,
 	loadCodecartoConfig,
 	loadUsage,
@@ -1072,6 +1075,20 @@ const TOOLS = [
 		},
 	},
 	{
+		name: "codecarto_guide",
+		description:
+			"Return the instructions for driving this server: the status/next/execute/validate/complete loop, the phase-handoff contract, pipeline selection, executor choice, and recovery. Call this first when you have not run a CodeCartographer pipeline before. Takes no workspace.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				topic: {
+					type: "string",
+					description: "Guide topic. Omit for the overview; other topics are listed in every response.",
+				},
+			},
+		},
+	},
+	{
 		name: "codecarto_list_skills",
 		description: "List available post-pipeline skills installed in the workspace.",
 		inputSchema: {
@@ -1101,7 +1118,20 @@ const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 	codecarto_usage: handleUsage,
 	codecarto_dashboard: handleDashboard,
 	codecarto_list_skills: handleListSkills,
+	codecarto_guide: handleGuide,
 };
+
+export async function handleGuide(args: { topic?: string }) {
+	const topics = await listGuideTopics();
+	const document: GuideDocument = await readGuide(args.topic).catch((error) => {
+		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
+	});
+	const other = topics.filter((name) => name !== document.topic);
+	const footer = other.length > 0
+		? `\n\n---\nOther guide topics: ${other.join(", ")} (call codecarto_guide with topic).`
+		: "";
+	return textResult(`${document.content}${footer}`, { topic: document.topic, topics });
+}
 
 // ---------- server bootstrap ----------
 

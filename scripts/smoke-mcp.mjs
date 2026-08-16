@@ -89,6 +89,7 @@ const EXPECTED_TOOLS = [
 	"codecarto_complete",
 	"codecarto_config",
 	"codecarto_dashboard",
+	"codecarto_guide",
 	"codecarto_init",
 	"codecarto_library_init",
 	"codecarto_library_list",
