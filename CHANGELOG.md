@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- `completeValidatedPhase` silently completed phases with `carry_forward: []` and no agent-supplied `open_questions` when `scratch/handoffs/<phase>.yaml` was absent, even for phases whose pipeline declares `handoff_requirements` — severing the cross-phase routing channel for an entire run without a trace (#84). Completion now refuses with an actionable error naming the expected handoff path and minimal shape. Phases without `handoff_requirements` keep the lenient path, so custom pipelines are unaffected.
+
 ## [0.12.11] — 2026-07-23
 
 ### Fixed

@@ -72,6 +72,21 @@ export async function completeValidatedPhase(
 	if (handoff && handoff.phase_id !== validation.phaseId) {
 		throw new Error(`Invalid handoff: phase_id ${handoff.phase_id} does not match ${validation.phaseId}`);
 	}
+	// A phase that declares handoff_requirements must not complete without its
+	// handoff: silently proceeding writes empty carry_forward/open_questions and
+	// severs the cross-phase routing channel (issue #84). Phases without the
+	// declaration keep the lenient path for custom pipelines.
+	if (!handoff) {
+		const declaringPhase = resolvePhase(initialState, validation.phaseId);
+		if (declaringPhase?.handoff_requirements?.length) {
+			throw new Error(
+				`Phase ${validation.phaseId} declares handoff_requirements, but no phase handoff exists at .codecarto/scratch/handoffs/${validation.phaseId}.yaml. `
+				+ `Write the handoff first (see GUIDE.md and templates/phase-handoff.yaml): schema_version: 1, the exact phase_id, `
+				+ `arrays for owner_notes, open_questions, carry_forward, carry_forward_closures, open_question_closures, post_pipeline, and decisions (omitted arrays default to empty), `
+				+ `plus closeout_summary and optional closeout_content. Then re-run completion.`,
+			);
+		}
+	}
 	if (handoff) {
 		const activePhases = new Set(initialState.pipeline.phase_order);
 		const sourceIndex = initialState.pipeline.phase_order.indexOf(validation.phaseId);
