@@ -4,23 +4,26 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
-### Fixed
+## [0.13.0] — 2026-08-16
 
-- The pre-v0.12.0 "write it into `status.yaml` yourself" wording survived #83 in the files a session reads while producing output: all five phase output templates, `closeout-template.md`, `thread-log-entry-template.md`, `VALIDATE.md` (including its worked PARTIAL example), `GUIDE.md`, and two SKILL.md files (#89). `templates/mechanical-defects.md` was the proximate cause of the routing loss reported in #84 — a real run echoed its "Mirror these into status.yaml" sentence into a validation Evidence cell and produced a prose table instead of state. All twelve sites now route through the phase handoff, `VALIDATE.md`'s worked example shows the handoff YAML and the `carry_forward_closures` closure path, and `thread-log-entry-template.md` documents what completion produces plus how to write a useful `closeout_summary`. Reads of `status.yaml` are unchanged.
+### Security
 
-### Changed
-
-- The framework-owned-state invariant test now scans every instruction file a session reads — `templates/*.md`, `findings/*/SKILL.md`, `skills/*/SKILL.md`, `VALIDATE.md`, `GUIDE.md`, `NEW_THREAD_BLURB.md`, and `CONTRIBUTING.md` — instead of only the pipeline YAMLs and `NEW_THREAD_BLURB.md`. It matches both `status.yaml` and `workflow/status.yaml`, skips negated forms so prohibitions read naturally, and exempts post-pipeline skills from the `THREAD_LOG.md` rule (they never reach `completeValidatedPhase`, so they do own their closeout).
+- MCP `codecarto_publish` arbitrary file read via `spec_path`, second path (#76, PR #79). The v0.12.11 fix skipped its containment check when `allowedRoots` resolved empty, leaving the same arbitrary-read reachable in that configuration. Containment is now mandatory: an empty root set rejects rather than permits. Merged 2026-08-03, after v0.12.11 was tagged on 2026-07-23, and unreleased until now.
+- Cleared four dependency advisories, including high-severity `undici` (response desynchronization, cache-directive disclosure, CRLF injection) and `ip-address` (SSRF and trust-boundary bypass via leading-zero octets, CIDR suffixes, and IPv4-mapped IPv6), by overriding `undici` to a patched 8.x (PR #82). `npm audit --omit=dev` reports zero vulnerabilities.
 
 ### Added
 
 - Stale-scaffold detection (#85). The template now ships `workflow/scaffold-version.yaml`, stamped with the releasing version and asserted against `package.json` by the release-metadata tests. `codecarto_status` (MCP), the Pi status line, and the phase prompt warn when a workspace's scaffold has no marker (pre-marker scaffolds may predate the v0.12.0 handoff contract), is older than the running framework, or is newer than it. The phase prompt also stops listing `templates/phase-handoff.yaml` as a required read when the file is missing and instead warns that the scaffold predates the handoff contract, naming the handoff path completion will require and the framework-owned files to refresh. Warn-only: unversioned workspaces keep working.
 
+### Changed
+
+- The framework-owned-state invariant test now scans every instruction file a session reads — `templates/*.md`, `findings/*/SKILL.md`, `skills/*/SKILL.md`, `VALIDATE.md`, `GUIDE.md`, `NEW_THREAD_BLURB.md`, and `CONTRIBUTING.md` — instead of only the pipeline YAMLs and `NEW_THREAD_BLURB.md`. It matches both `status.yaml` and `workflow/status.yaml`, skips negated forms so prohibitions read naturally, and exempts post-pipeline skills from the `THREAD_LOG.md` rule (they never reach `completeValidatedPhase`, so they do own their closeout).
+
 ### Fixed
 
+- The pre-v0.12.0 "write it into `status.yaml` yourself" wording survived #83 in the files a session reads while producing output: all five phase output templates, `closeout-template.md`, `thread-log-entry-template.md`, `VALIDATE.md` (including its worked PARTIAL example), `GUIDE.md`, and two SKILL.md files (#89). `templates/mechanical-defects.md` was the proximate cause of the routing loss reported in #84 — a real run echoed its "Mirror these into status.yaml" sentence into a validation Evidence cell and produced a prose table instead of state. All twelve sites now route through the phase handoff, `VALIDATE.md`'s worked example shows the handoff YAML and the `carry_forward_closures` closure path, and `thread-log-entry-template.md` documents what completion produces plus how to write a useful `closeout_summary`. Reads of `status.yaml` are unchanged.
 - Shipped pipeline `handoff_requirements` still instructed agents to `Update workflow/status.yaml.` and `Append a summary entry to THREAD_LOG.md.` — the two edits the v0.12.0 handoff contract forbids, rendered into the same phase prompt that forbids them (#83). All 24 stale triplets across the six phase pipelines now route state through `scratch/handoffs/<phase>.yaml`, the deep-audit routing criterion targets the phase handoff instead of `status.yaml`, and `NEW_THREAD_BLURB.md` is rewritten to the handoff contract. A pipeline invariant test guards against the pre-v0.12.0 wording resurfacing.
 - `completeValidatedPhase` silently completed phases with `carry_forward: []` and no agent-supplied `open_questions` when `scratch/handoffs/<phase>.yaml` was absent, even for phases whose pipeline declares `handoff_requirements` — severing the cross-phase routing channel for an entire run without a trace (#84). Completion now refuses with an actionable error naming the expected handoff path and minimal shape. Phases without `handoff_requirements` keep the lenient path, so custom pipelines are unaffected.
-
 ## [0.12.11] — 2026-07-23
 
 ### Fixed
