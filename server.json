@@ -8,12 +8,12 @@
     "url": "https://github.com/HuginnIndustries/CodeCartographer",
     "source": "github"
   },
-  "version": "0.12.11",
+  "version": "0.13.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "codecartographer-pi",
-      "version": "0.12.11",
+      "version": "0.13.0",
       "transport": {
         "type": "stdio"
       }
