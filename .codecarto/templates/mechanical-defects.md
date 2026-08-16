@@ -79,8 +79,10 @@
 ### Routed To Semantic Phase
 
 <!-- Items spotted during this phase that are actually semantic in nature
-     (concurrency, security, contract drift). Mirror these into status.yaml as
-     carry_forward entries with target_phase: defect-scan-semantic. -->
+     (concurrency, security, contract drift). Mirror these into your phase handoff at
+     scratch/handoffs/defect-scan-mechanical.yaml as carry_forward entries with
+     target_phase: defect-scan-semantic; completion applies them to workflow/status.yaml.
+     The table below documents the routing — it does not perform it. -->
 
 | ID | Description | Why Routed |
 |----|-------------|-----------|
