@@ -118,11 +118,26 @@ A PARTIAL row's evidence must name what is missing and which `open_questions` or
 - A delegated run that times out may still have written its artifact. Check for the file and validate before retrying.
 - The drop-in `.codecarto/` template works without MCP, but the server is preferred: it owns atomic state updates, validation parsing, and the completion gate.
 
+## When the run drives a rewrite
+
+If the goal is to rebuild or refactor rather than to understand, two phases carry that weight and both have their own reference:
+
+- the defect scans feed `porting` and `reimplementation-spec` as inputs, not as an appendix — `references/deep-audit-synthesis.md`;
+- the spec should describe the least error-prone build order, not a clone — `references/kernel-first-rewrite.md`.
+
 ## References
+
+Running the pipeline:
 
 - `references/pipeline-selection.md` — choosing a variant, and switching without losing work
 - `references/executors.md` — the executor contract, adapters, and model selection
 - `references/handoff-contract.md` — full handoff schema, routing, and closure semantics
 - `references/phase-recovery.md` — stalled, interrupted, and failed phase runs
+
+Using what it produces:
+
+- `references/deep-audit-synthesis.md` — defect dispositions, hazards as normative rules, reporting
+- `references/kernel-first-rewrite.md` — rings, build order, acceptance harness, strategic assumptions
+- `references/carrying-results-forward.md` — starting implementation, autonomy boundaries, publishing findings
 
 This guide is also served by the `codecarto_guide` MCP tool, so an agent with the server configured can read it without installing anything.

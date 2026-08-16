@@ -75,6 +75,21 @@ test("the guide stays executor-agnostic", async () => {
 	assert.match(executors, /largest usable context/i);
 });
 
+test("the rewrite references carry the disposition vocabulary the porting phase uses", async () => {
+	// The porting template asks for a disposition per defect. If the guide and
+	// the template drift apart, a session produces a bundle the next phase
+	// cannot act on.
+	const synthesis = (await core.readGuide("deep-audit-synthesis")).content;
+	for (const disposition of ["fix before porting", "port differently", "leave behind"]) {
+		assert.ok(synthesis.includes(disposition), `deep-audit synthesis omits the "${disposition}" disposition`);
+	}
+	assert.match(synthesis, /acceptance[- ]test/i, "hazards must be tied to acceptance tests");
+
+	const kernel = (await core.readGuide("kernel-first-rewrite")).content;
+	assert.match(kernel, /language-agnostic/i, "must say when to keep the spec language-agnostic");
+	assert.match(kernel, /fake/i, "must describe the fake-driven acceptance harness");
+});
+
 test("SKILL.md carries frontmatter a skill installer can read", async () => {
 	const raw = await readFile(join(SKILL_DIR, "SKILL.md"), "utf8");
 	assert.match(raw, /^---\r?\n/, "SKILL.md must open with frontmatter");
