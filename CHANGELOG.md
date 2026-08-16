@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Stale-scaffold detection (#85). The template now ships `workflow/scaffold-version.yaml`, stamped with the releasing version and asserted against `package.json` by the release-metadata tests. `codecarto_status` (MCP), the Pi status line, and the phase prompt warn when a workspace's scaffold has no marker (pre-marker scaffolds may predate the v0.12.0 handoff contract), is older than the running framework, or is newer than it. The phase prompt also stops listing `templates/phase-handoff.yaml` as a required read when the file is missing and instead warns that the scaffold predates the handoff contract, naming the handoff path completion will require and the framework-owned files to refresh. Warn-only: unversioned workspaces keep working.
+
 ## [0.12.11] — 2026-07-23
 
 ### Fixed

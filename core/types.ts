@@ -87,6 +87,8 @@ export type WorkspaceState = {
 	pipelinePath: string;
 	status: NormalizedStatus;
 	pipeline: PipelineFile;
+	/** From workflow/scaffold-version.yaml; undefined for scaffolds that predate the marker. */
+	scaffoldVersion?: string;
 };
 
 export type ValidationOverall = "PASS" | "PASS WITH GAPS" | "FAIL" | "MISSING";

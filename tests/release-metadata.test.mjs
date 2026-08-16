@@ -84,3 +84,13 @@ test("MCP server handshake uses PACKAGE_VERSION, not a hardcoded stale string", 
 	// Ensure no stale hardcoded version remains in the Server constructor.
 	assert.doesNotMatch(serverSrc, /new Server\([^)]*version:\s*["']0\.\d/, "Server constructor must not hardcode a version string");
 });
+
+test("packaged template scaffold-version matches package.json", async () => {
+	// The marker is how a workspace learns which release scaffolded it
+	// (issue #85). A release that bumps package.json without bumping the
+	// template marker would stamp every new workspace as stale-or-future.
+	const markerRaw = await readFile(join(REPO_ROOT, ".codecarto", "workflow", "scaffold-version.yaml"), "utf8");
+	const match = /^scaffold_version:\s*(\S+)\s*$/m.exec(markerRaw);
+	assert.ok(match, "scaffold-version.yaml must declare scaffold_version");
+	assert.equal(match[1], pkg.version, "template scaffold_version must match package.json version");
+});

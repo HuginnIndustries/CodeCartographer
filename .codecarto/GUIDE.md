@@ -80,6 +80,7 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Source code (read-only) | `../` (everything outside `.codecarto/`) | Read only. Analyze but never modify. |
 | Synthesis input (user-maintained) | `inputs/vision.md` | The user fills this before the synthesis pipeline starts. Implementing phases read it but do not rewrite the raw brief. |
 | Workflow state (framework-owned) | `workflow/status.yaml` | Read to understand progress. Implementing sessions never edit it directly; completion applies a validated phase handoff under a lock. |
+| Scaffold version stamp (framework-owned) | `workflow/scaffold-version.yaml` | Written at release, copied by init. The framework compares it to its own version to warn about stale scaffolds. Never edit. |
 | Findings (read-write) | `findings/<phase>/<primary-output>.md`, secondary output files | Create and update during phases. |
 | Phase handoff (read-write) | `scratch/handoffs/<phase>.yaml` | Implementing sessions propose state changes and closeout content here. The framework validates and applies them. |
 | Closeouts (framework-owned) | `closeouts/<date>-<phase-or-module>.md`, `THREAD_LOG.md` | Completion writes or updates one canonical closeout and one idempotent index entry. |

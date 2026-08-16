@@ -36,6 +36,7 @@ import {
 	deriveSlug,
 	discoverLibrary,
 
+	describeScaffoldStaleness,
 	type EntryGeneration,
 	type GenerationReasoning,
 	type GenerationSurface,
@@ -206,7 +207,8 @@ export async function handleStatus(args: { cwd: string }) {
 		0,
 	);
 	const postPipelinePending = state.status.post_pipeline.filter((entry) => entry.status !== "resolved").length;
-	const summary = [
+	const scaffoldNotice = describeScaffoldStaleness(state);
+	const summaryLines = [
 		`Phase: ${currentPhase}`,
 		`Pipeline state: ${currentPhase === "complete" ? "complete" : "in progress"}`,
 		`Pipeline: ${getPipelineLabel(state.status.pipeline)} (${state.status.pipeline})`,
@@ -215,8 +217,11 @@ export async function handleStatus(args: { cwd: string }) {
 		`Carry-forward (pipeline phases): ${totalCarryForward}`,
 		`Post-pipeline work: ${postPipelinePending} pending`,
 		`Next: ${state.status.next_actions[0] ?? (nextPhase ? `Begin ${nextPhase.id}` : "All phases complete.")}`,
-	].join("\n");
+	];
+	if (scaffoldNotice) summaryLines.push(`Scaffold: ${scaffoldNotice}`);
+	const summary = summaryLines.join("\n");
 	return textResult(summary, {
+		...(scaffoldNotice ? { scaffoldNotice } : {}),
 		currentPhase,
 		pipeline: state.status.pipeline,
 		pipelineLabel: getPipelineLabel(state.status.pipeline),

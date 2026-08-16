@@ -11,6 +11,7 @@ import type {
 	WorkspaceState,
 } from "./types.ts";
 import { pathExists } from "./utils.ts";
+import { describeScaffoldStaleness } from "./workspace.ts";
 import { runPhasePreflight, type PhasePreflightResult } from "./synthesis.ts";
 
 export function describeEntry(entry: OpenQuestionEntry | CarryForwardEntry): string {
@@ -59,6 +60,7 @@ export async function buildPhasePrompt(
 ): Promise<string> {
 	const preflight = options.preflight ?? await runPhasePreflight(state, phase);
 	const synthesisWorkflow = state.pipeline.workflow_name === "evidence-backed-project-synthesis";
+	const handoffTemplateExists = await pathExists(join(state.workspaceDir, "templates", "phase-handoff.yaml"));
 	const lines = [
 		`Read .codecarto/GUIDE.md and continue the CodeCartographer workflow for the phase \`${phase.id}\`.`,
 		synthesisWorkflow
@@ -68,8 +70,10 @@ export async function buildPhasePrompt(
 		"Required reads before analysis:",
 		"- .codecarto/GUIDE.md",
 		"- .codecarto/workflow/status.yaml",
-		"- .codecarto/templates/phase-handoff.yaml",
 	];
+	if (handoffTemplateExists) {
+		lines.push("- .codecarto/templates/phase-handoff.yaml");
+	}
 
 	const primaryOutput = phase.primary_output ? `.codecarto/${phase.primary_output}` : undefined;
 	if (primaryOutput) {
@@ -99,6 +103,22 @@ export async function buildPhasePrompt(
 	const decisionsPath = join(state.workspaceDir, "DECISIONS.md");
 	if (await pathExists(decisionsPath)) {
 		lines.push("- .codecarto/DECISIONS.md (numbered project decisions; new entries are appended in your closeout)");
+	}
+
+	// Stale-scaffold warnings (issue #85): a workspace copied from an old
+	// template can contradict the runtime contract. Both surfaces render this
+	// prompt, so warn here rather than per-host.
+	const scaffoldWarnings: string[] = [];
+	if (!handoffTemplateExists) {
+		scaffoldWarnings.push(
+			`.codecarto/templates/phase-handoff.yaml is missing — this scaffold predates the v0.12.0 handoff contract. Completion still requires a phase handoff at .codecarto/scratch/handoffs/${phase.id}.yaml; refresh the framework-owned files (GUIDE.md, templates/, workflow/VALIDATE.md, workflow/pipeline*.yaml) from the current CodeCartographer template, and trust this prompt over the workspace GUIDE.md where they disagree.`,
+		);
+	}
+	const staleness = describeScaffoldStaleness(state);
+	if (staleness) scaffoldWarnings.push(staleness);
+	if (scaffoldWarnings.length > 0) {
+		lines.push("");
+		for (const warning of scaffoldWarnings) lines.push(`WARNING: ${warning}`);
 	}
 
 	const routed = collectRoutedCarryForward(state, phase.id);
