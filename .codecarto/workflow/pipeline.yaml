@@ -39,8 +39,8 @@ phases:
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: contracts
     purpose: Recover user-visible behavior, defaults, side effects, error behavior, and black-box acceptance checks.
     skill_path: findings/contracts/SKILL.md
@@ -71,8 +71,8 @@ phases:
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: protocols
     purpose: Capture event catalogs, state machines, persistence formats, and compatibility hazards.
     skill_path: findings/protocols/SKILL.md
@@ -102,8 +102,8 @@ phases:
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: porting
     purpose: Synthesize architecture, contracts, and protocols into a reverse-engineering bundle oriented toward porting.
     skill_path: findings/porting/SKILL.md
@@ -139,8 +139,8 @@ phases:
       - The Source Index makes the bundle a self-contained compression boundary and identifies targeted deep-read triggers.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: reimplementation-spec
     purpose: Produce the final language-agnostic reimplementation plan and acceptance spec.
     skill_path: findings/reimplementation-spec/SKILL.md
@@ -163,5 +163,5 @@ phases:
       - Lower-level findings are deep-read only when the porting bundle identifies a gap, conflict, missing acceptance detail, or defect rationale.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.

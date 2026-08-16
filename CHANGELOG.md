@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- Shipped pipeline `handoff_requirements` still instructed agents to `Update workflow/status.yaml.` and `Append a summary entry to THREAD_LOG.md.` — the two edits the v0.12.0 handoff contract forbids, rendered into the same phase prompt that forbids them (#83). All 24 stale triplets across the six phase pipelines now route state through `scratch/handoffs/<phase>.yaml`, the deep-audit routing criterion targets the phase handoff instead of `status.yaml`, and `NEW_THREAD_BLURB.md` is rewritten to the handoff contract. A pipeline invariant test guards against the pre-v0.12.0 wording resurfacing.
+
 ## [0.12.11] — 2026-07-23
 
 ### Fixed

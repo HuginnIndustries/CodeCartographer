@@ -41,8 +41,8 @@ phases:
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: defect-scan-mechanical
     purpose: Early, context-light defect pass covering logic, error handling, and configuration hazards. Runs before contracts so mechanical bugs are surfaced for the contracts and porting phases to reference.
     skill_path: findings/defect-scan-mechanical/SKILL.md
@@ -60,13 +60,13 @@ phases:
       - Each finding has location, severity, evidence level, and recommended action.
       - Findings are organized by pass and sorted by severity.
       - Summary tables are complete and counts match the detailed findings.
-      - Items spotted that are actually semantic in nature are routed to defect-scan-semantic via carry_forward in workflow/status.yaml.
+      - Items spotted that are actually semantic in nature are routed onward via a carry_forward entry in the phase handoff targeting defect-scan-semantic.
       - Findings are marked with evidence levels.
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: contracts
     purpose: Recover user-visible behavior, defaults, side effects, error behavior, and black-box acceptance checks.
     skill_path: findings/contracts/SKILL.md
@@ -98,8 +98,8 @@ phases:
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: protocols
     purpose: Capture event catalogs, state machines, persistence formats, and compatibility hazards.
     skill_path: findings/protocols/SKILL.md
@@ -130,8 +130,8 @@ phases:
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: defect-scan-semantic
     purpose: Deep, context-rich defect pass covering concurrency, security, and API contract violations. Runs after protocols so contracts/protocols context is available, and before porting so the porting phase can synthesize all defects with full understanding of the system.
     skill_path: findings/defect-scan-semantic/SKILL.md
@@ -160,8 +160,8 @@ phases:
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: porting
     purpose: Synthesize architecture, contracts, protocols, and both defect passes into a reverse-engineering bundle oriented toward porting. Fill the Defect Synthesis section by consolidating mechanical-defects.md and semantic-defects.md into a single porting-oriented view.
     skill_path: findings/porting/SKILL.md
@@ -202,8 +202,8 @@ phases:
       - The Source Index makes the bundle a self-contained compression boundary and identifies targeted deep-read triggers.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
   - id: reimplementation-spec
     purpose: Produce the final language-agnostic reimplementation plan and acceptance spec. The Strategic Alignment Hook in GUIDE.md decides between the default and opinionated template variants.
     skill_path: findings/reimplementation-spec/SKILL.md
@@ -227,5 +227,5 @@ phases:
       - Lower-level findings are deep-read only when the porting bundle identifies a gap, conflict, missing acceptance detail, or defect rationale.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
-      - Update workflow/status.yaml.
-      - Append a summary entry to THREAD_LOG.md.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
