@@ -58,7 +58,8 @@
 ## Open Questions Left Behind
 
 <!-- Items that are still genuinely unknown after this session.
-     Mirror these into workflow/status.yaml under the relevant phase's open_questions. -->
+     Mirror these into your phase handoff under open_questions; completion applies them
+     to workflow/status.yaml. This table documents them — it does not record them. -->
 
 | ID | Kind | Description | Deferred Reason |
 |---|---|---|---|
@@ -67,7 +68,9 @@
 ## Carry-Forward Routed
 
 <!-- Items deferred to a specific later phase.
-     Mirror these into workflow/status.yaml under the relevant phase's carry_forward. -->
+     Mirror these into your phase handoff under carry_forward, each with a target_phase;
+     completion applies them to workflow/status.yaml. This table documents them — it does
+     not route them. -->
 
 | ID | Target Phase | Description | Deferred Reason |
 |---|---|---|---|

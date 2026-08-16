@@ -231,3 +231,84 @@ test("NEW_THREAD_BLURB.md matches the framework-owned state contract", async () 
 	assert.ok(!/update\s+`?workflow\/status\.yaml`?:/i.test(blurb), "blurb must not instruct editing framework-owned status.yaml");
 	assert.ok(!/append[^.\n]*THREAD_LOG\.md/i.test(blurb), "blurb must not instruct appending framework-owned THREAD_LOG.md");
 });
+
+// #86 fixed the pipelines and NEW_THREAD_BLURB but left the same pre-v0.12.0
+// wording in the files a session reads while producing output: phase output
+// templates, VALIDATE.md, and SKILL.md. A session that follows a template
+// telling it to "mirror these into workflow/status.yaml" writes a prose table
+// and no state, which is exactly how a real run lost every carry_forward entry.
+// Reads of status.yaml stay legal — completion does put the entries there.
+test("no framework instruction file tells a session to write framework-owned state", async () => {
+	const scanned = [];
+	for (const name of await readdir(join(CODECARTO, "templates"))) {
+		if (name.endsWith(".md")) scanned.push(join("templates", name));
+	}
+	for (const subdir of await readdir(join(CODECARTO, "findings"))) {
+		const skill = join("findings", subdir, "SKILL.md");
+		try {
+			await stat(join(CODECARTO, skill));
+			scanned.push(skill);
+		} catch {
+			// Not every findings/ subdirectory carries a SKILL.md.
+		}
+	}
+	scanned.push(join("workflow", "VALIDATE.md"), "GUIDE.md", "NEW_THREAD_BLURB.md", "CONTRIBUTING.md");
+
+	// Post-pipeline skills run after the pipeline is complete and never reach
+	// completeValidatedPhase, so they legitimately write their own closeout and
+	// THREAD_LOG entry. Phase state stays framework-owned for them regardless.
+	const postPipelineSkills = [];
+	try {
+		for (const subdir of await readdir(join(CODECARTO, "skills"))) {
+			const skill = join("skills", subdir, "SKILL.md");
+			try {
+				await stat(join(CODECARTO, skill));
+				postPipelineSkills.push(skill);
+			} catch {
+				// Not every skills/ subdirectory carries a SKILL.md.
+			}
+		}
+	} catch {
+		// A scaffold without any post-pipeline skills is valid.
+	}
+
+	// Each pattern is an imperative to WRITE a framework-owned file. Phrases
+	// that merely reference or read one must not match.
+	const forbidden = [
+		{ re: /mirror\s+(?:these|them|it)\s+into\s+(?:`?workflow\/)?status\.yaml/i, why: "mirror-into-status.yaml" },
+		{ re: /record\s+it\s+(?:as|under)[^.\n]*\bin\s+`?(?:workflow\/)?status\.yaml`?/i, why: "record-into-status.yaml" },
+		// Catches the bare filename and the list form:
+		// "update `status.yaml`", "update `CONVENTIONS.md` / `DECISIONS.md` / `workflow/status.yaml`".
+		{ re: /\bupdate\s+(?:`?[\w./-]+`?\s*[/,]\s*)*`?(?:workflow\/)?status\.yaml`?/i, why: "update-status.yaml" },
+		{ re: /\bappend[^.\n]*\bto\s+`?THREAD_LOG\.md`?/i, why: "append-THREAD_LOG.md" },
+		{ re: /\bset\b[^.\n]*\bstatus\b[^.\n]*\bto\s+`?complete`?\s+in\s+status\.yaml/i, why: "set-status-complete" },
+	];
+
+	// A prohibition ("do not append to THREAD_LOG.md") is the wording we want,
+	// so only flag a match that is not negated in the clause introducing it.
+	const NEGATION = /\b(?:do not|do n't|don'?t|never|must not|cannot|can'?t|rather than|instead of|without)\b[^.]{0,60}$/i;
+	const isNegated = (line, index) => NEGATION.test(line.slice(0, index));
+
+	const violations = [];
+	const check = async (relative, patterns) => {
+		const content = await readFile(join(CODECARTO, relative), "utf8");
+		const lines = content.split(/\r?\n/);
+		for (let i = 0; i < lines.length; i++) {
+			for (const { re, why } of patterns) {
+				const match = re.exec(lines[i]);
+				if (match && !isNegated(lines[i], match.index)) {
+					violations.push(`${relative}:${i + 1} [${why}] ${lines[i].trim()}`);
+				}
+			}
+		}
+	};
+	for (const relative of scanned) await check(relative, forbidden);
+	// Skills are held to the status.yaml rules but not the THREAD_LOG one.
+	const skillPatterns = forbidden.filter((pattern) => !pattern.why.includes("THREAD_LOG"));
+	for (const relative of postPipelineSkills) await check(relative, skillPatterns);
+	assert.deepEqual(
+		violations,
+		[],
+		`Framework instruction files must route state through the phase handoff, never instruct writing framework-owned files:\n${violations.join("\n")}`,
+	);
+});

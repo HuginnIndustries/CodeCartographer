@@ -13,8 +13,8 @@ Run this check after completing a phase's primary output, before marking the pha
 4. Append a validation block to the end of the primary output file (see format below).
 5. If any criterion is FAIL, do not mark the phase as complete. Fix the output first.
 6. If any criterion is PARTIAL, route the gap appropriately:
-   - If the gap is **still genuinely unknown** (needs a runtime test, maintainer decision, or spec ruling that no later phase will close), record it under `open_questions` for the phase in `workflow/status.yaml`.
-   - If the gap is **deferred to a specific later phase** in this pipeline (the next phase's rubric is the right place to close it), record it under `carry_forward` with an explicit `target_phase` field. See GUIDE.md "Open Questions vs Carry-Forward" for the entry shape.
+   - If the gap is **still genuinely unknown** (needs a runtime test, maintainer decision, or spec ruling that no later phase will close), record it under `open_questions` in your phase handoff at `scratch/handoffs/<phase>.yaml`.
+   - If the gap is **deferred to a specific later phase** in this pipeline (the next phase's rubric is the right place to close it), record it under `carry_forward` in the same handoff with an explicit `target_phase` field. See GUIDE.md "Open Questions vs Carry-Forward" for the entry shape.
    - You may still mark the phase complete if the gaps are documented under one of the two lists and are non-blocking for downstream phases.
 
 ## Validation Block Format
@@ -56,20 +56,23 @@ Below is what a real PASS WITH GAPS block looks like — useful when a phase fin
 **Overall:** PASS WITH GAPS
 ```
 
-The `arch-CF2` entry then appears in `workflow/status.yaml` under the architecture phase's `carry_forward`:
+You record the `arch-CF2` entry in your phase handoff at `scratch/handoffs/architecture.yaml`:
 
 ```yaml
-phases:
-  architecture:
-    carry_forward:
-      - id: arch-CF2
-        kind: defer-to-phase
-        target_phase: protocols
-        description: MCP server endpoints and websocket subscription channel listed by name only; schemas not extracted.
-        deferred_reason: Wire-format extraction is the protocols phase's rubric; deferring avoids guessing at shapes here.
+schema_version: 1
+phase_id: architecture
+carry_forward:
+  - id: arch-CF2
+    kind: defer-to-phase
+    target_phase: protocols
+    description: MCP server endpoints and websocket subscription channel listed by name only; schemas not extracted.
+    deferred_reason: Wire-format extraction is the protocols phase's rubric; deferring avoids guessing at shapes here.
+closeout_summary: Architecture mapped; wire formats deferred to protocols.
 ```
 
-The protocols phase, on session start, scans `carry_forward` entries with `target_phase: protocols`, picks `arch-CF2` up, and either resolves it (deletes the entry once the schemas are pinned) or re-defers to a later phase.
+Completion validates the handoff and applies the entry to `workflow/status.yaml` under the architecture phase's `carry_forward`. Never write that file yourself — see GUIDE.md "Trust Boundaries."
+
+The protocols phase then receives `arch-CF2` in its phase prompt as a routed item. It either resolves it (addressing it in the phase output and listing the id under `carry_forward_closures` in its own handoff, so completion removes the entry atomically) or re-defers it by writing a fresh `carry_forward` entry naming a later `target_phase`.
 
 ## Rules
 
@@ -77,5 +80,5 @@ The protocols phase, on session start, scans `carry_forward` entries with `targe
 - Do not inflate results. A criterion you are uncertain about is PARTIAL, not PASS.
 - If the output file already has a validation block from a prior session, replace it with a fresh one.
 - Validation checks the output against the pipeline's criteria only. It does not re-evaluate the source code.
-- For automated agents: a phase with any FAIL result must not have its status set to `complete` in status.yaml.
-- A PARTIAL row's `Evidence` cell must name what is missing and (if applicable) which `open_questions` or `carry_forward` entry tracks the gap. "Incomplete" alone is not honest enough.
+- For automated agents: a phase with any FAIL result must not be completed. Completion refuses FAIL and MISSING validations outright.
+- A PARTIAL row's `Evidence` cell must name what is missing and (if applicable) which `open_questions` or `carry_forward` entry tracks the gap. "Incomplete" alone is not honest enough. Record that entry in the phase handoff — an evidence cell that only *describes* the routing does not perform it.

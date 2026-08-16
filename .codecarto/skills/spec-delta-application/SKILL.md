@@ -86,7 +86,7 @@ Per the standard closeout ritual:
 
 - Append a one-line entry to `THREAD_LOG.md` pointing at the closeout file.
 - Write `closeouts/<YYYY-MM-DD>-spec-deltas.md` using `templates/closeout-template.md`.
-- Update `status.yaml` only if a delta closed an `open_questions` or `carry_forward` entry — do NOT change `current_phase` (stays `complete`).
+- If a delta closed an `open_questions` or `carry_forward` entry, record that in the closeout. Do not edit `status.yaml` — phase state is framework-owned, and post-pipeline work has no completion step that applies handoffs, so a hand-edit here is unreviewed and can be overwritten by a later phase completion.
 - Append numbered entries to `DECISIONS.md` for any decisions made during triage that weren't already in the deltas (e.g., "rejected Δ7 because the spec already covered the case at §X").
 
 ## What to avoid

@@ -140,7 +140,8 @@
 <!-- Items deferred to a specific later phase whose rubric is the right place to close them.
      Common target from porting: reimplementation-spec (rule-pinning, opinionated decisions).
      Each entry: { id, kind: defer-to-phase, target_phase, description, deferred_reason }.
-     Mirror these into workflow/status.yaml under this phase's carry_forward list. -->
+     Mirror these into your phase handoff at scratch/handoffs/<phase>.yaml under carry_forward;
+     completion applies them to workflow/status.yaml. Never write that file yourself. -->
 
 | ID | Target Phase | Description | Deferred Reason |
 |---|---|---|---|

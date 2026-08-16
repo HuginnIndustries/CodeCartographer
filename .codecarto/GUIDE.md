@@ -39,8 +39,8 @@ If this is the first LLM to touch this project — no closeouts in `closeouts/`,
 If the user accepts the orchestrator role:
 
 1. Initialize `CONVENTIONS.md` from `templates/conventions-template.md` and `DECISIONS.md` from `templates/decisions-template.md` (skeletons only — populate as patterns and decisions accumulate).
-2. Set `project_name` in `workflow/status.yaml`.
-3. **Do not run the architecture phase yourself.** The orchestrator never executes pipeline phases — that is the implementing-session role (see §Roles). Instead, **draft an implementing-session prompt for the architecture phase** that a fresh thread will execute. Hand the prompt to the user; they spin up a new thread with it; the implementing thread runs the phase, validates, writes a closeout, and reports back; you (the orchestrator) read the returned closeout, update `CONVENTIONS.md` / `DECISIONS.md` / `workflow/status.yaml` per the closeout ritual, and draft the next phase's prompt. **Phase work always happens in fresh implementing-session threads, never in the orchestration thread.** A useful self-check: if you find yourself reading a `findings/<phase>/SKILL.md` or writing a `findings/<phase>/<primary-output>.md`, you have slipped into the implementing-session role — stop, draft the prompt, hand off.
+2. Confirm the project name. `project_name` defaults to the repository directory name and is persisted by the framework on the first completion; it only needs attention if the project should be called something else.
+3. **Do not run the architecture phase yourself.** The orchestrator never executes pipeline phases — that is the implementing-session role (see §Roles). Instead, **draft an implementing-session prompt for the architecture phase** that a fresh thread will execute. Hand the prompt to the user; they spin up a new thread with it; the implementing thread runs the phase, validates, writes a closeout, and reports back; you (the orchestrator) read the returned closeout and update `CONVENTIONS.md` / `DECISIONS.md` from it, then draft the next phase's prompt. The implementing session's own completion already applied its handoff to `workflow/status.yaml` — the orchestrator never edits that file. **Phase work always happens in fresh implementing-session threads, never in the orchestration thread.** A useful self-check: if you find yourself reading a `findings/<phase>/SKILL.md` or writing a `findings/<phase>/<primary-output>.md`, you have slipped into the implementing-session role — stop, draft the prompt, hand off.
 
 If the user declines:
 
@@ -63,7 +63,7 @@ Read these files in order before doing any analysis:
 
 All paths in this guide are relative to `.codecarto/` unless stated otherwise.
 
-If `project_name` in `workflow/status.yaml` is blank, set it to the name of this repository before starting analysis.
+A blank `project_name` in `workflow/status.yaml` needs no action: the framework resolves it to this repository's directory name and persists it on the first completion.
 
 Treat this workspace as durable memory across sessions. Do not invent a new structure. Use the one that exists.
 

@@ -25,7 +25,7 @@ Key things to verify:
 - Pipeline YAML files parse correctly and phase dependencies resolve.
 - SKILL.md instructions produce output that matches the corresponding template.
 - Validation protocol (VALIDATE.md) catches missing or incomplete sections.
-- `status.yaml` updates correctly after each phase, with the schema-split `open_questions` / `carry_forward` lists used for what each is for (see GUIDE.md "Open Questions vs Carry-Forward").
+- `status.yaml` updates correctly after each phase from the session's phase handoff, with the schema-split `open_questions` / `carry_forward` lists used for what each is for (see GUIDE.md "Open Questions vs Carry-Forward").
 - All file paths referenced in pipeline YAML, GUIDE.md, and SKILL.md files exist.
 
 #### THREAD_LOG.md de-dup check

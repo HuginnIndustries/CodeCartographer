@@ -57,4 +57,4 @@ If the semantic phase later finds related defects, those go in its own report �
 - Auth, input validation, secrets, and trust boundary defects → pass 4 in `defect-scan-semantic`.
 - API/spec/state-machine drift → pass 5 in `defect-scan-semantic`.
 
-If you spot something semantic during this phase, record it as a `carry_forward` entry in `workflow/status.yaml` with `target_phase: defect-scan-semantic` so the later phase picks it up.
+If you spot something semantic during this phase, record it as a `carry_forward` entry in your phase handoff at `scratch/handoffs/defect-scan-mechanical.yaml` with `target_phase: defect-scan-semantic`. Completion applies it to `workflow/status.yaml`, and the semantic phase receives it as a routed item in its prompt. Listing it only in your report's routing table does not route it.

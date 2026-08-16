@@ -85,7 +85,9 @@
 
 ### Carry-Forward Closure
 
-<!-- carry_forward entries in status.yaml that targeted defect-scan-semantic and were closed here. -->
+<!-- carry_forward entries routed to defect-scan-semantic (delivered in this phase's prompt)
+     that were closed here. Address each in the findings above, then list its id under
+     carry_forward_closures in your phase handoff so completion removes the entry. -->
 
 | ID | Source Phase | Closed Because |
 |----|--------------|---------------|
