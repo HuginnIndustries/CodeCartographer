@@ -82,18 +82,38 @@ Out of scope without prior discussion:
 
 The release workflow at `.github/workflows/release.yml` triggers **only on `v*` tag pushes**, not on merges to `main`. A PR that bumps `version` and updates `CHANGELOG.md` does not by itself ship a release — someone has to push the matching tag. **Merging without tagging leaves the version bump dangling**, and subsequent merges will pile up version bumps with no published artifacts (see the 0.2.1 → 0.6.0 sequence for an example of this drifting silently).
 
+### Surface verification (before tagging)
+
+CI proves the code passes gates we wrote. It does not prove the release works through the clients people actually use — #94 shipped a `codecarto_next` that returned no phase prompt in one of them, and survived four releases with every gate green, because every test read the payload from the field the tests themselves chose.
+
+So before pushing a tag, drive one real phase through each surface in [`docs/client-surfaces.md`](docs/client-surfaces.md) against the merged `main`, and record what came back:
+
+| Surface | Run | Record |
+|---|---|---|
+| Pi | `/codecarto-init` then `/codecarto-next` in a scratch repo | the phase prompt Pi displayed |
+| Claude Code | `codecarto_init` then `codecarto_next` via MCP | the first line of the tool result |
+| Codex | same, via `codex mcp add codecartographer -- codecarto-mcp` | the first line of the tool result |
+| Hermes | same | the first line of the tool result |
+
+Paste the actual returns into the release PR. **A checked box is not evidence; a prompt is.** A result that is empty, truncated, or a bare object rather than the prompt text is the failure this step exists to catch, and it is invisible in a summary.
+
+At least one full round trip — init → next → write the artifact and handoff → validate → complete → confirm the routed `carry_forward` reached `workflow/status.yaml` and the next phase's prompt — should run on one surface per release. Rotate which one.
+
+If a surface is unavailable (no credits, no install), say so explicitly in the PR rather than omitting the row. An unverified surface is a known risk; a silently skipped one is not.
+
 ### Standard release (single version)
 
 For a PR that includes a version bump and changelog entry:
 
 1. Merge the PR (CI green; version in `package.json` matches the new `## [VERSION]` heading in `CHANGELOG.md`).
-2. From a synced clone:
+2. Complete the surface verification above against merged `main`.
+3. From a synced clone:
    ```bash
    git fetch origin
    git tag vX.Y.Z origin/main
    git push origin vX.Y.Z
    ```
-3. Watch the run at `https://github.com/HuginnIndustries/CodeCartographer/actions`. The workflow will:
+4. Watch the run at `https://github.com/HuginnIndustries/CodeCartographer/actions`. The workflow will:
    - Verify the tag matches `package.json`'s `version`.
    - Run tests + build.
    - `npm pack` and smoke-test the tarball.

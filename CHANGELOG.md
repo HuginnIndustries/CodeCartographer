@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+
+- The maintainer release process now requires driving one real phase through each client surface — Pi, Claude Code, Codex, Hermes — against merged `main` before pushing a tag, pasting the actual tool returns into the release PR rather than checking a box. Added `docs/client-surfaces.md` recording how each surface reaches the framework and which MCP result field each client reads, with Codex's behavior marked unverified. Prompted by #94, which shipped a `codecarto_next` returning no phase prompt in one client and survived four releases because every test read the payload from the field the tests themselves chose.
+
 ## [0.14.1] — 2026-08-16
 
 ### Fixed
