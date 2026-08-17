@@ -100,6 +100,7 @@ const EXPECTED_TOOLS = [
 	"codecarto_open",
 	"codecarto_phase",
 	"codecarto_publish",
+	"codecarto_refresh_scaffold",
 	"codecarto_skill",
 	"codecarto_status",
 	"codecarto_switch_pipeline",

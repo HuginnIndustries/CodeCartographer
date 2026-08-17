@@ -4,7 +4,7 @@
 // atomic status-update primitive used by /codecarto-complete.
 
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, copyFile, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock, applyHandoff, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
@@ -135,6 +135,76 @@ export async function seedOrchestratorFiles(workspaceDir: string): Promise<strin
 	return created;
 }
 
+/**
+ * Workspace paths refresh never touches: project state, user configuration,
+ * user-owned top-level files, and the directories sessions write into.
+ * Everything else present in the packaged template is framework-owned.
+ */
+const REFRESH_EXCLUDED_TOP_LEVEL = new Set(["BACKLOG.md", "THREAD_LOG.md", "CONVENTIONS.md", "DECISIONS.md"]);
+const REFRESH_EXCLUDED_DIRS = new Set(["scratch", "inputs", "closeouts"]);
+const REFRESH_EXCLUDED_WORKFLOW_FILES = new Set(["status.yaml", "config.yaml", ".usage.local.yaml"]);
+
+/** One scaffold refresh's outcome. */
+export type RefreshScaffoldResult = {
+	/** Workspace-relative paths written, sorted. */
+	written: string[];
+	/** The workspace's scaffold version before the refresh, if any. */
+	scaffoldVersionBefore?: string;
+	/** The running framework version the scaffold now matches. */
+	scaffoldVersionAfter: string;
+};
+
+async function listTemplateFiles(dir: string, relativeDir = ""): Promise<string[]> {
+	const entries = await readdir(dir, { withFileTypes: true });
+	const files: string[] = [];
+	for (const entry of entries) {
+		const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+		if (entry.isDirectory()) {
+			if (!relativeDir && REFRESH_EXCLUDED_DIRS.has(entry.name)) continue;
+			files.push(...await listTemplateFiles(join(dir, entry.name), relativePath));
+			continue;
+		}
+		if (!relativeDir && REFRESH_EXCLUDED_TOP_LEVEL.has(entry.name)) continue;
+		if (relativeDir === "workflow" && REFRESH_EXCLUDED_WORKFLOW_FILES.has(entry.name)) continue;
+		files.push(relativePath);
+	}
+	return files;
+}
+
+/**
+ * Refresh a workspace's framework-owned files from the packaged template
+ * (issue #102): both staleness notices instruct exactly this, and the only
+ * tool that previously touched scaffold files was init's force mode, which
+ * backs up the entire workspace. Copies every file the packaged template
+ * ships except project state (`workflow/status.yaml`), user configuration
+ * (`workflow/config.yaml`, usage log), user-owned top-level files
+ * (BACKLOG, THREAD_LOG, CONVENTIONS, DECISIONS), and session-written
+ * directories (`scratch/`, `inputs/`, `closeouts/`). Files the template no
+ * longer ships are left in place. Appends one THREAD_LOG entry naming the
+ * version transition.
+ */
+export async function refreshScaffold(cwd: string): Promise<RefreshScaffoldResult> {
+	const state = await getWorkspaceState(cwd);
+	if (!state) throw new Error("CodeCartographer workspace not found. Run /codecarto-init first.");
+	if (!existsSync(packagedWorkspaceDir)) {
+		throw new Error("Packaged .codecarto template is missing. Reinstall codecartographer-pi.");
+	}
+	const scaffoldVersionBefore = state.scaffoldVersion;
+	const files = (await listTemplateFiles(packagedWorkspaceDir)).sort();
+	for (const relativePath of files) {
+		const target = join(state.workspaceDir, relativePath);
+		await mkdir(dirname(target), { recursive: true });
+		await copyFile(join(packagedWorkspaceDir, relativePath), target);
+	}
+	const entry = `- ${new Date().toISOString().slice(0, 10)} — scaffold-refresh — Refreshed ${files.length} framework-owned file(s) from the packaged template (${scaffoldVersionBefore ?? "unversioned"} → ${PACKAGE_VERSION}); project state, user config, and session outputs untouched.`;
+	await appendFile(join(state.workspaceDir, "THREAD_LOG.md"), `${entry}\n`, "utf8");
+	return {
+		written: files,
+		...(scaffoldVersionBefore !== undefined && { scaffoldVersionBefore }),
+		scaffoldVersionAfter: PACKAGE_VERSION,
+	};
+}
+
 // Numeric x.y.z comparison; null when either side is not a plain dotted triple.
 function compareDottedVersions(a: string, b: string): number | null {
 	const parse = (version: string): number[] | null => {
@@ -161,17 +231,17 @@ function compareDottedVersions(a: string, b: string): number | null {
 export function describeScaffoldStaleness(state: WorkspaceState): string | null {
 	const scaffold = state.scaffoldVersion;
 	if (!scaffold) {
-		return "This workspace's .codecarto/ scaffold has no workflow/scaffold-version.yaml marker (introduced after v0.12.11), so its framework-owned files (GUIDE.md, templates/, workflow/ pipelines and VALIDATE.md) may predate the v0.12.0 handoff contract. Refresh them from the packaged CodeCartographer template.";
+		return "This workspace's .codecarto/ scaffold has no workflow/scaffold-version.yaml marker (introduced after v0.12.11), so its framework-owned files (GUIDE.md, templates/, workflow/ pipelines and VALIDATE.md) may predate the v0.12.0 handoff contract. Refresh them from the packaged CodeCartographer template (codecarto_refresh_scaffold does exactly this without touching project state).";
 	}
 	const comparison = compareDottedVersions(scaffold, PACKAGE_VERSION);
 	if (comparison === 0) return null;
 	if (comparison === null) {
 		return scaffold === PACKAGE_VERSION
 			? null
-			: `This workspace's scaffold version (${scaffold}) does not match the running framework (${PACKAGE_VERSION}). Refresh the framework-owned files (GUIDE.md, templates/, workflow/) from the packaged template.`;
+			: `This workspace's scaffold version (${scaffold}) does not match the running framework (${PACKAGE_VERSION}). Refresh the framework-owned files (GUIDE.md, templates/, workflow/) from the packaged template — codecarto_refresh_scaffold does exactly this without touching project state.`;
 	}
 	if (comparison < 0) {
-		return `This workspace's scaffold (v${scaffold}) is older than the running framework (v${PACKAGE_VERSION}). Refresh the framework-owned files (GUIDE.md, templates/, workflow/) from the packaged template to pick up pipeline and template fixes.`;
+		return `This workspace's scaffold (v${scaffold}) is older than the running framework (v${PACKAGE_VERSION}). Refresh the framework-owned files (GUIDE.md, templates/, workflow/) from the packaged template to pick up pipeline and template fixes — codecarto_refresh_scaffold does exactly this without touching project state.`;
 	}
 	return `This workspace's scaffold (v${scaffold}) is newer than the running framework (v${PACKAGE_VERSION}). Upgrade CodeCartographer to at least v${scaffold}.`;
 }

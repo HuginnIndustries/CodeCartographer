@@ -65,6 +65,7 @@ import {
 	type PipelineFile,
 	publishEntry,
 	reindex as libraryReindex,
+	refreshScaffold,
 	resolvePhase,
 	resolvePipelineChoice,
 	seedOrchestratorFiles,
@@ -881,6 +882,27 @@ export async function handleListSkills(args: { cwd: string }) {
 	return textResult(lines.join("\n"), { skills });
 }
 
+export async function handleRefreshScaffold(args: { cwd: string }) {
+	const cwd = await validateCwd(args.cwd);
+	await requireWorkspace(cwd);
+	const result = await refreshScaffold(cwd).catch((error) => {
+		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+	});
+	const shown = result.written.slice(0, 20);
+	const lines = [
+		`Refreshed ${result.written.length} framework-owned file(s) from the packaged template (${result.scaffoldVersionBefore ?? "unversioned"} → ${result.scaffoldVersionAfter}).`,
+		"Project state, user config, findings outputs, scratch, closeouts, and orchestrator files were not touched.",
+		...shown.map((path) => `  - .codecarto/${path}`),
+	];
+	if (result.written.length > shown.length) lines.push(`  … +${result.written.length - shown.length} more`);
+
+	return textResult(lines.join("\n"), {
+		written: result.written,
+		scaffoldVersionBefore: result.scaffoldVersionBefore,
+		scaffoldVersionAfter: result.scaffoldVersionAfter,
+	});
+}
+
 export async function handleAmend(args: { cwd: string; name: string }) {
 	if (typeof args.name !== "string" || !args.name.trim()) {
 		throw new McpError(ErrorCode.InvalidParams, "name is required (the amendment file's slug under .codecarto/scratch/amendments/)");
@@ -1185,11 +1207,22 @@ const TOOLS = [
 			required: ["cwd", "name"],
 		},
 	},
+	{
+		name: "codecarto_refresh_scaffold",
+		description:
+			"Refresh a workspace's framework-owned files (GUIDE.md, templates/, workflow pipelines and VALIDATE.md, skills/, findings SKILL and README stubs) from the packaged template — the action every scaffold-staleness warning instructs. Never touches project state (status.yaml), user config (workflow/config.yaml, usage log), findings outputs, scratch/, closeouts/, or the orchestrator files (CONVENTIONS.md, DECISIONS.md, BACKLOG.md, THREAD_LOG.md). Appends one THREAD_LOG entry naming the version transition. Unlike codecarto_init force:true, nothing is backed up or lost.",
+		inputSchema: {
+			type: "object",
+			properties: { cwd: { type: "string", description: "Absolute path to the target repository." } },
+			required: ["cwd"],
+		},
+	},
 ] as const;
 
 const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 	codecarto_amend: handleAmend,
 	codecarto_init: handleInit,
+	codecarto_refresh_scaffold: handleRefreshScaffold,
 	codecarto_status: handleStatus,
 	codecarto_switch_pipeline: handleSwitchPipeline,
 	codecarto_next: handleNext,
