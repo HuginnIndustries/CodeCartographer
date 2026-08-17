@@ -67,6 +67,7 @@ import {
 	reindex as libraryReindex,
 	resolvePhase,
 	resolvePipelineChoice,
+	seedOrchestratorFiles,
 	type StatusFile,
 	stringifySimpleYaml,
 	switchPipeline,
@@ -186,14 +187,25 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 	normalizedStatus.last_updated = new Date().toISOString();
 	await writeFile(statusPath, `${stringifySimpleYaml(normalizedStatus)}\n`, "utf8");
 
+	// Orchestration is on by default (issue #97/#98): the driving chat holds the
+	// duties, so the files those duties maintain exist from the first phase.
+	const seeded = await seedOrchestratorFiles(targetWorkspaceDir);
+
 	const label = getPipelineLabel(selectedPipelinePath);
+	const initLines = [
+		`Initialized CodeCartographer workspace at ${targetWorkspaceDir}.`,
+		`Pipeline: ${label} (${selectedPipelinePath})`,
+		`First phase: ${normalizedStatus.current_phase}`,
+	];
+	if (seeded.length > 0) initLines.push(`Seeded orchestrator files: ${seeded.join(", ")} (the driving chat holds the orchestrator duties — see GUIDE.md §Roles).`);
 	return textResult(
-		`Initialized CodeCartographer workspace at ${targetWorkspaceDir}.\nPipeline: ${label} (${selectedPipelinePath})\nFirst phase: ${normalizedStatus.current_phase}`,
+		initLines.join("\n"),
 		{
 			workspaceDir: targetWorkspaceDir,
 			pipeline: selectedPipelinePath,
 			pipelineLabel: label,
 			firstPhase: normalizedStatus.current_phase,
+			seededOrchestratorFiles: seeded,
 		},
 	);
 }
@@ -329,7 +341,7 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 		);
 	}
 
-	const { updatedState, closeoutNotice } = await completeValidatedPhase(cwd, validation, "codecarto_complete").catch((error) => {
+	const { updatedState, closeoutNotice, orchestratorCheckpoint } = await completeValidatedPhase(cwd, validation, "codecarto_complete").catch((error) => {
 		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
 
@@ -338,12 +350,14 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 		`Next phase: ${updatedState.status.current_phase}`,
 	];
 	if (closeoutNotice) lines.push(closeoutNotice);
+	if (orchestratorCheckpoint) lines.push(orchestratorCheckpoint);
 
 	return textResult(lines.join("\n"), {
 		completedPhase: validation.phaseId,
 		validation: validation.overall,
 		nextPhase: updatedState.status.current_phase,
 		closeoutNotice,
+		orchestratorCheckpoint,
 	});
 }
 

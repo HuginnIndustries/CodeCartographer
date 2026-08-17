@@ -3,14 +3,173 @@ import { join } from "node:path";
 
 import { getNextEligiblePhase, resolvePhase } from "./pipeline.ts";
 import { applyHandoff, autoAssignIds, loadHandoffFile, normalizeStatus } from "./status.ts";
-import type { OpenQuestionEntry, PhaseHandoff, ValidationResult, WorkspaceState } from "./types.ts";
+import type { NormalizedStatus, OpenQuestionEntry, PhaseHandoff, ProposedConventionEntry, ValidationResult, WorkspaceState } from "./types.ts";
 import { dateOnly, pathExists, uniqueStrings } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
 
 export type CompletionResult = {
 	updatedState: WorkspaceState;
 	closeoutNotice?: string;
+	/**
+	 * One-line phase-boundary reminder covering what completion just mechanized
+	 * (decisions appended, proposals staged) and what still needs orchestrator
+	 * judgment (pending proposals, open-question label re-triage). Undefined
+	 * when there is nothing to surface.
+	 */
+	orchestratorCheckpoint?: string;
 };
+
+/** Section heading completion appends mechanized decision rows under. */
+export const DECISIONS_COMPLETION_LOG_HEADING = "## Completion log";
+
+/** Section heading completion stages proposed conventions under. */
+export const CONVENTIONS_PENDING_HEADING = "## Pending proposals";
+
+/**
+ * Ensure an orchestrator file exists: prefer the workspace's template, fall
+ * back to a minimal header for scaffolds that predate the template.
+ * @returns the file's current content.
+ */
+async function ensureOrchestratorFile(
+	workspaceDir: string,
+	fileName: string,
+	templateName: string,
+	fallbackHeader: string,
+): Promise<string> {
+	const filePath = join(workspaceDir, fileName);
+	if (!(await pathExists(filePath))) {
+		const templatePath = join(workspaceDir, "templates", templateName);
+		if (await pathExists(templatePath)) {
+			await copyFile(templatePath, filePath);
+		} else {
+			await writeFile(filePath, fallbackHeader, "utf8");
+		}
+	}
+	return readFile(filePath, "utf8");
+}
+
+/**
+ * Append handoff `decisions` to DECISIONS.md as `D<NNN> | ...` rows under
+ * {@link DECISIONS_COMPLETION_LOG_HEADING}. Numbering continues from the
+ * highest `D<NNN>` anywhere in the file, so orchestrator-curated category
+ * entries and the completion log share one namespace. A decision whose text
+ * already appears in the file is skipped, so re-running completion cannot
+ * duplicate rows.
+ * @returns how many rows were appended.
+ */
+async function appendDecisionLog(
+	workspaceDir: string,
+	phaseId: string,
+	closeoutFile: string,
+	decisions: string[],
+): Promise<number> {
+	if (decisions.length === 0) return 0;
+	let content = await ensureOrchestratorFile(
+		workspaceDir,
+		"DECISIONS.md",
+		"decisions-template.md",
+		"# Decisions\n\nAppend-only log of cross-cutting decisions. This scaffold predates templates/decisions-template.md; refresh the framework-owned files for the full format.\n",
+	);
+	// The template ships worked examples inside HTML comments (a commented
+	// `D001 | ...` row); numbering and dedupe must read only visible content or
+	// a fresh file starts at D002 and a decision matching example text is lost.
+	const visible = content.replace(/<!--[\s\S]*?-->/g, "");
+	const fresh = decisions.filter((decision) => decision.trim() && !visible.includes(decision.trim()));
+	if (fresh.length === 0) return 0;
+
+	let nextNumber = 1;
+	for (const match of visible.matchAll(/^D(\d+)\s*\|/gm)) {
+		const parsed = Number.parseInt(match[1], 10);
+		if (Number.isFinite(parsed) && parsed >= nextNumber) nextNumber = parsed + 1;
+	}
+
+	if (!content.includes(DECISIONS_COMPLETION_LOG_HEADING)) {
+		content += `${content.endsWith("\n") ? "" : "\n"}\n${DECISIONS_COMPLETION_LOG_HEADING}\n\nAppended by completion from each phase handoff's \`decisions\` array. The orchestrator may re-file entries into the category sections above; numbering is shared with them.\n`;
+	}
+	const source = closeoutFile.replace(/\.md$/, "");
+	const rows = fresh.map((decision, index) => {
+		const number = String(nextNumber + index).padStart(3, "0");
+		return `D${number} | ${decision.trim()} | ${source} | closeouts/${closeoutFile} §Decisions Beyond Prompt (${phaseId})`;
+	});
+	content += `${content.endsWith("\n") ? "" : "\n"}${rows.join("\n")}\n`;
+	await writeFile(join(workspaceDir, "DECISIONS.md"), content, "utf8");
+	return fresh.length;
+}
+
+/**
+ * Count staged proposals in CONVENTIONS.md's pending section.
+ * @param content - the file content, or null to read from disk (null when the file is absent).
+ */
+export async function countPendingProposals(workspaceDir: string, content?: string): Promise<number> {
+	let text = content;
+	if (text === undefined) {
+		const filePath = join(workspaceDir, "CONVENTIONS.md");
+		if (!(await pathExists(filePath))) return 0;
+		text = await readFile(filePath, "utf8");
+	}
+	const start = text.indexOf(CONVENTIONS_PENDING_HEADING);
+	if (start === -1) return 0;
+	const rest = text.slice(start + CONVENTIONS_PENDING_HEADING.length);
+	const end = rest.indexOf("\n## ");
+	const section = end === -1 ? rest : rest.slice(0, end);
+	return section.split(/\r?\n/).filter((line) => line.startsWith("- **")).length;
+}
+
+/**
+ * Stage handoff `proposed_conventions` in CONVENTIONS.md under
+ * {@link CONVENTIONS_PENDING_HEADING}. Staging is mechanical; promotion into
+ * the numbered convention sections stays an orchestrator judgment at the
+ * phase boundary. A proposal whose name and rule both already appear in the
+ * file is skipped, so re-running completion cannot duplicate entries.
+ * @returns staged count and the section's total pending count afterward.
+ */
+async function stageProposedConventions(
+	workspaceDir: string,
+	phaseId: string,
+	timestamp: string,
+	proposals: ProposedConventionEntry[],
+): Promise<{ staged: number; totalPending: number }> {
+	if (proposals.length === 0) {
+		return { staged: 0, totalPending: await countPendingProposals(workspaceDir) };
+	}
+	let content = await ensureOrchestratorFile(
+		workspaceDir,
+		"CONVENTIONS.md",
+		"conventions-template.md",
+		"# Conventions\n\nCross-cutting patterns promoted to project-wide invariants. This scaffold predates templates/conventions-template.md; refresh the framework-owned files for the full format.\n",
+	);
+	if (!content.includes(CONVENTIONS_PENDING_HEADING)) {
+		content += `${content.endsWith("\n") ? "" : "\n"}\n${CONVENTIONS_PENDING_HEADING}\n\nStaged by completion from each phase handoff's \`proposed_conventions\`. The orchestrator promotes an entry into a numbered convention above (or removes it with a note) at the phase boundary — see GUIDE.md §Roles.\n`;
+	}
+	// Same visible-content rule as the decision log: template comments must not
+	// swallow a genuine proposal through the dedupe check.
+	const visible = content.replace(/<!--[\s\S]*?-->/g, "");
+	const fresh = proposals.filter((proposal) => !(visible.includes(`**${proposal.name}**`) && visible.includes(proposal.rule)));
+	if (fresh.length > 0) {
+		const bullets = fresh.map((proposal) => {
+			const evidence = proposal.evidence ? `\n  - Evidence: ${proposal.evidence}` : "";
+			return `- **${proposal.name}** (${phaseId}, ${dateOnly(timestamp)}) — ${proposal.rule}${evidence}`;
+		});
+		content += `${content.endsWith("\n") ? "" : "\n"}${bullets.join("\n")}\n`;
+		await writeFile(join(workspaceDir, "CONVENTIONS.md"), content, "utf8");
+	}
+	return { staged: fresh.length, totalPending: await countPendingProposals(workspaceDir, content) };
+}
+
+/** Build the phase-boundary checkpoint line, or undefined when nothing needs surfacing. */
+function buildOrchestratorCheckpoint(
+	decisionsAppended: number,
+	totalPendingProposals: number,
+	status: NormalizedStatus,
+): string | undefined {
+	const openQuestions = Object.values(status.phases).reduce((sum, phase) => sum + (phase.open_questions?.length ?? 0), 0);
+	const parts: string[] = [];
+	if (decisionsAppended > 0) parts.push(`${decisionsAppended} decision(s) appended to DECISIONS.md`);
+	if (totalPendingProposals > 0) parts.push(`${totalPendingProposals} proposal(s) pending in CONVENTIONS.md — promote or remove them before the next phase`);
+	if (openQuestions > 0) parts.push(`${openQuestions} open question(s) outstanding — re-triage their kind labels before the next phase (GUIDE.md §Roles)`);
+	if (parts.length === 0) return undefined;
+	return `Orchestrator checkpoint: ${parts.join("; ")}.`;
+}
 
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -30,7 +189,7 @@ async function writeCompletionArtifacts(
 	validation: ValidationResult,
 	timestamp: string,
 	handoff: PhaseHandoff | null,
-): Promise<string> {
+): Promise<{ closeoutPath: string; decisionsAppended: number; totalPendingProposals: number }> {
 	const closeoutFile = await canonicalCloseoutFile(workspaceDir, phaseId, timestamp);
 	const closeoutPath = join(workspaceDir, "closeouts", closeoutFile);
 	const suppliedContent = handoff?.closeout_content?.trim();
@@ -58,7 +217,19 @@ async function writeCompletionArtifacts(
 	if (!current.split(/\r?\n/).some((line) => line.includes(link))) {
 		await appendFile(threadLogPath, `${entry}\n`, "utf8");
 	}
-	return `.codecarto/closeouts/${closeoutFile}`;
+
+	// Mechanize the orchestrator loop's bookkeeping half (issue #98): decisions
+	// reach DECISIONS.md and proposals reach CONVENTIONS.md at completion, so a
+	// run without a promotion ritual cannot strand them in closeout prose.
+	// Promotion of pending proposals into numbered conventions stays judged.
+	const decisionsAppended = await appendDecisionLog(workspaceDir, phaseId, closeoutFile, handoff?.decisions ?? []);
+	const { totalPending: totalPendingProposals } = await stageProposedConventions(
+		workspaceDir,
+		phaseId,
+		timestamp,
+		handoff?.proposed_conventions ?? [],
+	);
+	return { closeoutPath: `.codecarto/closeouts/${closeoutFile}`, decisionsAppended, totalPendingProposals };
 }
 
 export async function completeValidatedPhase(
@@ -82,7 +253,7 @@ export async function completeValidatedPhase(
 			throw new Error(
 				`Phase ${validation.phaseId} declares handoff_requirements, but no phase handoff exists at .codecarto/scratch/handoffs/${validation.phaseId}.yaml. `
 				+ `Write the handoff first (see GUIDE.md and templates/phase-handoff.yaml): schema_version: 1, the exact phase_id, `
-				+ `arrays for owner_notes, open_questions, carry_forward, carry_forward_closures, open_question_closures, post_pipeline, and decisions (omitted arrays default to empty), `
+				+ `arrays for owner_notes, open_questions, carry_forward, carry_forward_closures, open_question_closures, post_pipeline, decisions, and proposed_conventions (omitted arrays default to empty), `
 				+ `plus closeout_summary and optional closeout_content. Then re-run completion.`,
 			);
 		}
@@ -103,6 +274,7 @@ export async function completeValidatedPhase(
 
 	const completionTimestamp = new Date().toISOString();
 	let closeoutPath: string | undefined;
+	let orchestratorCheckpoint: string | undefined;
 	const updatedState = await updateStatusAtomically(cwd, async (lockedState) => {
 		const phase = resolvePhase(lockedState, validation.phaseId);
 		if (!phase?.primary_output) throw new Error(`Phase ${validation.phaseId} is missing primary_output.`);
@@ -150,12 +322,15 @@ export async function completeValidatedPhase(
 			? [`Begin ${nextEligible.id} phase by producing ${nextEligible.primary_output ?? `findings/${nextEligible.id}/`}`]
 			: ["All phases complete. Review findings, open questions, and downstream implementation notes."];
 
-		closeoutPath = await writeCompletionArtifacts(lockedState.workspaceDir, validation.phaseId, validation, completionTimestamp, handoff);
+		const artifacts = await writeCompletionArtifacts(lockedState.workspaceDir, validation.phaseId, validation, completionTimestamp, handoff);
+		closeoutPath = artifacts.closeoutPath;
+		orchestratorCheckpoint = buildOrchestratorCheckpoint(artifacts.decisionsAppended, artifacts.totalPendingProposals, nextStatus);
 		return { state: { ...nextWorkspace, status: nextStatus } };
 	});
 
 	return {
 		updatedState,
 		closeoutNotice: closeoutPath ? `Closeout: ${closeoutPath}` : undefined,
+		orchestratorCheckpoint,
 	};
 }

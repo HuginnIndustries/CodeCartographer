@@ -26,7 +26,7 @@ Where to store results:
 After completing work:
 
 1. Run validation per `workflow/VALIDATE.md`. Append the validation block to the output.
-2. Write `scratch/handoffs/<phase>.yaml` (see `templates/phase-handoff.yaml`): `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, `open_question_closures`, `post_pipeline`, and `decisions`, plus `closeout_summary` and optional multiline `closeout_content`. See GUIDE.md "Open Questions vs Carry-Forward" for the entry shape.
+2. Write `scratch/handoffs/<phase>.yaml` (see `templates/phase-handoff.yaml`): `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, `open_question_closures`, `post_pipeline`, `decisions`, and `proposed_conventions`, plus `closeout_summary` and optional multiline `closeout_content`. See GUIDE.md "Open Questions vs Carry-Forward" for the entry shape.
 3. Record 2-3 key observations in the handoff's `owner_notes`.
 4. Store the durable output in the declared `findings/` path.
 5. Run completion. The framework verifies the primary output and validation, applies the handoff to `workflow/status.yaml`, and writes the closeout and `THREAD_LOG.md` entry.

@@ -446,3 +446,26 @@ test("completeValidatedPhase stays lenient when the phase declares no handoff_re
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
+
+test("parseHandoff parses proposed_conventions and defaults omission to empty", async () => {
+	const { parseHandoff } = await import(pathToFileURL(`${REPO_ROOT}/core/status.ts`).href);
+	const withProposals = parseHandoff({
+		phase_id: "architecture",
+		proposed_conventions: [
+			{ name: "evidence-markers", rule: "Cite claims with a source marker.", evidence: "Recurred twice." },
+			{ name: "bare-minimum", rule: "Name and rule only." },
+		],
+	});
+	assert.equal(withProposals.proposed_conventions.length, 2);
+	assert.deepEqual(withProposals.proposed_conventions[1], { name: "bare-minimum", rule: "Name and rule only." });
+
+	const omitted = parseHandoff({ phase_id: "architecture" });
+	assert.deepEqual(omitted.proposed_conventions, []);
+});
+
+test("parseHandoff rejects malformed proposed_conventions loudly", async () => {
+	const { parseHandoff } = await import(pathToFileURL(`${REPO_ROOT}/core/status.ts`).href);
+	assert.throws(() => parseHandoff({ phase_id: "architecture", proposed_conventions: "not-an-array" }), /must be an array/);
+	assert.throws(() => parseHandoff({ phase_id: "architecture", proposed_conventions: [{ name: "no-rule" }] }), /require non-empty name and rule/);
+	assert.throws(() => parseHandoff({ phase_id: "architecture", proposed_conventions: ["a string"] }), /must be objects/);
+});

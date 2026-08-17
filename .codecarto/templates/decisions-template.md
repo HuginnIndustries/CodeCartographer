@@ -1,25 +1,27 @@
 # Decisions
 
 <!--
-  Project-level skeleton. Copy this to `.codecarto/DECISIONS.md` (one level up from templates/)
-  the first time the orchestrator promotes a decision. Then add entries as they accumulate.
+  Project-level skeleton. codecarto_init seeds this to `.codecarto/DECISIONS.md` (one level up
+  from templates/); entries accumulate as phases complete.
 
   This file is an append-only numbered log of cross-cutting decisions made during the project
   that diverge from spec text, prompt direction, or the obvious-default. Each entry is a
   one-liner with a back-reference to the closeout where the decision was made and the rationale
   lives.
 
-  This file is **append-only and orchestrator-maintained**. Every implementing session's
-  "Decisions Beyond Prompt" section in the closeout becomes one or more entries here.
+  This file is **append-only and orchestrator-maintained**. Completion appends each phase
+  handoff's `decisions` array as rows under `## Completion log` (added at first use); the
+  orchestrator may re-file entries into the category sections below. Numbering is shared across
+  the whole file.
 -->
 
 Append-only log of cross-cutting decisions that diverge from spec text, prompt direction, or
 obvious-default. Each entry is a one-liner with a back-reference to the closeout where the
 decision was made and the rationale lives.
 
-This file is **append-only and orchestrator-maintained**. Every implementing session's
-"Decisions Beyond Prompt" section in the closeout becomes one or more entries here. The
-orchestrator updates this file at session close as part of the closeout ritual.
+This file is **append-only and orchestrator-maintained**. Completion appends each phase handoff's
+`decisions` array as numbered rows under `## Completion log`; the orchestrator may re-file entries
+into the category sections at the phase boundary.
 
 ## Format
 
@@ -73,9 +75,10 @@ D001 | Outcome<T,E> is a brand newtype keyed by a unique Symbol, NOT a value-uni
 
 ## How decisions get added
 
-Every implementing session's "Decisions Beyond Prompt" section in the closeout becomes one or
-more `D<NNN>` entries here. The orchestrator promotes them at session close as part of the
-closeout ritual. Implementing sessions never edit this file directly.
+Completion appends every phase handoff's `decisions` array as `D<NNN>` rows under
+`## Completion log` — nothing gets stranded in closeout prose. The orchestrator may re-file an
+entry into the category sections above at the phase boundary. Phase executors never edit this
+file directly; they record decisions in the handoff.
 
 If a decision is later overturned, do **not** delete the entry. Append a new `D<NNN>` superseding
 it (with `Supersedes D<old-NNN>` in the one-liner) and update the old entry's one-liner to begin
