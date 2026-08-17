@@ -9,13 +9,9 @@ of the change would look like.
 
 ---
 
-## B1. Spike template + first-class spike concept
+## B1. Spike template + first-class spike concept — SHIPPED in smallest viable form (v0.15.0, issue #101)
 
-**Raised by:** `Run three Thaumaturge implementation spikes.txt`, `Apply 20 spec deltas to Thaumaturge.txt`, `Agent on protocols phase - protocols.txt` (3 agents)
-
-**Why deferred:** A spike template would land cleanly, but "first-class spike concept" implies workflow machinery (a `spikes/` directory convention, a validation rule for spike outputs, status.yaml fields for spike tracking). The 2026-05-02 pass is already changing the closeouts pattern, the open_questions schema, and the orchestrator-maintained artifacts list. Adding spike machinery on top risks too much surface change in one revision.
-
-**Smallest viable form:** `templates/spike-report.md` skeleton with sections for Goal, Method, Measurements, Findings, Recommended Deltas. No workflow machinery; spikes stay a per-project convention initially. Status.yaml integration deferred until a project demonstrates the need.
+Landed exactly as scoped: `templates/spike-report.md` (Goal / Method / Measurements / Findings / Recommended Deltas) with the `scratch/spikes/<spike-id>/<scenario>.md` convention documented in GUIDE.md and the spec-delta-application skill. No workflow machinery; spikes stay registered as `post_pipeline` entries (`kind: spike`), their findings flow to the spec through spec-delta-application and to `status.yaml` through `codecarto_amend`. Status.yaml spike tracking remains deferred until a project demonstrates the need.
 
 ---
 

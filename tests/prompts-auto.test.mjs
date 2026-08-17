@@ -99,6 +99,41 @@ test("existing phase checkpoint is included as a required resumability read", as
 	assert.match(prompt, /resume from durable in-phase progress/i);
 });
 
+test("validation surfaces declared-but-missing secondary outputs as a non-gating NOTE", async () => {
+	const { validatePhaseOutput, buildValidationSummary } = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
+	// The default pipeline's architecture phase declares five secondary outputs.
+	const outputPath = join(WORKSPACE, ".codecarto", "findings", "architecture", "architecture-map.md");
+	await writeFile(outputPath, [
+		"# Map",
+		"",
+		"## Validation",
+		"",
+		"| # | Criterion | Result | Evidence |",
+		"|---|-----------|--------|----------|",
+		"| 1 | Intent documented. | PASS | §above |",
+		"",
+		"**Overall:** PASS",
+		"",
+	].join("\n"), "utf8");
+	const freshState = await getWorkspaceState(WORKSPACE);
+	const validation = await validatePhaseOutput(freshState, "architecture");
+	assert.equal(validation.overall, "PASS", "the NOTE must not gate validation");
+	assert.ok(validation.secondaryOutputs.length > 0, "architecture declares secondary outputs");
+	assert.ok(validation.secondaryOutputs.every((output) => output.exists === false), "none were written");
+	const summary = buildValidationSummary(validation).join("\n");
+	assert.match(summary, /NOTE: \d+ declared secondary output\(s\) not written/);
+	assert.match(summary, /Non-gating\./);
+
+	// Write one and confirm it leaves the missing list.
+	const first = validation.secondaryOutputs[0];
+	const firstPath = join(WORKSPACE, ".codecarto", first.path);
+	await mkdir(dirname(firstPath), { recursive: true });
+	await writeFile(firstPath, "# Secondary\n", "utf8");
+	const revalidated = await validatePhaseOutput(await getWorkspaceState(WORKSPACE), "architecture");
+	const entry = revalidated.secondaryOutputs.find((output) => output.path === first.path);
+	assert.equal(entry.exists, true);
+});
+
 test("teardown: remove temp workspace", async () => {
 	if (WORKSPACE) await rm(WORKSPACE, { recursive: true, force: true });
 });
