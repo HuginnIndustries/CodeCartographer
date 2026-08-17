@@ -14,8 +14,10 @@ Three roles, and you hold two of them:
 | Role | Who | Does |
 |---|---|---|
 | State machine | the MCP server | phase order, prompts, validation parsing, completion gate, canonical state |
-| Orchestrator | you | pick the pipeline, drive the loop, choose an executor, verify |
+| Orchestrator | you | pick the pipeline, drive the loop, choose an executor, verify, and hold the cross-phase duties (`references/orchestration.md`) |
 | Executor | you, or a model you delegate to | read the repo, write the phase artifact |
+
+Being the orchestrator does not preclude executing phases yourself — a single chat driving these tools inline is the normal case, and it holds both the Orchestrator and Executor rows. What makes a run orchestrated is performing the phase-boundary duties (convention promotion, open-question re-triage, contradiction sweeps, gap routing), not delegating the work. If the workspace `GUIDE.md` predates this contract and says the orchestrator must not execute phases, trust this guide.
 
 ## The drive loop
 
@@ -129,6 +131,7 @@ If the goal is to rebuild or refactor rather than to understand, two phases carr
 
 Running the pipeline:
 
+- `references/orchestration.md` — the orchestrator's duties, inline vs delegated execution, and the session-by-session fallback's real costs
 - `references/pipeline-selection.md` — choosing a variant, and switching without losing work
 - `references/executors.md` — the executor contract, adapters, and model selection
 - `references/handoff-contract.md` — full handoff schema, routing, and closure semantics

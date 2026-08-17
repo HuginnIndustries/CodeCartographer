@@ -8,16 +8,17 @@
   Every new session reads this file and either honors these conventions or documents why it
   diverges.
 
-  This file is **orchestrator-maintained**. Implementing sessions should not edit it without
-  explicit invitation; they propose additions in their session closeout and the orchestrator
-  promotes them.
+  This file is **orchestrator-maintained**. Phase executors propose additions in their session
+  closeout; the orchestrator promotes them at the phase boundary. In an inline run the same chat
+  does both — the rule is about *when* (between phases, deliberately), not about which thread.
 -->
 
 Cross-cutting patterns promoted to project-wide invariants. Every session reads this file at start
 and either honors these conventions or documents why it diverges.
 
-This file is **orchestrator-maintained**. Implementing sessions propose additions in their
-closeout's "Proposed Conventions" section; the orchestrator promotes them here.
+This file is **orchestrator-maintained**. Phase executors propose additions in their closeout's
+"Proposed Conventions" section; the orchestrator promotes them here at the phase boundary — in an
+inline run, the same chat changing hats between phases.
 
 ## How conventions get added
 

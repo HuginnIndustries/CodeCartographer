@@ -4,7 +4,7 @@ Source code under evaluation: `../` (this repository — everything outside `.co
 
 All CodeCartographer files are inside `.codecarto/`. Paths below are relative to `.codecarto/`.
 
-**First-time project?** If `CONVENTIONS.md` and `DECISIONS.md` are still template skeletons and `closeouts/` is empty, see GUIDE.md §Roles and §First-Time Project Setup before reading the rest. The first LLM on a project takes a one-time role decision with the user (orchestrator vs session-by-session).
+**First-time project?** If `CONVENTIONS.md` and `DECISIONS.md` are missing or still template skeletons and `closeouts/` is empty, see GUIDE.md §Roles and §First-Time Project Setup before reading the rest. The chat driving the run **is the orchestrator by default** — seed `CONVENTIONS.md`/`DECISIONS.md` and pick an execution strategy (inline or delegated) from the situation; do not interview the user about whether orchestration should happen.
 
 Read these in order before doing work:
 
@@ -30,7 +30,7 @@ After completing work:
 3. Record 2-3 key observations in the handoff's `owner_notes`.
 4. Store the durable output in the declared `findings/` path.
 5. Run completion. The framework verifies the primary output and validation, applies the handoff to `workflow/status.yaml`, and writes the closeout and `THREAD_LOG.md` entry.
-6. If the session made cross-cutting decisions or proposed conventions, record them in the handoff's `decisions` array and the closeout content's "Decisions Beyond Prompt" and "Proposed Conventions" sections. The orchestrator promotes them to `DECISIONS.md` and `CONVENTIONS.md` respectively.
+6. If the session made cross-cutting decisions or proposed conventions, record them in the handoff's `decisions` array and the closeout content's "Decisions Beyond Prompt" and "Proposed Conventions" sections. Promoting them to `DECISIONS.md` and `CONVENTIONS.md` is the orchestrator duty at the phase boundary — in an inline run, do it yourself before the next phase.
 
 ## File-System Sync Warning
 

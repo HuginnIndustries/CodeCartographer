@@ -12,43 +12,40 @@ Work in explicit phases. Do not try to do everything at once.
 
 ## Roles
 
-CodeCartographer distinguishes two roles. They are different jobs, often held by different threads, and the framework's discipline depends on both existing.
+CodeCartographer distinguishes two roles. They are different jobs — but they are not different threads by default, and the framework's discipline depends on the first one existing.
 
-**Implementing session.** One phase or one module of work, fresh thread, follows a SKILL.md and a template, validates, writes a closeout, ends. The bulk of the framework — phases, skills, templates, validation gates — is written for this role. The "You are an LLM assistant" framing in "What This Is" addresses this role.
+**Orchestrator.** The persistent chat driving the run — normally the very session reading this guide. The role is defined by its **duties**, not by who executes phases:
 
-**Orchestrator.** One persistent thread (typically the first LLM the user points at the project) paired with the human user. The orchestrator holds cross-session context, drafts implementing-session prompts from prior closeouts, curates `CONVENTIONS.md` and `DECISIONS.md` (promoting patterns when they recur), and gates strategic forks the user makes. **The orchestrator does not execute pipeline phases itself** — that is the implementing-session role. The orchestrator's deliverables are *prompts and curated artifacts*, not phase outputs. When the orchestrator finds itself reading a SKILL.md or producing a `findings/<phase>/<primary-output>.md`, it has slipped into the implementing-session role and should stop, draft a prompt, and hand off instead. Without an orchestrator, the framework still works phase-by-phase but cross-cutting conventions and decisions don't accumulate, and each implementing session re-discovers what prior sessions established.
+- **Curate `CONVENTIONS.md` and `DECISIONS.md`**: promote patterns when they recur; append cross-cutting decisions as they land.
+- **Re-triage open questions at every phase boundary.** A question's `kind` label is itself a claim that needs evidence: before accepting `needs-maintainer-decision` or `needs-runtime-test`, re-test whether the question has become answerable by reading. A mislabeled question suppresses verification for every later phase (the `orchestration` guide topic records a real four-phase failure).
+- **Sweep for contradictions** between the incoming phase's required reads and earlier phases' `owner_notes`. A measured fact that contradicts a summarized claim is a gap to route, not a nuance to smooth over.
+- **Route gaps**: confirm each completed phase's declared secondary outputs were written or explicitly routed, and that handoff `decisions` deferring work landed somewhere a later phase will actually see.
+- **Gate strategic forks** with the user: pipeline switches, opinionated-vs-agnostic specs, scope changes.
 
-If you are an LLM reading this guide for the first time on a project where `CONVENTIONS.md` and `DECISIONS.md` are unwritten (still showing template content) and `closeouts/` is empty, **see "First-Time Project Setup" below before starting any phase.**
+**Phase executor.** Whoever performs one phase against its SKILL.md and template: reads the sources, writes the primary output, validates, writes the handoff. The bulk of the framework — phases, skills, templates, validation gates — is written for this role; the "You are an LLM assistant" framing in "What This Is" addresses it.
+
+How the roles map onto threads is an **execution strategy**, chosen per run:
+
+- **Inline** — the orchestrator executes phases itself, wearing both hats. This is the normal mode for a single chat driving the MCP tools. The duties above happen at each phase boundary: after completion, before the next phase begins.
+- **Delegated** — the orchestrator dispatches each phase to a separate execution context (the Pi extension's phase sub-agents, or fresh threads the user spins up from drafted prompts) and reviews each closeout. Same duties, same boundary; only the executor differs, keeping phase context out of the orchestrator's window.
+
+Either strategy is full orchestration. The **session-by-session fallback** — each phase in an isolated session, nobody holding the cross-phase duties — is not: `CONVENTIONS.md` stays empty, proposals die in closeout prose, and mislabeled questions go unchallenged. Use it only when the user explicitly declines orchestration or the driving model cannot sustain cross-phase context, and record the reason in the first handoff's `owner_notes`.
+
+If you are an LLM reading this guide for the first time on a project where `CONVENTIONS.md` and `DECISIONS.md` are missing or unwritten (still showing template content) and `closeouts/` is empty, **see "First-Time Project Setup" below before starting any phase.**
 
 ## First-Time Project Setup
 
-If this is the first LLM to touch this project — no closeouts in `closeouts/`, `CONVENTIONS.md` and `DECISIONS.md` still showing template skeletons, `workflow/status.yaml` at defaults — stop before starting any pipeline phase and have a one-time role conversation with the user. Combine the explanation and the ask in one structured prompt:
+If this is the first LLM to touch this project — no closeouts in `closeouts/`, `CONVENTIONS.md` and `DECISIONS.md` missing or still template skeletons, `workflow/status.yaml` at defaults — **adopt the orchestrator role by default.** Do not interview the user about whether orchestration should happen. Concretely:
 
-> "I see this is a fresh CodeCartographer-equipped project. Before I start the analysis, one one-time decision: would you like me to take on the **orchestrator role** for this project, or work session-by-session?
->
-> The orchestrator role means I'd hold cross-session context across the entire project — drafting prompts for implementation threads you'll spin up, curating two project-wide files (`CONVENTIONS.md` for patterns and `DECISIONS.md` for cross-cutting calls), and gating the strategic forks where you'd want to make a call.
->
-> How it works in practice: this thread becomes the orchestrator; you spin up fresh threads for each implementation session using the prompts I draft, run them, and paste the closeout report back here. I update `CONVENTIONS.md`/`DECISIONS.md` and prepare the next prompt. The framework's discipline compounds across sessions instead of being reinvented each time.
->
-> One operational tip: if your coding agent supports renaming and pinning threads, rename this thread to "Orchestrator" and pin it. Keeps it organized and quick to find when you switch back from implementation threads.
->
-> The alternative is session-by-session work with no cross-session context — the framework still works phase-by-phase, but `CONVENTIONS.md` stays empty and each session has to re-derive patterns from prior closeouts. Better for one-off audits; worse for long-running multi-module projects.
->
-> Which would you like?"
+1. Initialize `CONVENTIONS.md` from `templates/conventions-template.md` and `DECISIONS.md` from `templates/decisions-template.md` if they do not exist (skeletons only — they fill as patterns and decisions accumulate).
+2. Confirm the project name only if the repository directory name is wrong for the project; `project_name` otherwise resolves and persists automatically on the first completion.
+3. Note the run's execution strategy (inline or delegated) in the first phase handoff's `owner_notes`.
 
-If the user accepts the orchestrator role:
+Choose the execution strategy from the situation rather than asking: a single chat driving the MCP tools runs **inline**; a host with phase sub-agent dispatch (the Pi extension) runs **delegated**. Ask the user only when their instructions genuinely conflict with both defaults — and never under `/codecarto-next --auto`, which must not block on questions.
 
-1. Initialize `CONVENTIONS.md` from `templates/conventions-template.md` and `DECISIONS.md` from `templates/decisions-template.md` (skeletons only — populate as patterns and decisions accumulate).
-2. Confirm the project name. `project_name` defaults to the repository directory name and is persisted by the framework on the first completion; it only needs attention if the project should be called something else.
-3. **Do not run the architecture phase yourself.** The orchestrator never executes pipeline phases — that is the implementing-session role (see §Roles). Instead, **draft an implementing-session prompt for the architecture phase** that a fresh thread will execute. Hand the prompt to the user; they spin up a new thread with it; the implementing thread runs the phase, validates, writes a closeout, and reports back; you (the orchestrator) read the returned closeout and update `CONVENTIONS.md` / `DECISIONS.md` from it, then draft the next phase's prompt. The implementing session's own completion already applied its handoff to `workflow/status.yaml` — the orchestrator never edits that file. **Phase work always happens in fresh implementing-session threads, never in the orchestration thread.** A useful self-check: if you find yourself reading a `findings/<phase>/SKILL.md` or writing a `findings/<phase>/<primary-output>.md`, you have slipped into the implementing-session role — stop, draft the prompt, hand off.
+Fall back to session-by-session mode only if the user explicitly declines orchestration or the driving model cannot hold cross-phase context. Record the reason in the first handoff's `owner_notes`, and expect the costs named under §Roles.
 
-If the user declines:
-
-1. Note in `THREAD_LOG.md` that the project runs in degraded no-orchestrator mode.
-2. Proceed phase-by-phase as a standalone implementing session.
-3. `CONVENTIONS.md` and `DECISIONS.md` stay as templates; closeouts accumulate but cross-cutting promotion doesn't happen.
-
-If the user is ambivalent, default to recommending the orchestrator path for any project expected to span more than one phase or module — the framework's compounding-discipline benefits are real and the cost is just paste-and-react work for the user.
+One operational tip for delegated runs: if your coding agent supports renaming and pinning threads, rename the orchestrator thread to "Orchestrator" and pin it — quick to find when you switch back from phase threads.
 
 ## First Read For New Sessions
 
@@ -82,9 +79,9 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Workflow state (framework-owned) | `workflow/status.yaml` | Read to understand progress. Implementing sessions never edit it directly; completion applies a validated phase handoff under a lock. |
 | Scaffold version stamp (framework-owned) | `workflow/scaffold-version.yaml` | Written at release, copied by init. The framework compares it to its own version to warn about stale scaffolds. Never edit. |
 | Findings (read-write) | `findings/<phase>/<primary-output>.md`, secondary output files | Create and update during phases. |
-| Phase handoff (read-write) | `scratch/handoffs/<phase>.yaml` | Implementing sessions propose state changes and closeout content here. The framework validates and applies them. |
+| Phase handoff (read-write) | `scratch/handoffs/<phase>.yaml` | Phase executors propose state changes and closeout content here. The framework validates and applies them. |
 | Closeouts (framework-owned) | `closeouts/<date>-<phase-or-module>.md`, `THREAD_LOG.md` | Completion writes or updates one canonical closeout and one idempotent index entry. |
-| Conventions (orchestrator-maintained) | `CONVENTIONS.md` | Cross-cutting patterns promoted to project-wide invariants. Implementing sessions propose; the orchestrator writes. |
+| Conventions (orchestrator-maintained) | `CONVENTIONS.md` | Cross-cutting patterns promoted to project-wide invariants. Phase executors propose; the orchestrator promotes at the phase boundary — in inline runs, the same chat changing hats. |
 | Decisions (orchestrator-maintained, append-only) | `DECISIONS.md` | Numbered log of decisions that diverge from spec, prompt, or obvious-default. Appended at session close. |
 | Backlog (read-write) | `BACKLOG.md` | Deferred items with rationale. |
 | Scratch (read-write) | `scratch/*` | Working notes; `scratch/checkpoints/<phase>.md` is the durable in-phase continuation checkpoint until the phase validates. |
@@ -156,10 +153,10 @@ If a primary and a secondary output describe the same topic (e.g., the architect
 
 Two cross-cutting files compound across sessions and live at the `.codecarto/` top level:
 
-- **`CONVENTIONS.md`** — cross-cutting patterns that have been promoted to project-wide invariants (e.g., a shared discriminated-union return shape, a tripwire-naming vocabulary, a verbatim-spec-quote discipline). Implementing sessions propose additions in their closeout; the orchestrator promotes them. New conventions land when a third independent session reaches for the same pattern, or when a spec/feedback corpus identifies a project-wide invariant.
+- **`CONVENTIONS.md`** — cross-cutting patterns that have been promoted to project-wide invariants (e.g., a shared discriminated-union return shape, a tripwire-naming vocabulary, a verbatim-spec-quote discipline). Phase executors propose additions in their closeout; the orchestrator promotes them at the phase boundary. New conventions land when a third independent phase reaches for the same pattern, or when a spec/feedback corpus identifies a project-wide invariant.
 - **`DECISIONS.md`** — append-only numbered log of cross-cutting decisions that diverge from spec, prompt, or obvious-default. Each entry: `D<NNN> | <one-liner> | <source-session> | <rationale-pointer>`. Categories partition the namespace (type system, toolchain, module-internal patterns, lifted primitives, etc.).
 
-Both files are skeletons in the framework templates (`templates/conventions-template.md`, `templates/decisions-template.md`) and become project-specific artifacts when a session writes to them. They are *orchestrator-maintained*, not implementer-edited — implementing sessions propose, the orchestrator promotes.
+Both files are skeletons in the framework templates (`templates/conventions-template.md`, `templates/decisions-template.md`) and become project-specific artifacts as entries accumulate. Promotion is an orchestrator duty: phase executors propose, the orchestrator promotes — in an inline run the same chat does both, at the phase boundary rather than mid-phase.
 
 ## Context Budget
 
@@ -242,7 +239,7 @@ When a session finishes durable work:
 3. Record 2-3 key observations in the handoff's `owner_notes` (e.g., row counts, notable decisions, scope of analysis). Do not provide a canonical timestamp; the host clock owns timestamps.
 4. Run `/codecarto-complete` (or `codecarto_complete`). The framework atomically updates `workflow/status.yaml`, writes or updates one canonical closeout, and appends one idempotent `THREAD_LOG.md` entry. Do not edit those files directly.
 5. Store the durable output in the declared `findings/` path.
-6. If the session made cross-cutting decisions or discovered project-wide invariants, propose additions to `CONVENTIONS.md` (in the closeout's "Proposed Conventions" section) and `DECISIONS.md` (numbered entries in the closeout's "Decisions Beyond Prompt" section). The orchestrator promotes these to the canonical files.
+6. If the session made cross-cutting decisions or discovered project-wide invariants, propose additions to `CONVENTIONS.md` (in the closeout's "Proposed Conventions" section) and `DECISIONS.md` (numbered entries in the closeout's "Decisions Beyond Prompt" section). Promoting them to the canonical files is the orchestrator duty at the next phase boundary — in an inline run, do it yourself before starting the next phase.
 
 ### Strategic Alignment Hook (before synthesis)
 
@@ -270,7 +267,7 @@ These rules combine framework enforcement with explicit agent discipline:
 - The primary outputs are listed in the deliverables table above.
 - Secondary outputs are created only when needed, using `mode: append`.
 - Completion owns `closeouts/<YYYY-MM-DD>-<phase-or-module>.md` and `THREAD_LOG.md`; implementing sessions supply closeout content through their phase handoff.
-- Cross-cutting patterns go in `CONVENTIONS.md`; numbered cross-cutting decisions go in `DECISIONS.md`. Both are orchestrator-maintained — implementing sessions propose in their closeout, the orchestrator promotes.
+- Cross-cutting patterns go in `CONVENTIONS.md`; numbered cross-cutting decisions go in `DECISIONS.md`. Both are orchestrator-maintained — phase executors propose in their closeout, the orchestrator promotes at the phase boundary.
 - Do not store durable findings only in `THREAD_LOG.md`. The log is an index, not the primary artifact store.
 
 ## Folder Layout
