@@ -172,3 +172,30 @@ test("loadUsage drops entries with non-numeric counters or malformed tokens", as
 		await cleanup();
 	}
 });
+
+test("isUsageRun accepts recorded_by discriminators and rejects unknown values", async () => {
+	const { stringifySimpleYaml } = await import(pathToFileURL(`${REPO_ROOT}/core/yaml.ts`).href);
+	const base = {
+		timestamp: "2026-08-17T00:00:00.000Z",
+		phase: "architecture",
+		status: "completed",
+		turn_count: 0,
+		tool_uses: 0,
+		duration_ms: 0,
+		tokens: { input: 0, output: 0, cache_write: 0 },
+	};
+	const dir = await mkdtemp(join(tmpdir(), "cc-usage-recordedby-"));
+	await mkdir(join(dir, "workflow"), { recursive: true });
+	const path = join(dir, USAGE_RELATIVE_PATH);
+	const runs = [
+		base,
+		{ ...base, recorded_by: "pi-runner" },
+		{ ...base, recorded_by: "mcp-complete" },
+		{ ...base, recorded_by: "somewhere-else" },
+	];
+	await writeFile(path, stringifySimpleYaml({ version: 1, runs }), "utf8");
+	const loaded = await loadUsage(dir);
+	assert.equal(loaded.runs.length, 3, "unknown recorded_by values are dropped; absent and known ones load");
+	assert.deepEqual(loaded.runs.map((run) => run.recorded_by), [undefined, "pi-runner", "mcp-complete"]);
+	await rm(dir, { recursive: true, force: true });
+});

@@ -518,6 +518,7 @@ async function recordUsage(
 				output: activity.lifetimeUsage.output,
 				cache_write: activity.lifetimeUsage.cacheWrite,
 			},
+			recorded_by: "pi-runner",
 			compactions: activity.compactions,
 			...(sessionFile ? { session_file: sessionFile } : {}),
 		});
