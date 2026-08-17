@@ -86,7 +86,7 @@ Per the standard closeout ritual:
 
 - Append a one-line entry to `THREAD_LOG.md` pointing at the closeout file.
 - Write `closeouts/<YYYY-MM-DD>-spec-deltas.md` using `templates/closeout-template.md`.
-- If a delta closed an `open_questions` or `carry_forward` entry, record that in the closeout. Do not edit `status.yaml` — phase state is framework-owned, and post-pipeline work has no completion step that applies handoffs, so a hand-edit here is unreviewed and can be overwritten by a later phase completion.
+- If a delta resolved an `open_questions` entry (or finished a `post_pipeline` backlog item), apply it: write `scratch/amendments/<slug>.yaml` (see `templates/amendment.yaml`) listing the closures, then run `codecarto_amend`. It updates `status.yaml` under the completion lock and writes the amendment closeout — never hand-edit `status.yaml`, which is framework-owned. Without the MCP server, record the intended amendment file in the closeout for the next MCP-capable session to apply.
 - Append numbered entries to `DECISIONS.md` for any decisions made during triage that weren't already in the deltas (e.g., "rejected Δ7 because the spec already covered the case at §X").
 
 ## What to avoid

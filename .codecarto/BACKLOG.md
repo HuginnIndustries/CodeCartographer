@@ -19,13 +19,9 @@ of the change would look like.
 
 ---
 
-## B2. Amendments mechanic (`findings/amendments/` directory)
+## B2. Amendments mechanic — SHIPPED (v0.15.0, issue #99)
 
-**Raised by:** `Run three Thaumaturge implementation spikes.txt`, `Agent on protocols phase - protocols.txt` (2 agents — under threshold but persistent)
-
-**Why deferred:** "Phase outputs can't correct prior phases" is a real gap, but `carry_forward` (introduced in this pass) already covers the most common case (forward-routing a deferred item). True back-amendment (a later phase says "the architecture map is wrong about X") needs more design — should it edit the prior output? Append a "superseded by" marker? Live in a parallel directory? The shape isn't obvious enough to land safely.
-
-**Smallest viable form:** A pre-reimpl-spec "reconciliation" pass that surfaces contradictions across primary outputs. Less ambitious than a full amendments directory; uses existing artifacts.
+Landed as `codecarto_amend` over `scratch/amendments/<slug>.yaml` (see `templates/amendment.yaml`): post-pipeline open-question closures and post_pipeline backlog retirement, applied to `workflow/status.yaml` under the completion lock with an amendment closeout and THREAD_LOG entry. The narrower back-amendment question ("a later phase says a prior output is wrong") remains open — a real run handled it with a correction section in the later report plus a delta-application pass, which worked; promote that pattern only if it recurs.
 
 ---
 

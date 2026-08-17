@@ -6,6 +6,7 @@ export * from "./types.ts";
 export * from "./utils.ts";
 export * from "./yaml.ts";
 export * from "./status.ts";
+export * from "./amendment.ts";
 export * from "./pipeline.ts";
 export * from "./prompts.ts";
 export * from "./workspace.ts";

@@ -1,0 +1,17 @@
+# Post-pipeline amendment schema v1. Copy to scratch/amendments/<slug>.yaml,
+# then run codecarto_amend (MCP) with the slug. Refused while the pipeline is
+# incomplete — mid-pipeline resolutions belong in the phase handoff
+# (open_question_closures / carry_forward_closures).
+schema_version: 1
+# Open-question ids resolved on evidence after the pipeline completed;
+# removed from every phase in workflow/status.yaml.
+open_question_closures: []
+# Finished post-pipeline backlog item ids; removed from status.yaml's
+# post_pipeline list (the amendment closeout records the closure).
+post_pipeline_closures: []
+# Durable observations worth keeping with the amendment record.
+notes: []
+closeout_summary: ""
+# Optional full closeout Markdown; generated from the applied closures when omitted.
+closeout_content: |-
+  # Amendment — <slug>
