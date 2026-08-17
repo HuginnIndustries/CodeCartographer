@@ -19,6 +19,44 @@ export type CompletionResult = {
 	orchestratorCheckpoint?: string;
 };
 
+/**
+ * The Markdown a reader sees: content inside `<!-- -->` blocks removed by a
+ * line scanner. This is read-only scan input for numbering and dedupe — never
+ * written back or rendered — so it is deliberately not an HTML sanitizer; an
+ * unterminated comment drops the remainder of the file from the scan.
+ */
+function visibleMarkdown(content: string): string {
+	const out: string[] = [];
+	let inComment = false;
+	for (const line of content.split(/\r?\n/)) {
+		let rest = line;
+		let visible = "";
+		while (rest.length > 0) {
+			if (inComment) {
+				const end = rest.indexOf("-->");
+				if (end === -1) {
+					rest = "";
+					break;
+				}
+				rest = rest.slice(end + 3);
+				inComment = false;
+			} else {
+				const start = rest.indexOf("<!--");
+				if (start === -1) {
+					visible += rest;
+					rest = "";
+					break;
+				}
+				visible += rest.slice(0, start);
+				rest = rest.slice(start + 4);
+				inComment = true;
+			}
+		}
+		out.push(visible);
+	}
+	return out.join("\n");
+}
+
 /** Section heading completion appends mechanized decision rows under. */
 export const DECISIONS_COMPLETION_LOG_HEADING = "## Completion log";
 
@@ -73,7 +111,7 @@ async function appendDecisionLog(
 	// The template ships worked examples inside HTML comments (a commented
 	// `D001 | ...` row); numbering and dedupe must read only visible content or
 	// a fresh file starts at D002 and a decision matching example text is lost.
-	const visible = content.replace(/<!--[\s\S]*?-->/g, "");
+	const visible = visibleMarkdown(content);
 	const fresh = decisions.filter((decision) => decision.trim() && !visible.includes(decision.trim()));
 	if (fresh.length === 0) return 0;
 
@@ -143,7 +181,7 @@ async function stageProposedConventions(
 	}
 	// Same visible-content rule as the decision log: template comments must not
 	// swallow a genuine proposal through the dedupe check.
-	const visible = content.replace(/<!--[\s\S]*?-->/g, "");
+	const visible = visibleMarkdown(content);
 	const fresh = proposals.filter((proposal) => !(visible.includes(`**${proposal.name}**`) && visible.includes(proposal.rule)));
 	if (fresh.length > 0) {
 		const bullets = fresh.map((proposal) => {
