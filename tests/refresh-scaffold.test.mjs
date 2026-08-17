@@ -51,7 +51,7 @@ test("refresh restores framework-owned files byte-identically to the packaged te
 	const packagedHandoff = await readFile(join(core.packagedWorkspaceDir, "templates", "phase-handoff.yaml"), "utf8");
 	assert.equal(await readFile(join(CODECARTO, "templates", "phase-handoff.yaml"), "utf8"), packagedHandoff, "deleted template restored");
 	const marker = await readFile(join(CODECARTO, "workflow", "scaffold-version.yaml"), "utf8");
-	assert.match(marker, new RegExp(core.PACKAGE_VERSION.replace(/\./g, "\\.")), "marker restored at the running version");
+	assert.ok(marker.includes(core.PACKAGE_VERSION), "marker restored at the running version");
 
 	// Untouched surfaces.
 	assert.equal(await readFile(join(CODECARTO, "workflow", "status.yaml"), "utf8"), statusBefore, "project state untouched");
