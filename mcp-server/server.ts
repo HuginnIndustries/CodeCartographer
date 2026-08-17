@@ -76,6 +76,7 @@ import {
 	writeLibraryConfig,
 } from "../core/index.ts";
 import { applyAmendment } from "../core/amendment.ts";
+import { appendUsageRun } from "../core/usage.ts";
 import { initLibrary } from "../core/library.ts";
 import { loadUserConfig, resolveUserConfigPath } from "../core/orchestrator-config.ts";
 import { writeDashboard } from "../extensions/codecarto/dashboard-writer.ts";
@@ -345,6 +346,29 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 	const { updatedState, closeoutNotice, orchestratorCheckpoint } = await completeValidatedPhase(cwd, validation, "codecarto_complete").catch((error) => {
 		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
+
+	// Record the run in the usage log (issue #100). MCP hosts execute phases in
+	// their own context, so tokens and activity are unknowable here — this is a
+	// completion receipt, marked recorded_by so totals can tell it apart from
+	// the Pi runner's token-bearing entries. Recording lives in this handler,
+	// not core completion, because Pi-driven runs already record with real
+	// telemetry and must not double-count.
+	try {
+		await appendUsageRun(updatedState.workspaceDir, {
+			timestamp: new Date().toISOString(),
+			phase: validation.phaseId,
+			status: "completed",
+			turn_count: 0,
+			tool_uses: 0,
+			duration_ms: 0,
+			tokens: { input: 0, output: 0, cache_write: 0 },
+			recorded_by: "mcp-complete",
+		});
+	} catch {
+		// Usage is best-effort telemetry: the phase completed and canonical
+		// state is already written, so a usage-log write failure must not fail
+		// the completion result. Nothing else can act on the error here.
+	}
 
 	const lines = [
 		`Marked ${validation.phaseId} complete (validation: ${validation.overall}).`,
@@ -816,18 +840,22 @@ export async function handleUsage(args: { cwd: string }) {
 	}
 	const totals = computeTotals(usage);
 	const perPhase = computePerPhaseTotals(usage);
+	const receiptRuns = usage.runs.filter((run) => run.recorded_by === "mcp-complete").length;
 	const lines: string[] = [
 		`Total runs: ${totals.runs}`,
 		`Total tokens: ${totals.tokens.input} in / ${totals.tokens.output} out / ${totals.tokens.cache_write} cache-write`,
 		`Total duration: ${totals.duration_ms}ms / ${totals.tool_uses} tool uses`,
-		"",
-		"Per-phase totals:",
 	];
+	if (receiptRuns > 0) {
+		lines.push(`Note: ${receiptRuns} run(s) recorded via codecarto_complete carry no token or activity data (MCP hosts execute phases in their own context) — zeros above are unknowns, not free runs.`);
+	}
+	lines.push("", "Per-phase totals:");
 	for (const [phaseId, t] of perPhase) {
 		lines.push(`  ${phaseId}: ${t.runs} run(s), ${t.tokens.input + t.tokens.output} tokens, ${t.tool_uses} tool uses, ${t.duration_ms}ms`);
 	}
 	return textResult(lines.join("\n"), {
 		runs: totals.runs,
+		receiptRuns,
 		tokens: totals.tokens,
 		toolUses: totals.tool_uses,
 		durationMs: totals.duration_ms,

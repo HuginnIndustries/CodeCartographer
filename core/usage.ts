@@ -46,6 +46,13 @@ export interface UsageRun {
 	tokens: UsageTokens;
 	session_file?: string;
 	compactions?: CompactionTelemetry;
+	/**
+	 * Which surface recorded the run. `pi-runner` entries carry real token and
+	 * activity telemetry; `mcp-complete` entries are completion receipts with
+	 * zeroed counters, because MCP hosts execute phases in their own context
+	 * and report no usage (issue #100). Absent on entries from older versions.
+	 */
+	recorded_by?: "pi-runner" | "mcp-complete";
 }
 
 export interface UsageFile {
@@ -154,7 +161,8 @@ function isUsageRun(x: unknown): x is UsageRun {
 		isFiniteNumber(run.duration_ms) &&
 		isUsageTokens(run.tokens) &&
 		(run.session_file === undefined || typeof run.session_file === "string") &&
-		(run.compactions === undefined || isCompactionTelemetry(run.compactions))
+		(run.compactions === undefined || isCompactionTelemetry(run.compactions)) &&
+		(run.recorded_by === undefined || run.recorded_by === "pi-runner" || run.recorded_by === "mcp-complete")
 	);
 }
 
