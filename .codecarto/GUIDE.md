@@ -84,7 +84,7 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Conventions (orchestrator-maintained) | `CONVENTIONS.md` | Cross-cutting patterns promoted to project-wide invariants. Phase executors propose; the orchestrator promotes at the phase boundary — in inline runs, the same chat changing hats. |
 | Decisions (orchestrator-maintained, append-only) | `DECISIONS.md` | Numbered log of decisions that diverge from spec, prompt, or obvious-default. Completion appends each handoff's `decisions` under `## Completion log`; the orchestrator may re-file entries into categories. |
 | Backlog (read-write) | `BACKLOG.md` | Deferred items with rationale. |
-| Scratch (read-write) | `scratch/*` | Working notes; `scratch/checkpoints/<phase>.md` is the durable in-phase continuation checkpoint until the phase validates. |
+| Scratch (read-write) | `scratch/*` | Working notes; `scratch/checkpoints/<phase>.md` is the durable in-phase continuation checkpoint until the phase validates; `scratch/spikes/<spike-id>/<scenario>.md` holds spike reports (`templates/spike-report.md`); `scratch/amendments/<slug>.yaml` holds post-pipeline amendments (`templates/amendment.yaml`). |
 
 If you are uncertain whether a file should be modified, treat it as read-only.
 

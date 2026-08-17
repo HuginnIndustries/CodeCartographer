@@ -9,7 +9,7 @@ Use this skill when:
 
 - The pipeline has produced a complete `findings/reimplementation-spec/reimplementation-spec.md` (the spec is `complete` in status.yaml).
 - A separate source has surfaced changes the spec should absorb. Common sources:
-  - **Spike reports** (`spikes/<spike-id>/<scenario>.md` plus a `CONSOLIDATED-DELTA.md`).
+  - **Spike reports** (`scratch/spikes/<spike-id>/<scenario>.md`, written from `templates/spike-report.md`, plus an optional `CONSOLIDATED-DELTA.md` when several scenarios merge).
   - **Defect-scan re-runs** that find corrections to spec text.
   - **Implementation discoveries** that contradict spec assumptions (e.g., a wire format the spec misread).
   - **Maintainer rulings** that close prior open questions.

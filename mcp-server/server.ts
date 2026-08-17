@@ -327,6 +327,7 @@ export async function handleValidate(args: { cwd: string; phase?: string }) {
 		rows: validation.rows,
 		gaps: validation.gaps,
 		errors: validation.errors,
+		secondaryOutputs: validation.secondaryOutputs ?? [],
 	});
 }
 

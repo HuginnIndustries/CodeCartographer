@@ -82,6 +82,17 @@ export async function validatePhaseOutput(state: WorkspaceState, phaseId?: strin
 		throw new Error(`Phase ${phase.id} has no primary_output in the active pipeline.`);
 	}
 
+	// Declared secondary outputs with existence (issue #101): non-gating
+	// visibility, because secondary outputs are created only when needed — but
+	// a declared output that ends the phase absent AND unaccounted-for is how
+	// a real run silently dropped one. The summary surfaces it; the session
+	// either writes it or routes the gap.
+	const secondaryOutputs: Array<{ path: string; exists: boolean }> = [];
+	for (const output of phase.secondary_outputs ?? []) {
+		if (!output.path) continue;
+		secondaryOutputs.push({ path: output.path, exists: await pathExists(join(state.workspaceDir, output.path)) });
+	}
+
 	const outputPath = join(state.workspaceDir, phase.primary_output);
 	if (!(await pathExists(outputPath))) {
 		return {
@@ -94,6 +105,7 @@ export async function validatePhaseOutput(state: WorkspaceState, phaseId?: strin
 			rows: [],
 			gaps: [],
 			errors: [`Missing primary output: .codecarto/${phase.primary_output}`],
+			secondaryOutputs,
 		};
 	}
 
@@ -110,6 +122,7 @@ export async function validatePhaseOutput(state: WorkspaceState, phaseId?: strin
 			rows: [],
 			gaps: [],
 			errors: ["Primary output exists but is missing a ## Validation block."],
+			secondaryOutputs,
 		};
 	}
 
@@ -168,6 +181,7 @@ export async function validatePhaseOutput(state: WorkspaceState, phaseId?: strin
 		rows,
 		gaps,
 		errors,
+		secondaryOutputs,
 	};
 }
 
@@ -183,6 +197,10 @@ export function buildValidationSummary(validation: ValidationResult): string[] {
 	}
 	if (validation.errors.length > 0) {
 		lines.push(...validation.errors.slice(0, 3));
+	}
+	const missingSecondary = (validation.secondaryOutputs ?? []).filter((output) => !output.exists);
+	if (missingSecondary.length > 0) {
+		lines.push(`NOTE: ${missingSecondary.length} declared secondary output(s) not written: ${missingSecondary.map((output) => `.codecarto/${output.path}`).join(", ")} — write each, or account for it in Coverage and limits / a routed handoff entry. Non-gating.`);
 	}
 	return lines;
 }

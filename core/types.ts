@@ -103,6 +103,12 @@ export type ValidationResult = {
 	rows: Array<{ criterion: string; result: string; evidence: string }>;
 	gaps: string[];
 	errors: string[];
+	/**
+	 * The phase's declared secondary outputs with existence at validation time.
+	 * Non-gating visibility: secondary outputs are created only when needed,
+	 * but one that ends the phase absent and unaccounted-for is a silent drop.
+	 */
+	secondaryOutputs?: Array<{ path: string; exists: boolean }>;
 };
 
 /**
