@@ -12,6 +12,13 @@ open_question_closures: []
 # or opinionated reruns. Every entry requires a stable id.
 post_pipeline: []
 decisions: []
+# Conventions proposed for promotion. Completion stages each entry in
+# CONVENTIONS.md under "## Pending proposals"; the orchestrator promotes or
+# removes it at the phase boundary. Entries require non-empty name and rule.
+#   - name: <short pattern name>
+#     rule: <the rule, one or two sentences>
+#     evidence: <optional: where the pattern showed up>
+proposed_conventions: []
 closeout_summary: ""
 # Optional full closeout Markdown. YAML literal blocks are supported.
 closeout_content: |-

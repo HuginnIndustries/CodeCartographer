@@ -11,6 +11,7 @@ import type {
 	PhaseHandoff,
 	PipelineFile,
 	PipelinePhase,
+	ProposedConventionEntry,
 	StatusFile,
 	StatusPhase,
 } from "./types.ts";
@@ -180,7 +181,7 @@ export function parseHandoff(value: unknown): PhaseHandoff {
 	if (schemaVersion > 1) {
 		throw new Error(`Invalid handoff: unsupported schema_version ${schemaVersion}. Supported: 1.`);
 	}
-	for (const field of ["owner_notes", "open_questions", "carry_forward", "carry_forward_closures", "open_question_closures", "post_pipeline", "decisions"] as const) {
+	for (const field of ["owner_notes", "open_questions", "carry_forward", "carry_forward_closures", "open_question_closures", "post_pipeline", "decisions", "proposed_conventions"] as const) {
 		if (raw[field] !== undefined && !Array.isArray(raw[field])) {
 			throw new Error(`Invalid handoff: ${field} must be an array`);
 		}
@@ -199,10 +200,36 @@ export function parseHandoff(value: unknown): PhaseHandoff {
 		open_question_closures: ensureArray(raw.open_question_closures),
 		post_pipeline: ensurePostPipelineArray(raw.post_pipeline),
 		decisions: ensureArray(raw.decisions),
+		proposed_conventions: ensureProposedConventionArray(raw.proposed_conventions),
 		closeout_content: typeof raw.closeout_content === "string" ? raw.closeout_content : "",
 		closeout_summary: typeof raw.closeout_summary === "string" ? raw.closeout_summary : "",
 		schema_version: schemaVersion,
 	};
+}
+
+/**
+ * Parse the handoff's `proposed_conventions` collection. A present entry must
+ * carry non-empty `name` and `rule` strings — a proposal the framework cannot
+ * stage legibly fails completion loudly instead of being staged as a stub
+ * (same posture as post_pipeline's required id). Omitted defaults to empty.
+ */
+export function ensureProposedConventionArray(value: unknown): ProposedConventionEntry[] {
+	if (!Array.isArray(value)) return [];
+	const result: ProposedConventionEntry[] = [];
+	for (const item of value) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) {
+			throw new Error("Invalid handoff: proposed_conventions entries must be objects with name and rule");
+		}
+		const raw = item as Record<string, unknown>;
+		const name = typeof raw.name === "string" ? raw.name.trim() : "";
+		const rule = typeof raw.rule === "string" ? raw.rule.trim() : "";
+		if (!name || !rule) {
+			throw new Error("Invalid handoff: proposed_conventions entries require non-empty name and rule");
+		}
+		const evidence = typeof raw.evidence === "string" && raw.evidence.trim() ? raw.evidence.trim() : undefined;
+		result.push({ name, rule, ...(evidence !== undefined && { evidence }) });
+	}
+	return result;
 }
 
 export async function loadHandoffFile(phaseId: string, workspaceDir: string): Promise<PhaseHandoff | null> {

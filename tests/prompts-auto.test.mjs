@@ -67,11 +67,21 @@ test("`auto: true` swaps the hook to the no-user-prompt variant", async () => {
 	assert.doesNotMatch(prompt, /Confirm with the user/);
 });
 
-test("`auto: true` is a no-op on non-synthesis phases (architecture has no hook either way)", async () => {
+test("`auto: true` on non-synthesis phases changes only the orchestrator-duties header", async () => {
+	// Since issue #98 the phase prompt carries an "Orchestrator duties" block
+	// whose header differs under auto (perform-without-asking vs perform-before-
+	// executing). Auto must still not introduce a Strategic Alignment Hook here,
+	// and every other line must be identical.
 	const interactive = await buildPhasePrompt(state, architecturePhase, false);
 	const auto = await buildPhasePrompt(state, architecturePhase, false, { auto: true });
-	assert.equal(auto, interactive, "phases without a Strategic Alignment Hook must be unchanged by auto:true");
 	assert.doesNotMatch(auto, /Strategic Alignment Hook/);
+	assert.doesNotMatch(interactive, /Strategic Alignment Hook/);
+	const stripDutiesHeader = (prompt) => prompt.split("\n").filter((line) => !line.startsWith("Orchestrator duties (")).join("\n");
+	assert.equal(stripDutiesHeader(auto), stripDutiesHeader(interactive), "auto:true may change only the duties header on non-synthesis phases");
+	if (auto !== interactive) {
+		assert.match(auto, /Orchestrator duties \(auto run — perform them without asking the user/);
+		assert.match(interactive, /Orchestrator duties \(perform BEFORE executing this phase/);
+	}
 });
 
 test("`auto: true` composes with `forced: true` (manual /codecarto-phase under an auto-style driver)", async () => {

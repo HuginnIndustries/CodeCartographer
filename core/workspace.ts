@@ -4,7 +4,7 @@
 // atomic status-update primitive used by /codecarto-complete.
 
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock, applyHandoff, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
@@ -106,6 +106,33 @@ export async function getWorkspaceState(cwd: string): Promise<WorkspaceState | n
 		status,
 		...(scaffoldVersion !== undefined && { scaffoldVersion }),
 	};
+}
+
+/** The orchestrator-maintained files init seeds and completion appends to. */
+export const ORCHESTRATOR_FILES = [
+	{ file: "CONVENTIONS.md", template: "conventions-template.md" },
+	{ file: "DECISIONS.md", template: "decisions-template.md" },
+] as const;
+
+/**
+ * Seed the orchestrator-maintained files from the workspace's templates
+ * (issue #98): orchestration is on by default, so a fresh workspace starts
+ * with both skeletons instead of gating them behind a role ritual. Idempotent
+ * — existing files are never touched, and a scaffold without the templates
+ * (pre-template era) is left for completion's minimal-header fallback.
+ * @returns the file names created, for the caller's report.
+ */
+export async function seedOrchestratorFiles(workspaceDir: string): Promise<string[]> {
+	const created: string[] = [];
+	for (const { file, template } of ORCHESTRATOR_FILES) {
+		const target = join(workspaceDir, file);
+		if (await pathExists(target)) continue;
+		const templatePath = join(workspaceDir, "templates", template);
+		if (!(await pathExists(templatePath))) continue;
+		await copyFile(templatePath, target);
+		created.push(file);
+	}
+	return created;
 }
 
 // Numeric x.y.z comparison; null when either side is not a plain dotted triple.

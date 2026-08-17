@@ -19,7 +19,8 @@ carry_forward: []               # deferred to a specific later phase in this pip
 carry_forward_closures: []      # ids of carry_forward entries this phase resolved
 open_question_closures: []      # ids of open questions this phase resolved, removed everywhere
 post_pipeline: []               # work after the pipeline; every entry needs a stable id
-decisions: []                   # choices made beyond what the prompt specified
+decisions: []                   # choices made beyond what the prompt specified; completion appends them to DECISIONS.md
+proposed_conventions: []        # patterns proposed for promotion; completion stages them in CONVENTIONS.md
 closeout_summary: ""            # one clause, ~20 words; becomes the THREAD_LOG entry
 closeout_content: |-            # optional full closeout markdown
   # Closeout — architecture
@@ -51,6 +52,16 @@ Omitted arrays default to empty. A malformed collection fails completion without
 ```
 
 Allowed `kind` values: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`.
+
+`proposed_conventions` entries (optional; omitted defaults to empty):
+
+```yaml
+- name: evidence-marker-citations
+  rule: Cite every load-bearing claim with an evidence marker naming its source file.
+  evidence: Third phase in a row independently adopted the [fact/inference] vocabulary.
+```
+
+`name` and `rule` are required and non-empty — a malformed entry fails completion. Completion stages each entry in `CONVENTIONS.md` under `## Pending proposals` (mechanical, deduplicated on re-run); promoting a staged proposal into a numbered convention stays an orchestrator judgment at the phase boundary. `decisions` are simpler: plain strings that completion both renders into the closeout's "Decisions Beyond Prompt" section and appends to `DECISIONS.md` as numbered `D<NNN>` rows under `## Completion log`.
 
 ## Open question or carry-forward?
 

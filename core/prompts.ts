@@ -11,8 +11,68 @@ import type {
 	WorkspaceState,
 } from "./types.ts";
 import { pathExists } from "./utils.ts";
+import { countPendingProposals } from "./completion.ts";
 import { describeScaffoldStaleness } from "./workspace.ts";
 import { runPhasePreflight, type PhasePreflightResult } from "./synthesis.ts";
+
+/** Open-question kinds whose label the orchestrator re-tests at each phase boundary. */
+const RETRIAGE_KINDS = new Set(["needs-maintainer-decision", "needs-runtime-test"]);
+
+/** Cap on individually listed re-triage questions; the rest collapse to a count. */
+const RETRIAGE_LIST_LIMIT = 10;
+
+/**
+ * Build the "Orchestrator duties" prompt block (issue #98): the cross-phase
+ * intelligence surfaced mechanically, so an inline run cannot skip it
+ * silently. Returns an empty array when there is nothing to surface (fresh
+ * workspace, no proposals, no questions, no declared secondary outputs).
+ */
+async function buildOrchestratorDuties(
+	state: WorkspaceState,
+	phase: PipelinePhase,
+	auto: boolean,
+): Promise<string[]> {
+	const lines: string[] = [];
+
+	const pendingProposals = await countPendingProposals(state.workspaceDir);
+	if (pendingProposals > 0) {
+		lines.push(`- CONVENTIONS.md has ${pendingProposals} pending proposal(s) under "## Pending proposals" — promote each into a numbered convention or remove it with a note.`);
+	}
+
+	const retriage: string[] = [];
+	for (const [phaseId, phaseState] of Object.entries(state.status.phases)) {
+		for (const entry of phaseState.open_questions ?? []) {
+			if (!entry.kind || !RETRIAGE_KINDS.has(entry.kind)) continue;
+			const label = [entry.id, `(${entry.kind}, from ${phaseId})`, entry.description ?? ""].filter(Boolean).join(" ").trim();
+			retriage.push(label);
+		}
+	}
+	if (retriage.length > 0) {
+		lines.push("- Re-triage these open questions' kind labels — a label is a claim needing its own evidence; re-test whether each is now answerable by reading before accepting it:");
+		for (const label of retriage.slice(0, RETRIAGE_LIST_LIMIT)) lines.push(`  - ${label}`);
+		if (retriage.length > RETRIAGE_LIST_LIMIT) lines.push(`  - (+${retriage.length - RETRIAGE_LIST_LIMIT} more in workflow/status.yaml)`);
+	}
+
+	const secondaryOutputs = phase.secondary_outputs ?? [];
+	if (secondaryOutputs.length > 0) {
+		lines.push("- This phase declares secondary outputs. Each should end the phase either written or explicitly accounted for (in Coverage and limits, or a routed handoff entry) — never dropped silently:");
+		for (const output of secondaryOutputs) {
+			const exists = await pathExists(join(state.workspaceDir, output.path));
+			lines.push(`  - .codecarto/${output.path} (${exists ? "exists" : "missing"})`);
+		}
+	}
+
+	const anyCompleted = Object.values(state.status.phases).some((phaseState) => phaseState.status === "complete");
+	if (anyCompleted) {
+		lines.push("- Contradiction sweep: compare this phase's required reads against completed phases' owner_notes; a measured fact that contradicts a summarized claim is a gap to route through the handoff, not a nuance to smooth over.");
+	}
+
+	if (lines.length === 0) return [];
+	const header = auto
+		? "Orchestrator duties (auto run — perform them without asking the user; defer judgment calls into the handoff's owner_notes or open_questions):"
+		: "Orchestrator duties (perform BEFORE executing this phase; see GUIDE.md §Roles):";
+	return ["", header, ...lines];
+}
 
 export function describeEntry(entry: OpenQuestionEntry | CarryForwardEntry): string {
 	const parts: string[] = [];
@@ -129,6 +189,8 @@ export async function buildPhasePrompt(
 		}
 		lines.push("Close each item by editing your phase output to address it, then record the closure in your phase handoff so the framework can remove the carry_forward entry atomically.");
 	}
+
+	lines.push(...await buildOrchestratorDuties(state, phase, options.auto === true));
 
 	if (preflight.libraryPath) {
 		lines.push("", "Synthesis library context:");

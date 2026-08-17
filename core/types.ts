@@ -105,6 +105,20 @@ export type ValidationResult = {
 	errors: string[];
 };
 
+/**
+ * One convention a phase proposes for promotion. Completion stages these in
+ * CONVENTIONS.md under "## Pending proposals"; promoting a proposal into the
+ * canonical sections stays an orchestrator judgment at the phase boundary.
+ */
+export type ProposedConventionEntry = {
+	/** Short name for the pattern (becomes the staged bullet's label). */
+	name: string;
+	/** The rule itself, one or two sentences. */
+	rule: string;
+	/** Optional: where the pattern showed up (file, phase, incident). */
+	evidence?: string;
+};
+
 export type PhaseHandoff = {
 	phase_id: string;
 	/**
@@ -120,6 +134,8 @@ export type PhaseHandoff = {
 	open_question_closures: string[]; // ids to resolve and remove from all phases
 	post_pipeline: PostPipelineEntry[];
 	decisions: string[];
+	/** Conventions proposed for promotion; completion stages them in CONVENTIONS.md. Omitted defaults to empty. */
+	proposed_conventions: ProposedConventionEntry[];
 	closeout_content: string;
 	closeout_summary: string;
 	schema_version?: number;

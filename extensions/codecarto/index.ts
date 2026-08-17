@@ -45,6 +45,7 @@ import {
 	resolvePhase,
 	resolvePipelineChoice,
 	runPhasePreflight,
+	seedOrchestratorFiles,
 	type StatusFile,
 	stringifySimpleYaml,
 	switchPipeline,
@@ -349,6 +350,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const normalizedStatus = createEmptyStatus(basename(ctx.cwd), selectedPipelinePath, pipeline);
 			normalizedStatus.last_updated = new Date().toISOString();
 			await writeFile(rawStatusPath, `${stringifySimpleYaml(normalizedStatus)}\n`, "utf8");
+
+			// Orchestration is on by default (issue #97/#98): seed the files its
+			// duties maintain so they exist from the first phase.
+			await seedOrchestratorFiles(targetWorkspaceDir);
 
 			codecartoModeActive = true;
 			lastFeedbackLines = [`Initialized workspace with pipeline: ${getPipelineLabel(selectedPipelinePath)}`];

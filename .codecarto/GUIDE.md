@@ -37,7 +37,7 @@ If you are an LLM reading this guide for the first time on a project where `CONV
 
 If this is the first LLM to touch this project — no closeouts in `closeouts/`, `CONVENTIONS.md` and `DECISIONS.md` missing or still template skeletons, `workflow/status.yaml` at defaults — **adopt the orchestrator role by default.** Do not interview the user about whether orchestration should happen. Concretely:
 
-1. Initialize `CONVENTIONS.md` from `templates/conventions-template.md` and `DECISIONS.md` from `templates/decisions-template.md` if they do not exist (skeletons only — they fill as patterns and decisions accumulate).
+1. `codecarto_init` (and Pi's `/codecarto-init`) seeds `CONVENTIONS.md` and `DECISIONS.md` from their templates. On an older workspace where they are missing, initialize them from `templates/conventions-template.md` and `templates/decisions-template.md` yourself (skeletons only — they fill as patterns and decisions accumulate).
 2. Confirm the project name only if the repository directory name is wrong for the project; `project_name` otherwise resolves and persists automatically on the first completion.
 3. Note the run's execution strategy (inline or delegated) in the first phase handoff's `owner_notes`.
 
@@ -82,7 +82,7 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Phase handoff (read-write) | `scratch/handoffs/<phase>.yaml` | Phase executors propose state changes and closeout content here. The framework validates and applies them. |
 | Closeouts (framework-owned) | `closeouts/<date>-<phase-or-module>.md`, `THREAD_LOG.md` | Completion writes or updates one canonical closeout and one idempotent index entry. |
 | Conventions (orchestrator-maintained) | `CONVENTIONS.md` | Cross-cutting patterns promoted to project-wide invariants. Phase executors propose; the orchestrator promotes at the phase boundary — in inline runs, the same chat changing hats. |
-| Decisions (orchestrator-maintained, append-only) | `DECISIONS.md` | Numbered log of decisions that diverge from spec, prompt, or obvious-default. Appended at session close. |
+| Decisions (orchestrator-maintained, append-only) | `DECISIONS.md` | Numbered log of decisions that diverge from spec, prompt, or obvious-default. Completion appends each handoff's `decisions` under `## Completion log`; the orchestrator may re-file entries into categories. |
 | Backlog (read-write) | `BACKLOG.md` | Deferred items with rationale. |
 | Scratch (read-write) | `scratch/*` | Working notes; `scratch/checkpoints/<phase>.md` is the durable in-phase continuation checkpoint until the phase validates. |
 
@@ -153,10 +153,10 @@ If a primary and a secondary output describe the same topic (e.g., the architect
 
 Two cross-cutting files compound across sessions and live at the `.codecarto/` top level:
 
-- **`CONVENTIONS.md`** — cross-cutting patterns that have been promoted to project-wide invariants (e.g., a shared discriminated-union return shape, a tripwire-naming vocabulary, a verbatim-spec-quote discipline). Phase executors propose additions in their closeout; the orchestrator promotes them at the phase boundary. New conventions land when a third independent phase reaches for the same pattern, or when a spec/feedback corpus identifies a project-wide invariant.
-- **`DECISIONS.md`** — append-only numbered log of cross-cutting decisions that diverge from spec, prompt, or obvious-default. Each entry: `D<NNN> | <one-liner> | <source-session> | <rationale-pointer>`. Categories partition the namespace (type system, toolchain, module-internal patterns, lifted primitives, etc.).
+- **`CONVENTIONS.md`** — cross-cutting patterns that have been promoted to project-wide invariants (e.g., a shared discriminated-union return shape, a tripwire-naming vocabulary, a verbatim-spec-quote discipline). Completion **stages** each handoff's `proposed_conventions` under `## Pending proposals`; the orchestrator promotes a staged entry into a numbered convention (or removes it with a note) at the phase boundary. New conventions land when a third independent phase reaches for the same pattern, or when a spec/feedback corpus identifies a project-wide invariant.
+- **`DECISIONS.md`** — append-only numbered log of cross-cutting decisions that diverge from spec, prompt, or obvious-default. Each entry: `D<NNN> | <one-liner> | <source-closeout> | <rationale-pointer>`. Completion **appends** each handoff's `decisions` as rows under `## Completion log`, numbering shared with the orchestrator-curated category sections; the orchestrator may re-file entries into categories later.
 
-Both files are skeletons in the framework templates (`templates/conventions-template.md`, `templates/decisions-template.md`) and become project-specific artifacts as entries accumulate. Promotion is an orchestrator duty: phase executors propose, the orchestrator promotes — in an inline run the same chat does both, at the phase boundary rather than mid-phase.
+Both files are seeded from the framework templates (`templates/conventions-template.md`, `templates/decisions-template.md`) at init and become project-specific artifacts as entries accumulate. The bookkeeping half is mechanized — completion collects, so proposals can never be stranded in closeout prose — while promotion stays judged: phase executors propose, the orchestrator promotes, and in an inline run the same chat does both at the phase boundary.
 
 ## Context Budget
 
@@ -235,11 +235,11 @@ When a session starts:
 When a session finishes durable work:
 
 1. Run the validation step described in `workflow/VALIDATE.md`. Append a validation block to the output.
-2. Write `scratch/handoffs/<phase>.yaml` with `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, `open_question_closures`, `post_pipeline`, and `decisions`, plus `closeout_summary` and optional multiline `closeout_content`. Omitted arrays default to empty; malformed collection shapes fail completion.
+2. Write `scratch/handoffs/<phase>.yaml` with `schema_version: 1`, the exact `phase_id`, arrays for `owner_notes`, `open_questions`, `carry_forward`, `carry_forward_closures`, `open_question_closures`, `post_pipeline`, `decisions`, and `proposed_conventions`, plus `closeout_summary` and optional multiline `closeout_content`. Omitted arrays default to empty; malformed collection shapes fail completion.
 3. Record 2-3 key observations in the handoff's `owner_notes` (e.g., row counts, notable decisions, scope of analysis). Do not provide a canonical timestamp; the host clock owns timestamps.
 4. Run `/codecarto-complete` (or `codecarto_complete`). The framework atomically updates `workflow/status.yaml`, writes or updates one canonical closeout, and appends one idempotent `THREAD_LOG.md` entry. Do not edit those files directly.
 5. Store the durable output in the declared `findings/` path.
-6. If the session made cross-cutting decisions or discovered project-wide invariants, propose additions to `CONVENTIONS.md` (in the closeout's "Proposed Conventions" section) and `DECISIONS.md` (numbered entries in the closeout's "Decisions Beyond Prompt" section). Promoting them to the canonical files is the orchestrator duty at the next phase boundary — in an inline run, do it yourself before starting the next phase.
+6. If the session made cross-cutting decisions or discovered project-wide invariants, record them in the handoff: `decisions` entries are appended to `DECISIONS.md` by completion (numbered `D<NNN>` rows under `## Completion log`), and `proposed_conventions` entries are staged in `CONVENTIONS.md` under `## Pending proposals`. Promoting a staged proposal into a numbered convention — or removing it with a note — is the orchestrator duty at the next phase boundary; in an inline run, do it yourself before starting the next phase.
 
 ### Strategic Alignment Hook (before synthesis)
 
