@@ -75,6 +75,7 @@ import {
 	type WorkspaceState,
 	writeLibraryConfig,
 } from "../core/index.ts";
+import { applyAmendment } from "../core/amendment.ts";
 import { initLibrary } from "../core/library.ts";
 import { loadUserConfig, resolveUserConfigPath } from "../core/orchestrator-config.ts";
 import { writeDashboard } from "../extensions/codecarto/dashboard-writer.ts";
@@ -851,6 +852,32 @@ export async function handleListSkills(args: { cwd: string }) {
 	return textResult(lines.join("\n"), { skills });
 }
 
+export async function handleAmend(args: { cwd: string; name: string }) {
+	if (typeof args.name !== "string" || !args.name.trim()) {
+		throw new McpError(ErrorCode.InvalidParams, "name is required (the amendment file's slug under .codecarto/scratch/amendments/)");
+	}
+	const cwd = await validateCwd(args.cwd);
+	await requireWorkspace(cwd);
+	const { applied, closeoutNotice } = await applyAmendment(cwd, args.name).catch((error) => {
+		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+	});
+
+	const lines = [
+		`Amendment applied.`,
+		`Open questions closed: ${applied.openQuestionsClosed.length > 0 ? applied.openQuestionsClosed.join(", ") : "none"}`,
+		`Post-pipeline items closed: ${applied.postPipelineClosed.length > 0 ? applied.postPipelineClosed.join(", ") : "none"}`,
+	];
+	if (applied.unknownIds.length > 0) lines.push(`Ids that matched nothing (already closed or unknown): ${applied.unknownIds.join(", ")}`);
+	lines.push(closeoutNotice);
+
+	return textResult(lines.join("\n"), {
+		openQuestionsClosed: applied.openQuestionsClosed,
+		postPipelineClosed: applied.postPipelineClosed,
+		unknownIds: applied.unknownIds,
+		closeoutNotice,
+	});
+}
+
 // ---------- tool registry ----------
 
 const TOOLS = [
@@ -1116,9 +1143,23 @@ const TOOLS = [
 			required: ["cwd"],
 		},
 	},
+	{
+		name: "codecarto_amend",
+		description:
+			"Apply a post-pipeline amendment from .codecarto/scratch/amendments/<name>.yaml to workflow/status.yaml: close open questions resolved on evidence after the pipeline completed and retire finished post-pipeline backlog items, under the same lock completion uses. Writes an amendment closeout and THREAD_LOG entry. Refused while the pipeline is incomplete — mid-pipeline resolutions belong in the phase handoff. Idempotent: ids that no longer match are reported, not fatal.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				cwd: { type: "string", description: "Absolute path to the target repository." },
+				name: { type: "string", description: "Amendment file slug under .codecarto/scratch/amendments/ (with or without .yaml)." },
+			},
+			required: ["cwd", "name"],
+		},
+	},
 ] as const;
 
 const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
+	codecarto_amend: handleAmend,
 	codecarto_init: handleInit,
 	codecarto_status: handleStatus,
 	codecarto_switch_pipeline: handleSwitchPipeline,
