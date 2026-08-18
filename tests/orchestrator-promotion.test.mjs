@@ -144,6 +144,39 @@ test("decision numbering continues from the highest existing D<NNN> anywhere in 
 	assert.match(decisions, /^D042 \| A third, later decision\./m, "numbering continues after the curated D041");
 });
 
+test("the completion-log heading is a real visible line, not the template's prose mention (#111)", async () => {
+	// The decisions template *mentions* `## Completion log` in running prose, so
+	// a substring presence check believes the heading exists and never inserts
+	// it — rows then glue to the template's closing sentence at EOF.
+	const decisions = await readFile(join(CODECARTO, "DECISIONS.md"), "utf8");
+	const lines = decisions.split("\n");
+	const headingIndex = lines.findIndex((line) => line.trim() === "## Completion log");
+	assert.notEqual(headingIndex, -1, "append must insert the heading as its own line");
+	// The template ships a *commented* D001 example above the heading, so the
+	// row scan must look below the heading only.
+	assert.ok(
+		lines.slice(headingIndex + 1).some((line) => /^D001 \|/.test(line)),
+		"appended rows must sit under the heading",
+	);
+});
+
+test("countPendingProposals ignores a prose mention of the pending heading (#111)", async () => {
+	const crafted = [
+		"# Conventions",
+		"",
+		"Completion stages entries under `## Pending proposals`; promote them at the boundary.",
+		"",
+		"- **decoy-one** a bullet between the prose mention and the real section",
+		"- **decoy-two** another one",
+		"",
+		"## Pending proposals",
+		"",
+		"- **real-one** (architecture, 2026-08-17) — the only staged entry.",
+		"",
+	].join("\n");
+	assert.equal(await core.countPendingProposals(CODECARTO, crafted), 1, "only bullets under the real heading line count");
+});
+
 test("prompt duties block lists pending proposals and re-triage questions after completion", async () => {
 	// Route an open question with a re-triage kind into status via a fresh handoff completion.
 	const handoffPath = join(CODECARTO, "scratch", "handoffs", "architecture.yaml");
