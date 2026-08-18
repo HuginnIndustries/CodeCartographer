@@ -372,12 +372,19 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 		// the completion result. Nothing else can act on the error here.
 	}
 
+	// Dashboard freshness is a completion side effect (issue #112): the counts
+	// it renders change exactly here, and a stale dashboard misreports them
+	// confidently. writeDashboard never throws; its boolean says whether a
+	// fresh render actually landed, so the result only claims what happened.
+	const dashboardPath = (await writeDashboard(cwd, PACKAGE_VERSION)) ? ".codecarto/dashboard.html" : undefined;
+
 	const lines = [
 		`Marked ${validation.phaseId} complete (validation: ${validation.overall}).`,
 		`Next phase: ${updatedState.status.current_phase}`,
 	];
 	if (closeoutNotice) lines.push(closeoutNotice);
 	if (orchestratorCheckpoint) lines.push(orchestratorCheckpoint);
+	if (dashboardPath) lines.push(`Dashboard refreshed: ${dashboardPath}`);
 
 	return textResult(lines.join("\n"), {
 		completedPhase: validation.phaseId,
@@ -385,6 +392,7 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 		nextPhase: updatedState.status.current_phase,
 		closeoutNotice,
 		orchestratorCheckpoint,
+		dashboardPath,
 	});
 }
 
@@ -868,7 +876,9 @@ export async function handleUsage(args: { cwd: string }) {
 export async function handleDashboard(args: { cwd: string }) {
 	const cwd = await validateCwd(args.cwd);
 	await requireWorkspace(cwd);
-	await writeDashboard(cwd, PACKAGE_VERSION);
+	if (!(await writeDashboard(cwd, PACKAGE_VERSION))) {
+		throw new McpError(ErrorCode.InvalidRequest, "Dashboard render failed: the workspace state could not be gathered or .codecarto/dashboard.html is not writable.");
+	}
 	return textResult("Dashboard regenerated: .codecarto/dashboard.html", { path: ".codecarto/dashboard.html" });
 }
 
@@ -913,6 +923,10 @@ export async function handleAmend(args: { cwd: string; name: string }) {
 		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
 
+	// An amendment exists precisely to change the numbers the dashboard shows
+	// (issue #112); refresh it, reporting only a render that actually landed.
+	const dashboardPath = (await writeDashboard(cwd, PACKAGE_VERSION)) ? ".codecarto/dashboard.html" : undefined;
+
 	const lines = [
 		`Amendment applied.`,
 		`Open questions closed: ${applied.openQuestionsClosed.length > 0 ? applied.openQuestionsClosed.join(", ") : "none"}`,
@@ -920,12 +934,14 @@ export async function handleAmend(args: { cwd: string; name: string }) {
 	];
 	if (applied.unknownIds.length > 0) lines.push(`Ids that matched nothing (already closed or unknown): ${applied.unknownIds.join(", ")}`);
 	lines.push(closeoutNotice);
+	if (dashboardPath) lines.push(`Dashboard refreshed: ${dashboardPath}`);
 
 	return textResult(lines.join("\n"), {
 		openQuestionsClosed: applied.openQuestionsClosed,
 		postPipelineClosed: applied.postPipelineClosed,
 		unknownIds: applied.unknownIds,
 		closeoutNotice,
+		dashboardPath,
 	});
 }
 
