@@ -10,7 +10,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { getNextEligiblePhase } from "./pipeline.ts";
-import { ensureArray, normalizeStatus } from "./status.ts";
+import { buildTerminalNextActions, ensureArray, normalizeStatus } from "./status.ts";
 import type { WorkspaceState } from "./types.ts";
 import { dateOnly, pathExists } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
@@ -153,6 +153,9 @@ export async function applyAmendment(cwd: string, name: string): Promise<Amendme
 			(nextStatus.post_pipeline.length !== before ? applied.postPipelineClosed : applied.unknownIds).push(closureId);
 		}
 
+		// The amendment changed exactly the counts the terminal routing lines
+		// carry (issue #114); rebuild them so status never shows stale numbers.
+		nextStatus.next_actions = buildTerminalNextActions(nextStatus);
 		nextStatus.last_updated = timestamp;
 
 		// Amendment closeout + THREAD_LOG entry, same idempotence rule as

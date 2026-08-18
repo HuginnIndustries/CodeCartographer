@@ -2,7 +2,7 @@ import { appendFile, copyFile, mkdir, readFile, readdir, writeFile } from "node:
 import { join } from "node:path";
 
 import { getNextEligiblePhase, resolvePhase } from "./pipeline.ts";
-import { applyHandoff, autoAssignIds, loadHandoffFile, normalizeStatus } from "./status.ts";
+import { applyHandoff, autoAssignIds, buildTerminalNextActions, loadHandoffFile, normalizeStatus } from "./status.ts";
 import type { NormalizedStatus, OpenQuestionEntry, PhaseHandoff, ProposedConventionEntry, ValidationResult, WorkspaceState } from "./types.ts";
 import { dateOnly, pathExists, uniqueStrings } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
@@ -376,7 +376,7 @@ export async function completeValidatedPhase(
 		nextStatus.current_phase = nextEligible?.id ?? "complete";
 		nextStatus.next_actions = nextEligible
 			? [`Begin ${nextEligible.id} phase by producing ${nextEligible.primary_output ?? `findings/${nextEligible.id}/`}`]
-			: ["All phases complete. Review findings, open questions, and downstream implementation notes."];
+			: buildTerminalNextActions(nextStatus);
 
 		const artifacts = await writeCompletionArtifacts(lockedState.workspaceDir, validation.phaseId, validation, completionTimestamp, handoff);
 		closeoutPath = artifacts.closeoutPath;

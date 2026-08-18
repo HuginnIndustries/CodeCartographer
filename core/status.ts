@@ -139,6 +139,29 @@ export function createEmptyStatus(projectName: string, pipelinePath: string, pip
 	};
 }
 
+/**
+ * Route the terminal boundary to the post-pipeline surfaces (issue #114). The
+ * moment every phase completes is exactly when skills, amendments, publishing,
+ * and the dashboard apply; the prior static sentence left them undiscovered —
+ * the 0.15.0 field test finished two full runs with every one of them unused.
+ * Amendment recomputes this list so closure counts never go stale.
+ */
+export function buildTerminalNextActions(status: NormalizedStatus): string[] {
+	const openQuestions = Object.values(status.phases).reduce((sum, phase) => sum + (phase.open_questions?.length ?? 0), 0);
+	const postPipeline = status.post_pipeline.length;
+	const actions = [
+		"All phases complete. Review findings; post-pipeline skills: codecarto_list_skills / codecarto_skill.",
+	];
+	if (openQuestions > 0 || postPipeline > 0) {
+		actions.push(`${openQuestions} open question(s) and ${postPipeline} post-pipeline item(s) remain — apply resolutions with codecarto_amend (write scratch/amendments/<slug>.yaml from templates/amendment.yaml).`);
+	}
+	if ("reimplementation-spec" in status.phases) {
+		actions.push("Publish the finished spec to a library: codecarto_publish (create one with codecarto_library_init; see the library guide topic).");
+	}
+	actions.push("Dashboard: .codecarto/dashboard.html (refreshed on completion and amendment; codecarto_dashboard re-renders on demand). Usage totals: codecarto_usage.");
+	return actions;
+}
+
 export function normalizeStatus(status: StatusFile, pipeline: PipelineFile, pipelinePath: string, cwd: string): NormalizedStatus {
 	if (typeof status.schema_version === "number" && status.schema_version > 1) {
 		throw new Error(`Unsupported status schema_version ${status.schema_version}. Supported: 1.`);
