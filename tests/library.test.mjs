@@ -377,6 +377,47 @@ test("listEntries filters by namespace, tag, slug, and source_repo", async () =>
 
 // ─── Reindex ──────────────────────────────────────────────────────────────
 
+test("INDEX.md escapes backslashes before pipes so a headline cannot break the table row", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		const v1Dir = join(libraryRoot, ENTRIES_DIR, "james", "hostile", "v1");
+		await mkdir(v1Dir, { recursive: true });
+		await writeFile(join(v1Dir, SPEC_FILE), "# hostile spec\n", "utf8");
+		await writeFile(join(v1Dir, METADATA_FILE), [
+			"slug: hostile",
+			"namespace: james",
+			"version: 1",
+			"source_repo: https://github.com/james/hostile",
+			"analyzed_at: '2026-05-01T10:00:00Z'",
+			"pipeline: pipeline-lite",
+			"codecarto_version: 0.9.0",
+			"headline: 'evil\\| break | out'",
+			"tags: []",
+			"capabilities: []",
+			"generation:",
+			"  surface: drop-in",
+			"  agent: manual",
+			"  agent_version: unknown",
+			"  model: unknown",
+			"  model_vendor: unknown",
+			"  reasoning: unknown",
+			'  notes: ""',
+			"",
+		].join("\n"), "utf8");
+		await writeFile(join(libraryRoot, ENTRIES_DIR, "james", "hostile", LATEST_POINTER_FILE), "v1\n", "utf8");
+
+		await reindex(libraryRoot);
+		const indexMd = await readFile(join(libraryRoot, LIBRARY_INDEX_MD_FILE), "utf8");
+		// Input `evil\|` must emit `evil\\\|` (escaped backslash, then escaped
+		// pipe). Escaping only the pipe emits `evil\\|` — a literal backslash
+		// followed by a live cell delimiter, i.e. the breakout this pins shut.
+		assert.ok(indexMd.includes("evil\\\\\\| break \\| out"), `row must escape the backslash before the pipe, got: ${indexMd.split("\n").find((l) => l.includes("hostile"))}`);
+		assert.ok(!indexMd.includes("evil\\\\| break"), "the unescaped-backslash breakout form must not appear");
+	} finally {
+		await cleanup();
+	}
+});
+
 test("reindex generates index.yaml + INDEX.md from a hand-built tree", async () => {
 	const { libraryRoot, cleanup } = await makeLibrary();
 	try {

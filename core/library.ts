@@ -799,7 +799,10 @@ function formatIndexRow(e: LibraryIndexEntry, namespaced: boolean): string {
 }
 
 function escapeMd(value: string): string {
-	return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+	// Backslashes first: escaping only the pipe lets an input ending in `\`
+	// turn the emitted `\|` into a literal-backslash-plus-cell-delimiter and
+	// break out of the table cell (code scanning alert #3).
+	return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
 // ─── Atomic YAML write ──────────────────────────────────────────────────────
