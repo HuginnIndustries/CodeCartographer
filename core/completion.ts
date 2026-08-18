@@ -64,6 +64,19 @@ export const DECISIONS_COMPLETION_LOG_HEADING = "## Completion log";
 export const CONVENTIONS_PENDING_HEADING = "## Pending proposals";
 
 /**
+ * True when `heading` exists as its own visible line. Both orchestrator-file
+ * templates mention their headings in running prose (issue #111: a raw
+ * substring check saw the decisions-template's "…rows under `## Completion
+ * log`…" sentence and never inserted the real heading), so presence checks
+ * must match a whole trimmed line of comment-stripped content.
+ */
+function hasVisibleHeadingLine(content: string, heading: string): boolean {
+	return visibleMarkdown(content)
+		.split(/\r?\n/)
+		.some((line) => line.trim() === heading);
+}
+
+/**
  * Ensure an orchestrator file exists: prefer the workspace's template, fall
  * back to a minimal header for scaffolds that predate the template.
  * @returns the file's current content.
@@ -121,7 +134,7 @@ async function appendDecisionLog(
 		if (Number.isFinite(parsed) && parsed >= nextNumber) nextNumber = parsed + 1;
 	}
 
-	if (!content.includes(DECISIONS_COMPLETION_LOG_HEADING)) {
+	if (!hasVisibleHeadingLine(content, DECISIONS_COMPLETION_LOG_HEADING)) {
 		content += `${content.endsWith("\n") ? "" : "\n"}\n${DECISIONS_COMPLETION_LOG_HEADING}\n\nAppended by completion from each phase handoff's \`decisions\` array. The orchestrator may re-file entries into the category sections above; numbering is shared with them.\n`;
 	}
 	const source = closeoutFile.replace(/\.md$/, "");
@@ -145,12 +158,17 @@ export async function countPendingProposals(workspaceDir: string, content?: stri
 		if (!(await pathExists(filePath))) return 0;
 		text = await readFile(filePath, "utf8");
 	}
-	const start = text.indexOf(CONVENTIONS_PENDING_HEADING);
-	if (start === -1) return 0;
-	const rest = text.slice(start + CONVENTIONS_PENDING_HEADING.length);
-	const end = rest.indexOf("\n## ");
-	const section = end === -1 ? rest : rest.slice(0, end);
-	return section.split(/\r?\n/).filter((line) => line.startsWith("- **")).length;
+	// Same line-anchored rule as the heading-insertion checks: a prose mention
+	// of the heading must not open the section early and miscount.
+	const lines = visibleMarkdown(text).split(/\r?\n/);
+	const headingIndex = lines.findIndex((line) => line.trim() === CONVENTIONS_PENDING_HEADING);
+	if (headingIndex === -1) return 0;
+	let count = 0;
+	for (const line of lines.slice(headingIndex + 1)) {
+		if (line.startsWith("## ")) break;
+		if (line.startsWith("- **")) count += 1;
+	}
+	return count;
 }
 
 /**
@@ -176,7 +194,7 @@ async function stageProposedConventions(
 		"conventions-template.md",
 		"# Conventions\n\nCross-cutting patterns promoted to project-wide invariants. This scaffold predates templates/conventions-template.md; refresh the framework-owned files for the full format.\n",
 	);
-	if (!content.includes(CONVENTIONS_PENDING_HEADING)) {
+	if (!hasVisibleHeadingLine(content, CONVENTIONS_PENDING_HEADING)) {
 		content += `${content.endsWith("\n") ? "" : "\n"}\n${CONVENTIONS_PENDING_HEADING}\n\nStaged by completion from each phase handoff's \`proposed_conventions\`. The orchestrator promotes an entry into a numbered convention above (or removes it with a note) at the phase boundary — see GUIDE.md §Roles.\n`;
 	}
 	// Same visible-content rule as the decision log: template comments must not
