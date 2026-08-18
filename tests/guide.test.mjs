@@ -15,7 +15,7 @@ const SKILL_DIR = join(REPO_ROOT, "agent-skill", "codecartographer");
 test("listGuideTopics returns overview first, then every reference", async () => {
 	const topics = await core.listGuideTopics();
 	assert.equal(topics[0], "overview");
-	for (const expected of ["executors", "handoff-contract", "orchestration", "phase-recovery", "pipeline-selection"]) {
+	for (const expected of ["executors", "handoff-contract", "library", "orchestration", "phase-recovery", "pipeline-selection"]) {
 		assert.ok(topics.includes(expected), `missing guide topic ${expected}`);
 	}
 	assert.equal(new Set(topics).size, topics.length, "topics must be unique");

@@ -122,6 +122,8 @@ A PARTIAL row's evidence must name what is missing and which `open_questions` or
 
 ## When the run drives a rewrite
 
+When the pipeline completes, the finished spec has a designed destination: publish it to a **library** (`codecarto_publish`; create one with `codecarto_library_init`) so synthesis runs and other projects can consume it — `references/library.md`. A spec that only ever lives in its workspace helps exactly one repository.
+
 If the goal is to rebuild or refactor rather than to understand, two phases carry that weight and both have their own reference:
 
 - the defect scans feed `porting` and `reimplementation-spec` as inputs, not as an appendix — `references/deep-audit-synthesis.md`;
@@ -142,5 +144,6 @@ Using what it produces:
 - `references/deep-audit-synthesis.md` — defect dispositions, hazards as normative rules, reporting
 - `references/kernel-first-rewrite.md` — rings, build order, acceptance harness, strategic assumptions
 - `references/carrying-results-forward.md` — starting implementation, autonomy boundaries, publishing findings
+- `references/library.md` — publishing finished specs to a library and consuming them from synthesis runs
 
 This guide is also served by the `codecarto_guide` MCP tool, so an agent with the server configured can read it without installing anything.
