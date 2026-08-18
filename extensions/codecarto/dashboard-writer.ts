@@ -22,10 +22,17 @@ import {
 
 const CLOSEOUT_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})-(.+)\.md$/;
 
-export async function writeDashboard(cwd: string, packageVersion: string): Promise<void> {
+/**
+ * Render and atomically replace `.codecarto/dashboard.html`.
+ * @returns true when a fresh dashboard landed on disk; false when the
+ * workspace is missing or any gather/render/write step failed (swallowed —
+ * lifecycle callers must never fail on a dashboard problem, but they may
+ * report truthfully whether a refresh happened).
+ */
+export async function writeDashboard(cwd: string, packageVersion: string): Promise<boolean> {
 	try {
 		const state = await getWorkspaceState(cwd);
-		if (!state) return;
+		if (!state) return false;
 
 		const workspaceDir = state.workspaceDir;
 		const [usage, closeouts, outputsPresent, narration] = await Promise.all([
@@ -51,10 +58,12 @@ export async function writeDashboard(cwd: string, packageVersion: string): Promi
 		const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
 		await writeFile(tempPath, html, "utf8");
 		await rename(tempPath, path);
+		return true;
 	} catch {
 		// Best-effort: a failed dashboard write must not surface as a phase
 		// error. The user's pipeline state is unaffected; the next state
 		// change will trigger another render attempt.
+		return false;
 	}
 }
 
