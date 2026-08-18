@@ -239,7 +239,12 @@ export async function handleStatus(args: { cwd: string }) {
 		`Open questions (terminal unresolved): ${terminalOpenQuestions}`,
 		`Carry-forward (pipeline phases): ${totalCarryForward}`,
 		`Post-pipeline work: ${postPipelinePending} pending`,
-		`Next: ${state.status.next_actions[0] ?? (nextPhase ? `Begin ${nextPhase.id}` : "All phases complete.")}`,
+		// Render every stored action: the terminal list routes to several
+		// post-pipeline surfaces (issue #114), and a text-reading client that
+		// only ever sees actions[0] loses exactly the routing it exists for.
+		...(state.status.next_actions.length > 0
+			? state.status.next_actions.map((action, index) => `${index === 0 ? "Next: " : "      "}${action}`)
+			: [`Next: ${nextPhase ? `Begin ${nextPhase.id}` : "All phases complete."}`]),
 	];
 	if (scaffoldNotice) summaryLines.push(`Scaffold: ${scaffoldNotice}`);
 	const summary = summaryLines.join("\n");

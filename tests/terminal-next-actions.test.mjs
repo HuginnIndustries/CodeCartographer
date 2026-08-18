@@ -92,6 +92,14 @@ test("terminal next_actions route to skills, amend with live counts, and the das
 	assert.ok(actions.some((line) => line.includes("codecarto_dashboard") && line.includes("codecarto_usage")));
 });
 
+test("codecarto_status text renders every routing line, not just the first (#114)", async () => {
+	const { handleStatus } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
+	const result = await handleStatus({ cwd: WORKSPACE });
+	assert.match(result.structuredContent.text, /codecarto_list_skills/);
+	assert.match(result.structuredContent.text, /codecarto_amend/, "the amend routing line must reach the text view");
+	assert.match(result.structuredContent.text, /codecarto_dashboard/);
+});
+
 test("amendment rebuilds the routing so counts never go stale", async () => {
 	const amendmentPath = join(CODECARTO, "scratch", "amendments", "close-all.yaml");
 	await mkdir(dirname(amendmentPath), { recursive: true });
