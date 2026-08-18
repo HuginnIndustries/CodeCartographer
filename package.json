@@ -1,6 +1,6 @@
 {
   "name": "codecartographer-pi",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "mcpName": "io.github.HuginnIndustries/codecartographer",
   "description": "Turn an unfamiliar codebase into a validated reimplementation spec, then synthesize confirmed specs and a product vision into a traceable plan.",
   "type": "module",

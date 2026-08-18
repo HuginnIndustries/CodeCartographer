@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-08-17
+
+The field-test round. Immediately after 0.15.0 shipped, the same 7-phase deepseek-harness analysis was re-run on a fresh worktree through the published binary — this time with the driving chat as orchestrator — and the run's own gaps became this release (#111–#114): the very first completion appended decision rows without their promised heading, both full runs ended with no dashboard ever rendered, the analysis→publish→synthesis library loop was unreachable from any served text, and the terminal completion message named nothing actionable while skills, amendments, a publishable spec, and the usage log all sat unused.
+
+### Fixed
+
+- **Orchestrator-file headings are detected as visible lines, not substrings** (#111, #115). The decisions template *mentions* `## Completion log` in running prose, so the raw `includes()` presence check never inserted the real heading and `D<NNN>` rows glued to the template's closing sentence. All three heading-sensitive sites now share a line-anchored, comment-stripped check, and `countPendingProposals` counts bullets only below the real heading line so a prose mention cannot open the section early.
+
+### Added
+
+- **The dashboard regenerates on completion and amendment** (#112, #116). `codecarto_complete` and `codecarto_amend` refresh `.codecarto/dashboard.html` best-effort — exactly the two operations that change the numbers it shows. `writeDashboard` now reports whether a fresh render actually landed, results only claim refreshes that happened, a blocked dashboard path never fails the triggering operation, and the explicit `codecarto_dashboard` tool fails loud instead of claiming success over a swallowed render failure.
+- **The library loop is discoverable** (#113, #117). New `library` guide topic covering the library anatomy, all four tools (`codecarto_library_init`, `codecarto_publish` with its content-hash idempotence and provenance fields, `codecarto_library_list`, `codecarto_library_reindex`), the publish moment at pipeline completion, and the distinction from the product-repo snapshot flow; the served overview now states the publish step where rewrites are discussed.
+- **The terminal boundary routes to the post-pipeline surfaces** (#114, #118). Completing the last phase now writes dynamic `next_actions`: the skills surface always, `codecarto_amend` with live open-question/post-pipeline counts when work is pending, `codecarto_publish` when the pipeline produced a reimplementation-spec, and the dashboard/usage surfaces. `applyAmendment` rebuilds the list after closures so stored status never shows stale counts, and `codecarto_status`'s text view renders every stored action instead of only the first (#119). Previously one static sentence ("Review findings…") dead-ended every completed pipeline.
+
 ## [0.15.0] — 2026-08-17
 
 The orchestrator round. A real 7-phase MCP-driven run (deepseek-harness) followed the workspace GUIDE's first-run role interview, correctly declined the orchestrator role — its user had asked one chat to drive every phase, which the old role definition forbade — and spent the whole pipeline in "degraded no-orchestrator mode": ~12 proposed conventions and 23 decisions stranded in closeout prose, a declared secondary output silently dropped, a mislabeled open question carrying a false premise through four phases into a wrong high-severity finding, four post-pipeline resolutions with no way to reach `status.yaml`, and a usage log reporting zero runs. Every change below is one of those failures made structurally impossible or mechanically visible (#97–#102).
