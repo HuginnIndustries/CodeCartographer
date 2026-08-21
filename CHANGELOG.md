@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Publish refuses to append one project's spec to another project's history** (#123). Slugs derive from the trailing path segment of `source_repo`, so `acme/whisper` and `openai/whisper` both produce `whisper`. Publishing the second wrote it as `v2` of the first: the entry's version history then spanned two unrelated codebases, and because `index.yaml` carries only the newest version's metadata, the index attributed the whole entry to whichever repo published last. `publishEntry` now compares the incoming `source_repo` against the one recorded on the newest version and fails before writing anything. The comparison is normalized across scheme, `git@host:path` SCP syntax, a `www.` prefix, a trailing `.git`, trailing slashes, separators and casing, so re-publishing the same repository spelled differently is unaffected. It is checked ahead of the content-hash branch, because a metadata-only update overwrote the wrong entry just as quietly. Unreadable or malformed recorded metadata skips the check rather than blocking the publish. `force_new_version` does not bypass it. A genuine repository move opts out with `allow_source_repo_change` (`allowSourceRepoChange` in `PublishOptions`). `docs/library-format.md` previously promised auto-suffixing (`-2`, `-3`) for this case, which was never implemented; it now documents the refusal instead.
+
 ## [0.16.0] — 2026-08-17
 
 The field-test round. Immediately after 0.15.0 shipped, the same 7-phase deepseek-harness analysis was re-run on a fresh worktree through the published binary — this time with the driving chat as orchestrator — and the run's own gaps became this release (#111–#114): the very first completion appended decision rows without their promised heading, both full runs ended with no dashboard ever rendered, the analysis→publish→synthesis library loop was unreachable from any served text, and the terminal completion message named nothing actionable while skills, amendments, a publishable spec, and the usage log all sat unused.

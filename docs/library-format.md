@@ -133,9 +133,17 @@ codecarto-library/
 - Must not equal any reserved name (`latest`, `index`, `entries`).
 
 Slugs are derived from the source repo name by default (`my-cool-tool`
-from `github.com/acme/my-cool-tool`), with collision-handling via a
-trailing `-2`, `-3`, etc. If the namespace differs, the same slug is
-permitted across namespaces.
+from `github.com/acme/my-cool-tool`). If the namespace differs, the same
+slug is permitted across namespaces.
+
+Derivation uses only the trailing path segment, so two unrelated
+repositories can land on one slug (`acme/whisper` and `openai/whisper`
+both give `whisper`). CodeCartographer does not auto-suffix these.
+Instead, publish refuses when the target entry already records a
+different `source_repo`, because the alternative is appending one
+project's spec to another project's version history. To shelve the
+second project, pass an explicit distinct slug. See "Source repo
+conflicts" below.
 
 ### Version directories
 
@@ -330,6 +338,30 @@ as a recoverable error: `codecarto library-reindex` repairs it.
 4. If different, a new `v(N+1)/` is written atomically (temp dir →
    rename), `latest` is repointed, and `index.yaml` + `INDEX.md` are
    regenerated.
+
+## Source repo conflicts
+
+Before either branch above, publish compares the incoming `source_repo`
+against the one recorded on the entry's newest version. If they denote
+different repositories, publish fails and writes nothing.
+
+Comparison is normalized, so these are all the same repository and none
+of them trip the check: a `https://`, `http://`, `ssh://` or `git://`
+scheme or none at all, `git@host:owner/name` SCP syntax, a `www.` host
+prefix, a trailing `.git`, trailing slashes, backslash separators, and
+any letter casing.
+
+The check is skipped when the recorded `source_repo` cannot be read at
+all (absent, unreadable, or malformed metadata), since there is nothing
+to compare. It is *not* skipped by the force-new-version override, which
+means "another version of this entry", not "overwrite a different
+project".
+
+A repository that genuinely moved (rename, org transfer, host change) is
+the one legitimate case for changing the recorded value. Override it
+with `allow_source_repo_change` on `codecarto_publish`, or
+`allowSourceRepoChange` in `PublishOptions` when calling the core
+directly.
 
 ## Git interaction
 
