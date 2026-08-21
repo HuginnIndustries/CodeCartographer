@@ -254,12 +254,30 @@ export function deriveSlug(sourceRepo: string): string {
  */
 export function normalizeSourceRepo(sourceRepo: string): string {
 	let s = sourceRepo.trim().replace(/\\/g, "/");
-	// git@github.com:acme/tool -> github.com/acme/tool
-	const scp = /^[A-Za-z0-9._-]+@([^:/]+):(.+)$/.exec(s);
-	if (scp) s = `${scp[1]}/${scp[2]}`;
+
+	// Order matters here. The scheme comes off first so that the SCP branch
+	// below sees only genuine `host:path` syntax, and the userinfo strip runs
+	// before either interpretation of a colon. Getting this order wrong makes
+	// `ssh://git@host/acme/tool` and `https://host/acme/tool` read as two
+	// different repositories, which would refuse a legitimate re-publish.
+	const hadScheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(s);
 	s = s.replace(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, "");
+
+	// git@, user:token@, oauth2:x-oauth-basic@ ...
+	s = s.replace(/^[^/@]+@/, "");
+
+	// SCP syntax (git@github.com:acme/tool) only ever appears without a scheme,
+	// where the colon separates host from path rather than naming a port. The
+	// dot requirement keeps a Windows drive letter (C:/repos/tool) out of this
+	// branch.
+	if (!hadScheme) s = s.replace(/^([^:/]+\.[^:/]+):(.+)$/, "$1/$2");
+
+	// A default port for the transports in play is not a distinguishing part of
+	// the address. Any other port is left alone, since two services on one host
+	// may genuinely differ by port.
+	s = s.replace(/^([^/]+):(?:22|80|443)(?=\/|$)/, "$1");
+
 	s = s.replace(/^www\./i, "");
-	s = s.replace(/\/+$/, "");
 	s = s.replace(/\.git$/i, "");
 	s = s.replace(/\/+$/, "");
 	return s.toLowerCase();

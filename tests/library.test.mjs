@@ -528,6 +528,17 @@ test("normalizeSourceRepo collapses spellings of the same repository", () => {
 		"https://GitHub.com/Acme/Tool",
 		"github.com\\acme\\tool",
 		"  https://github.com/acme/tool.git  ",
+		// Scheme plus credentials. These have to survive the userinfo strip, and
+		// the scheme has to come off before the SCP branch sees the colon.
+		"ssh://git@github.com/acme/tool.git",
+		"ssh://git@github.com:22/acme/tool.git",
+		"https://git@github.com/acme/tool",
+		"https://user:token@github.com/acme/tool.git",
+		"https://oauth2:x-oauth-basic@github.com/acme/tool.git",
+		"git+https://github.com/acme/tool.git",
+		"git://github.com/acme/tool.git",
+		"https://github.com:443/acme/tool",
+		"http://github.com:80/acme/tool",
 	]) {
 		assert.equal(normalizeSourceRepo(variant), canonical, `variant: ${variant}`);
 	}
@@ -538,6 +549,31 @@ test("normalizeSourceRepo keeps genuinely different repositories distinct", () =
 	assert.equal(sameSourceRepo("https://github.com/acme/tool", "https://gitlab.com/acme/tool"), false);
 	assert.equal(sameSourceRepo("https://github.com/acme/tool", "https://github.com/acme/tool-2"), false);
 	assert.equal(sameSourceRepo("/home/a/tool", "/home/b/tool"), false);
+	// A non-default port distinguishes two services on one host, so it survives
+	// normalization even though 22/80/443 do not.
+	assert.equal(sameSourceRepo("https://git.internal:8080/a/tool", "https://git.internal:9090/a/tool"), false);
+	// Windows drive letters must not be read as SCP host:path syntax.
+	assert.equal(sameSourceRepo("C:/repos/tool", "D:/repos/tool"), false);
+	assert.equal(sameSourceRepo("git@github.com:acme/tool", "git@github.com:acme/other"), false);
+	assert.equal(sameSourceRepo("https://github.com/acme/tool", "https://github.com/acme"), false);
+});
+
+test("publish is not refused when the same repo is re-published over SSH", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		// The realistic shape of the false positive: one clone uses HTTPS, a later
+		// one uses an ssh:// remote carrying a git@ user. Same repository.
+		await publishEntry(libraryRoot, "# v1\n", sampleInput({
+			source_repo: "https://github.com/myorg/hexbridge",
+		}));
+		const result = await publishEntry(libraryRoot, "# v2\n", sampleInput({
+			source_repo: "ssh://git@github.com/myorg/hexbridge.git",
+		}));
+		assert.equal(result.version, 2);
+		assert.equal(result.isNewVersion, true);
+	} finally {
+		await cleanup();
+	}
 });
 
 test("publish refuses a second project that derived the same slug", async () => {
