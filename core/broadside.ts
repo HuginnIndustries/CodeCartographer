@@ -522,7 +522,17 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 		globsFor: (info) =>
 			info.language === "go"
 				? ["server/**/*.go", "server/*.go", "api/**/*.go", "api/*.go"]
-				: ["server/**", "api/**", "src/server/**", "src/api/**"],
+				: [
+						"server/**",
+						"api/**",
+						"src/server/**",
+						"src/api/**",
+						"mcp-server/**",
+						"**/*routes*",
+						"**/*router*",
+						"**/*handler*",
+						"**/*endpoint*",
+					],
 		systemPrompt: () =>
 			"You are a senior API auditor. Given source files from an HTTP server, " +
 			"extract every HTTP endpoint (method, path, handler function, auth requirement) " +
@@ -1147,7 +1157,11 @@ export async function fetchBatch(
 		headers: { Authorization: `Bearer ${apiKey}` },
 		signal: AbortSignal.timeout(30_000),
 	});
-	return (await resp.json()) as Record<string, unknown>;
+	const data = (await resp.json()) as Record<string, unknown>;
+	// Surface the HTTP status so the poller can bail fast on auth expiry
+	// instead of retrying a dead key for the whole budget.
+	data.http_status = resp.status;
+	return data;
 }
 
 export async function pollBatchUntilTerminal(
@@ -1170,10 +1184,14 @@ export async function pollBatchUntilTerminal(
 			await sleep(BROADSIDE_POLL_INTERVAL_MS);
 			continue;
 		}
+		const httpStatus = Number(batch.http_status ?? 200);
+		if (httpStatus === 401 || httpStatus === 403) {
+			return { id: batchId, status: "auth-failed", error: batch.error ?? batch };
+		}
 		const status = String(batch.status ?? "unknown");
 		const counts = (batch.request_counts ?? {}) as Record<string, unknown>;
 		opts.onStatus?.(status, counts);
-		if (["completed", "failed", "expired", "cancelled"].includes(status)) return batch;
+		if (["completed", "failed", "expired", "cancelled", "auth-failed"].includes(status)) return batch;
 		if (Date.now() >= deadline) return { id: batchId, status: "timeout" };
 		await sleep(BROADSIDE_POLL_INTERVAL_MS);
 	}
@@ -1227,12 +1245,27 @@ export async function runBroadsideSubmit(
 		};
 		run.batches[lensId] = entry;
 
+		if (requests.length === 0) {
+			// No files matched the lens's globs. That is a coverage gap to
+			// report, not a batch to submit — the API rejects empty batches.
+			entry.status = "skipped";
+			continue;
+		}
+
 		submissions.push(
 			(async () => {
-				const { batchId, status, error } = await submitBatch(requests, apiKey, opts.fetcher);
-				entry.batchId = batchId;
-				entry.status = status;
-				if (error) entry.error = error;
+				// A network-level throw (DNS, abort, TLS) must not strand the
+				// entry in "submitting" forever — allSettled would swallow the
+				// rejection and collect would never see a terminal status.
+				try {
+					const { batchId, status, error } = await submitBatch(requests, apiKey, opts.fetcher);
+					entry.batchId = batchId;
+					entry.status = status;
+					if (error) entry.error = error;
+				} catch (error) {
+					entry.status = "rejected";
+					entry.error = error instanceof Error ? error.message : String(error);
+				}
 			})(),
 		);
 	}
@@ -1322,7 +1355,7 @@ export async function runBroadsideCollect(
 			lensOutcomes[lensId] = { status: entry?.status ?? "failed", resultCount: 0 };
 			continue;
 		}
-		if (["completed", "failed", "expired", "cancelled"].includes(entry.status)) {
+		if (["completed", "failed", "expired", "cancelled", "auth-failed", "skipped", "rejected"].includes(entry.status)) {
 			totalCost += entry.cost ?? 0;
 			resultCount += entry.resultCount ?? 0;
 			lensOutcomes[lensId] = { status: entry.status, cost: entry.cost, resultCount: entry.resultCount };
@@ -1364,7 +1397,7 @@ export async function runBroadsideCollect(
 	if (opts.includeSynthesis !== false && allLensResults.length > 0) {
 		const allTerminal = run.lenses.every((lensId) => {
 			const entry = run.batches[lensId];
-			return entry && ["completed", "failed", "expired", "cancelled"].includes(entry.status);
+			return entry && ["completed", "failed", "expired", "cancelled", "auth-failed", "skipped", "rejected"].includes(entry.status);
 		});
 		if (allTerminal && run.synthesis.status === "pending") {
 			const findingsText = allLensResults
@@ -1434,7 +1467,7 @@ export async function runBroadsideCollect(
 
 	const terminal = run.lenses.every((lensId) => {
 		const entry = run.batches[lensId];
-		return entry && ["completed", "failed", "expired", "cancelled"].includes(entry.status);
+		return entry && ["completed", "failed", "expired", "cancelled", "auth-failed", "skipped", "rejected"].includes(entry.status);
 	});
 	run.status = terminal ? (resultCount > 0 ? "completed" : "failed") : "partial";
 	run.totalCost = totalCost;

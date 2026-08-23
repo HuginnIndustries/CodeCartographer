@@ -159,6 +159,45 @@ test("api and security lenses skip test files; conventions keeps them", async ()
 	}
 });
 
+test("submit marks a lens with no matching files as skipped, never submitting an empty batch", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-empty-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await writeFile(join(dir, "main.go"), "package main\n");
+		const posted = [];
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				posted.push(JSON.parse(init.body));
+				return fakeResponse(202, { id: `batch-${posted.length}`, status: "validating" });
+			}
+			return fakeResponse(200, { id: "x", status: "completed" });
+		};
+		// api lens globs target server/ and api/ — neither exists here.
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture", "api"], fetcher });
+		assert.equal(result.batches.api.status, "skipped");
+		assert.equal(posted.length, 1, "only the architecture batch may be submitted");
+		assert.ok(posted[0].requests.length > 0, "submitted batches must be non-empty");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a network throw during submission marks the entry rejected, not stuck submitting", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-throw-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await writeFile(join(dir, "main.go"), "package main\n");
+		const fetcher = async () => {
+			throw new Error("ECONNREFUSED");
+		};
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		assert.equal(result.batches.architecture.status, "rejected");
+		assert.ok(result.batches.architecture.error, "the failure reason must be recorded");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 // ---------- cost estimation ----------
 
 test("estimateCost matches the documented per-token pricing", () => {
