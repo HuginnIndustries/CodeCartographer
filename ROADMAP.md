@@ -19,7 +19,10 @@ file only moves when a tier completes.
 - Works without an initialized workspace; `codecarto_init` tolerates a
   scout-only `.codecarto/`; scaffold refresh never touches broadside state.
 - Auth-expiry fast bail, empty-lens skip, submission-throw guard.
-- Tests: 18 unit tests (fake-fetcher based), opt-in live smoke script.
+- Live per-model pricing lookup (OpenRouter catalog, 24h cache) with
+  `max_cost` expense guardrail and `force` override; configurable model
+  (`config.yaml` `model` key, now wired through submissions).
+- Tests: 26 unit tests (fake-fetcher based), opt-in live smoke script.
 
 ## Tier 1 — make Broad-Side better at what it does
 

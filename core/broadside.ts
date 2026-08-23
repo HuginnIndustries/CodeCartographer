@@ -39,6 +39,12 @@ export const BROADSIDE_STATE_SCHEMA_VERSION = 1;
 export const BROADSIDE_INPUT_PRICE_PER_M = 0.1875;
 export const BROADSIDE_OUTPUT_PRICE_PER_M = 0.9375;
 
+// OpenRouter's public model catalog; pricing lives per model id.
+export const BROADSIDE_MODELS_URL = "https://openrouter.ai/api/v1/models";
+
+export const BROADSIDE_PRICING_CACHE_FILE = "pricing-cache.json";
+export const BROADSIDE_PRICING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
 export const BROADSIDE_LENS_IDS = [
 	"architecture",
 	"api",
@@ -53,6 +59,15 @@ export const BROADSIDE_POLL_INTERVAL_MS = 15_000;
 export const BROADSIDE_DEFAULT_POLL_BUDGET_MS = 25 * 60 * 1000;
 
 // ---------- types ----------
+
+export type ModelPricing = {
+	/** USD per million input tokens. */
+	inputPerM: number;
+	/** USD per million output tokens. */
+	outputPerM: number;
+	/** Where the numbers came from — affects what the submit text claims. */
+	source: "built-in" | "config" | "live" | "cache";
+};
 
 export type JsonSchemaDef = {
 	name: string;
@@ -120,6 +135,8 @@ export type BroadsideRun = {
 	batches: Partial<Record<BroadsideLensId, BroadsideBatchEntry>>;
 	synthesis: BroadsideSynthesisEntry;
 	totalCost?: number;
+	pricing?: ModelPricing;
+	maxCost?: number;
 };
 
 export type BroadsideStateFile = {
@@ -131,6 +148,10 @@ export type BroadsideConfig = {
 	model: string;
 	apiKey: string;
 	defaultLenses: BroadsideLensId[];
+	/** Approximate run expense limit in USD; 0 means no limit. */
+	maxCost: number;
+	/** Manual pricing overrides (USD per million). Live lookup is preferred. */
+	pricing: { inputPerM: number; outputPerM: number } | null;
 };
 
 export type BroadsideSubmitResult = {
@@ -140,6 +161,8 @@ export type BroadsideSubmitResult = {
 	estimatedTotalCost: number;
 	estimatedInputTokens: number;
 	estimatedOutputTokens: number;
+	pricing: ModelPricing;
+	maxCost?: number;
 };
 
 export type BroadsideCollectResult = {
@@ -1038,13 +1061,14 @@ export function buildBatchRequest(
 	slice: FileSlice,
 	index: number,
 	sliceCount: number,
+	model: string = BROADSIDE_MODEL,
 ): BatchRequest {
 	const moduleTag = sanitizeId(slice.moduleName);
 	const customId = sliceCount > 1 ? `${lens.id}-${moduleTag}-${index + 1}` : `${lens.id}-${moduleTag}`;
 	return {
 		custom_id: customId,
 		body: {
-			model: BROADSIDE_MODEL,
+			model,
 			messages: [
 				{ role: "system", content: lens.systemPrompt(info) },
 				{ role: "user", content: lens.userPrompt(info, slice.content, slice.moduleName) },
@@ -1055,7 +1079,11 @@ export function buildBatchRequest(
 	};
 }
 
-export function estimateCost(lens: LensDefinition, slices: FileSlice[]): {
+export function estimateCost(
+	lens: LensDefinition,
+	slices: FileSlice[],
+	pricing: ModelPricing,
+): {
 	inputTokens: number;
 	outputTokens: number;
 	cost: number;
@@ -1063,8 +1091,8 @@ export function estimateCost(lens: LensDefinition, slices: FileSlice[]): {
 	const inputTokens = Math.ceil(slices.reduce((sum, s) => sum + (lens.maxChars === 0 ? 6000 : s.chars), 0) / 4);
 	const outputTokens = Math.ceil(lens.maxTokens * 0.75);
 	const cost =
-		(inputTokens / 1_000_000) * BROADSIDE_INPUT_PRICE_PER_M +
-		(outputTokens / 1_000_000) * BROADSIDE_OUTPUT_PRICE_PER_M;
+		(inputTokens / 1_000_000) * pricing.inputPerM +
+		(outputTokens / 1_000_000) * pricing.outputPerM;
 	return { inputTokens, outputTokens, cost };
 }
 
@@ -1108,11 +1136,105 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 	const lenses = Array.isArray(raw.default_lenses)
 		? (raw.default_lenses.filter((l): l is BroadsideLensId => BROADSIDE_LENS_IDS.includes(l as BroadsideLensId)))
 		: [];
+	const rawPricing = (raw.pricing ?? {}) as Record<string, unknown>;
+	const inputOverride = typeof rawPricing.input_per_m === "number" ? rawPricing.input_per_m : undefined;
+	const outputOverride = typeof rawPricing.output_per_m === "number" ? rawPricing.output_per_m : undefined;
 	return {
 		model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : BROADSIDE_MODEL,
 		apiKey: typeof raw.api_key === "string" ? raw.api_key.trim() : "",
 		defaultLenses: lenses.length > 0 ? lenses : [...BROADSIDE_LENS_IDS],
+		maxCost: typeof raw.max_cost === "number" && raw.max_cost > 0 ? raw.max_cost : 0,
+		pricing:
+			inputOverride !== undefined && outputOverride !== undefined
+				? { inputPerM: inputOverride, outputPerM: outputOverride }
+				: null,
 	};
+}
+
+// ---------- pricing resolution ----------
+
+type PricingCacheFile = {
+	schema_version: number;
+	models: Record<string, { inputPerM: number; outputPerM: number; fetchedAt: string }>;
+};
+
+async function readPricingCache(broadsideDir: string): Promise<PricingCacheFile | null> {
+	const cachePath = join(broadsideDir, BROADSIDE_PRICING_CACHE_FILE);
+	if (!(await pathExists(cachePath))) return null;
+	try {
+		const parsed = JSON.parse(await readFile(cachePath, "utf8")) as PricingCacheFile;
+		if (!parsed || typeof parsed !== "object" || typeof parsed.models !== "object") return null;
+		return parsed;
+	} catch {
+		return null;
+	}
+}
+
+async function writePricingCache(broadsideDir: string, cache: PricingCacheFile): Promise<void> {
+	await mkdir(broadsideDir, { recursive: true });
+	await writeFile(join(broadsideDir, BROADSIDE_PRICING_CACHE_FILE), `${JSON.stringify(cache, null, "\t")}\n`, "utf8");
+}
+
+export function builtInPricing(model: string): ModelPricing | null {
+	if (model !== BROADSIDE_MODEL) return null;
+	return { inputPerM: BROADSIDE_INPUT_PRICE_PER_M, outputPerM: BROADSIDE_OUTPUT_PRICE_PER_M, source: "built-in" };
+}
+
+export async function resolveModelPricing(
+	broadsideDir: string,
+	config: BroadsideConfig,
+	model: string,
+	apiKey: string,
+	fetcher: FetchLike = fetch as FetchLike,
+): Promise<ModelPricing> {
+	// Manual overrides always win — the user is asserting a price, and a
+	// config assertion is cheaper to respect than to second-guess.
+	if (config.pricing) {
+		return { ...config.pricing, source: "config" };
+	}
+	const builtIn = builtInPricing(model);
+	if (builtIn) return builtIn;
+
+	// Unknown model: check the on-disk cache first, then the live catalog.
+	const cache = await readPricingCache(broadsideDir);
+	const cached = cache?.models[model];
+	if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < BROADSIDE_PRICING_CACHE_TTL_MS) {
+		return { inputPerM: cached.inputPerM, outputPerM: cached.outputPerM, source: "cache" };
+	}
+
+	let live: { inputPerM: number; outputPerM: number } | null = null;
+	try {
+		const resp = await fetcher(BROADSIDE_MODELS_URL, {
+			method: "GET",
+			headers: { Authorization: `Bearer ${apiKey}` },
+			signal: AbortSignal.timeout(30_000),
+		});
+		const data = (await resp.json()) as { data?: Array<Record<string, unknown>> };
+		const hit = (data.data ?? []).find((m) => String(m.id) === model);
+		if (hit && typeof hit.pricing === "object") {
+			const p = hit.pricing as { prompt?: string; completion?: string };
+			const input = typeof p.prompt === "string" ? Number(p.prompt) : NaN;
+			const output = typeof p.completion === "string" ? Number(p.completion) : NaN;
+			if (Number.isFinite(input) && Number.isFinite(output)) {
+				live = { inputPerM: input * 1_000_000, outputPerM: output * 1_000_000 };
+			}
+		}
+	} catch {
+		live = null;
+	}
+
+	if (live) {
+		const updated: PricingCacheFile = { schema_version: 1, models: { ...(cache?.models ?? {}) } };
+		updated.models[model] = { ...live, fetchedAt: new Date().toISOString() };
+		await writePricingCache(broadsideDir, updated);
+		return { ...live, source: "live" };
+	}
+
+	throw new Error(
+		`Could not resolve per-token pricing for batch model "${model}". ` +
+		"Set pricing.input_per_m and pricing.output_per_m in .codecarto/broadside/config.yaml " +
+		"(USD per million tokens), or check the model id against https://openrouter.ai/models?variant=batch.",
+	);
 }
 
 // ---------- batch client ----------
@@ -1123,12 +1245,13 @@ export async function submitBatch(
 	batchRequests: BatchRequest[],
 	apiKey: string,
 	fetcher: FetchLike = fetch as FetchLike,
+	model: string = BROADSIDE_MODEL,
 ): Promise<{ batchId: string; status: string; error?: unknown }> {
 	// The OpenRouter batch endpoint stream-parses the body and requires
 	// `endpoint` and `model` to serialize before `requests` — key order matters.
 	const payload = {
 		endpoint: "/v1/chat/completions",
-		model: BROADSIDE_MODEL,
+		model,
 		requests: batchRequests,
 	};
 	const resp = await fetcher(BROADSIDE_BATCH_URL, {
@@ -1202,39 +1325,78 @@ export async function pollBatchUntilTerminal(
 export async function runBroadsideSubmit(
 	cwd: string,
 	apiKey: string,
-	opts: { lenses?: BroadsideLensId[]; fetcher?: FetchLike } = {},
+	opts: {
+		lenses?: BroadsideLensId[];
+		fetcher?: FetchLike;
+		model?: string;
+		/** Approximate run expense limit in USD; 0 means no limit. */
+		maxCost?: number;
+		/** Submit even when the estimate exceeds maxCost. */
+		force?: boolean;
+	} = {},
 ): Promise<BroadsideSubmitResult> {
 	const info = await collectRepoInfo(cwd);
 	const lensIds = opts.lenses ?? BROADSIDE_LENS_IDS;
 	const broadsideDir = broadsideDirFor(cwd);
+	const model = opts.model ?? BROADSIDE_MODEL;
+
+	// Resolve pricing before anything is submitted: the guardrail must know
+	// the model's real per-token rates, not the default model's.
+	const config = await loadBroadsideConfig(broadsideDir);
+	const pricing = await resolveModelPricing(broadsideDir, config, model, apiKey, opts.fetcher);
+	const limit = opts.maxCost ?? config.maxCost;
+
+	// Slice offline first so the estimate covers every request we would send.
+	const slicesByLens = new Map<BroadsideLensId, FileSlice[]>();
+	let estimatedInputTokens = 0;
+	let estimatedOutputTokens = 0;
+	let estimatedTotalCost = 0;
+	const perLensEstimate: Array<{ lens: LensDefinition; cost: number }> = [];
+	for (const lensId of lensIds) {
+		const lens = getLens(lensId);
+		const slices = await gatherSlices(cwd, lens, info);
+		slicesByLens.set(lensId, slices);
+		const estimate = estimateCost(lens, slices, pricing);
+		estimatedInputTokens += estimate.inputTokens;
+		estimatedOutputTokens += estimate.outputTokens;
+		estimatedTotalCost += estimate.cost;
+		perLensEstimate.push({ lens, cost: estimate.cost });
+	}
+
+	if (limit > 0 && !opts.force && estimatedTotalCost > limit) {
+		const breakdown = perLensEstimate
+			.map(({ lens, cost }) => `  ${lens.name}: ~$${cost.toFixed(4)}`)
+			.join("\n");
+		throw new Error(
+			`Estimated Broad-Side cost ~$${estimatedTotalCost.toFixed(4)} exceeds the run limit ` +
+				`$${limit.toFixed(2)}. Nothing was submitted.\nBreakdown:\n${breakdown}\n` +
+				`Pass force: true to submit anyway, or raise max_cost in .codecarto/broadside/config.yaml.`,
+		);
+	}
+
 	const state = await loadBroadsideState(broadsideDir);
 	const runId = new Date().toISOString().replace(/[:.]/g, "-");
 	const run: BroadsideRun = {
 		id: runId,
 		createdAt: new Date().toISOString(),
-		model: BROADSIDE_MODEL,
+		model,
 		lenses: [...lensIds],
 		status: "in-flight",
 		outputDir: runId,
 		batches: {},
 		synthesis: { status: "pending" },
+		pricing,
+		maxCost: limit > 0 ? limit : undefined,
 	};
 	state.runs.push(run);
 	await saveBroadsideState(broadsideDir, state);
 
-	let estimatedInputTokens = 0;
-	let estimatedOutputTokens = 0;
-	let estimatedTotalCost = 0;
-
 	const submissions: Promise<void>[] = [];
 	for (const lensId of lensIds) {
 		const lens = getLens(lensId);
-		const slices = await gatherSlices(cwd, lens, info);
-		const requests = slices.map((s, i) => buildBatchRequest(lens, info, s, i, slices.length));
-		const estimate = estimateCost(lens, slices);
-		estimatedInputTokens += estimate.inputTokens;
-		estimatedOutputTokens += estimate.outputTokens;
-		estimatedTotalCost += estimate.cost;
+		const slices = slicesByLens.get(lensId) ?? [];
+		const requests = slices.map((s, i) => buildBatchRequest(lens, info, s, i, slices.length, model));
+		const estimate = estimateCost(lens, slices, pricing);
 
 		const entry: BroadsideBatchEntry = {
 			batchId: "",
@@ -1258,7 +1420,7 @@ export async function runBroadsideSubmit(
 				// entry in "submitting" forever — allSettled would swallow the
 				// rejection and collect would never see a terminal status.
 				try {
-					const { batchId, status, error } = await submitBatch(requests, apiKey, opts.fetcher);
+					const { batchId, status, error } = await submitBatch(requests, apiKey, opts.fetcher, model);
 					entry.batchId = batchId;
 					entry.status = status;
 					if (error) entry.error = error;
@@ -1279,6 +1441,8 @@ export async function runBroadsideSubmit(
 		estimatedTotalCost,
 		estimatedInputTokens,
 		estimatedOutputTokens,
+		pricing,
+		maxCost: limit > 0 ? limit : undefined,
 	};
 }
 
@@ -1406,7 +1570,7 @@ export async function runBroadsideCollect(
 			const request: BatchRequest = {
 				custom_id: "synthesis",
 				body: {
-					model: BROADSIDE_MODEL,
+					model: run.model,
 					messages: [
 						{
 							role: "system",
@@ -1435,7 +1599,7 @@ export async function runBroadsideCollect(
 			};
 			run.synthesis.status = "submitted";
 			await saveBroadsideState(broadsideDir, state);
-			const { batchId, error } = await submitBatch([request], apiKey, opts.fetcher);
+			const { batchId, error } = await submitBatch([request], apiKey, opts.fetcher, run.model);
 			if (error) {
 				run.synthesis.status = "failed";
 			} else {
@@ -1479,7 +1643,9 @@ export async function runBroadsideCollect(
 			{
 				experimental: true,
 				method: "Broad-Side (OpenRouter Batch API)",
-				model: BROADSIDE_MODEL,
+				model: run.model,
+				pricing: run.pricing,
+				max_cost: run.maxCost,
 				run_id: run.id,
 				created_at: run.createdAt,
 				status: run.status,
@@ -1583,6 +1749,12 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 	}
 	lines.push(
 		`Estimated total: ~$${result.estimatedTotalCost.toFixed(4)}`,
+		`Pricing: $${result.pricing.inputPerM.toFixed(4)}/M in, $${result.pricing.outputPerM.toFixed(4)}/M out (${result.pricing.source})`,
+	);
+	if (result.maxCost) {
+		lines.push(`Run limit: $${result.maxCost.toFixed(2)} (enforced on estimate; pass force to override)`);
+	}
+	lines.push(
 		`Results will land in ${result.outputDir}/`,
 		"Call codecarto_broadside with action 'collect' once batches finish, or pass wait_seconds on submit to block.",
 		"Disclaimer: Broad-Side findings are unverified scouting signals from a batch model, not validated claims.",

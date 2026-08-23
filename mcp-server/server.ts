@@ -996,6 +996,8 @@ export async function handleBroadside(args: {
 	api_key?: string;
 	wait_seconds?: number;
 	include_synthesis?: boolean;
+	max_cost?: number;
+	force?: boolean;
 }) {
 	const cwd = await validateCwd(args.cwd);
 	const action = args.action ?? "submit";
@@ -1025,7 +1027,14 @@ export async function handleBroadside(args: {
 			lenses = config.defaultLenses;
 		}
 
-		const result = await runBroadsideSubmit(cwd, apiKey, { lenses }).catch((error) => {
+		const maxCost = typeof args.max_cost === "number" && args.max_cost > 0 ? args.max_cost : config.maxCost;
+
+		const result = await runBroadsideSubmit(cwd, apiKey, {
+			lenses,
+			model: config.model,
+			maxCost,
+			force: args.force === true,
+		}).catch((error) => {
 			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
 
@@ -1045,6 +1054,8 @@ export async function handleBroadside(args: {
 			outputDir: result.outputDir,
 			batches: result.batches,
 			estimatedTotalCost: result.estimatedTotalCost,
+			pricing: result.pricing,
+			maxCost: result.maxCost,
 		});
 	}
 
@@ -1383,6 +1394,15 @@ const TOOLS = [
 				include_synthesis: {
 					type: "boolean",
 					description: "Run the cross-lens synthesis pass once all lens batches complete (default true).",
+				},
+				max_cost: {
+					type: "number",
+					description:
+						"Approximate run expense limit in USD. The submit action estimates the run cost from slice sizes and the configured model's per-token pricing (live OpenRouter lookup, cached 24h) and refuses to submit when the estimate exceeds the limit unless force is true. Falls back to max_cost in .codecarto/broadside/config.yaml.",
+				},
+				force: {
+					type: "boolean",
+					description: "Submit even when the cost estimate exceeds max_cost (default false).",
 				},
 			},
 			required: ["cwd", "action"],

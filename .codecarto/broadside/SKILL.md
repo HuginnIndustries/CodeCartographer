@@ -66,3 +66,9 @@ codecarto_broadside {cwd, action: "status"}                   # show recorded ru
 It works on any git repository — no initialized workspace required — and needs
 an OpenRouter API key via the `api_key` parameter, the `OPENROUTER_API_KEY`
 environment variable, or `api_key` in this directory's `config.yaml`.
+
+Submits are priced before they fire: Broad-Side estimates the run from the
+collected file sizes against the model's live per-token pricing and refuses
+when the estimate exceeds `max_cost` (`config.yaml` or the tool parameter)
+unless `force` is passed. See `config.yaml` for the model, limit, and manual
+pricing-override keys.

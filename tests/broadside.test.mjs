@@ -17,6 +17,7 @@ const {
 	BROADSIDE_LENS_IDS,
 	BROADSIDE_MODEL,
 	buildBatchRequest,
+	builtInPricing,
 	collectRepoInfo,
 	defaultBroadsideState,
 	estimateCost,
@@ -26,6 +27,7 @@ const {
 	loadBroadsideState,
 	listLenses,
 	renderFindingsMarkdown,
+	resolveModelPricing,
 	runBroadsideCollect,
 	runBroadsideStatus,
 	runBroadsideSubmit,
@@ -206,11 +208,20 @@ test("estimateCost matches the documented per-token pricing", () => {
 		{ moduleName: "a", content: "x".repeat(4000), fileCount: 1, chars: 4000 },
 		{ moduleName: "b", content: "y".repeat(4000), fileCount: 1, chars: 4000 },
 	];
-	const { inputTokens, outputTokens, cost } = estimateCost(lens, slices);
+	const pricing = { inputPerM: 0.1875, outputPerM: 0.9375, source: "built-in" };
+	const { inputTokens, outputTokens, cost } = estimateCost(lens, slices, pricing);
 	assert.equal(inputTokens, 2000); // 8000 chars / 4
 	assert.equal(outputTokens, 4500); // maxTokens 6000 * 0.75
 	const expected = (2000 / 1e6) * 0.1875 + (4500 / 1e6) * 0.9375;
 	assert.ok(Math.abs(cost - expected) < 1e-12);
+});
+
+test("estimateCost scales with the pricing table, not the default model", () => {
+	const lens = getLens("defect");
+	const slices = [{ moduleName: "a", content: "x".repeat(40000), fileCount: 1, chars: 40000 }];
+	const cheap = estimateCost(lens, slices, { inputPerM: 0.1875, outputPerM: 0.9375, source: "built-in" });
+	const expensive = estimateCost(lens, slices, { inputPerM: 3.75, outputPerM: 84, source: "live" });
+	assert.ok(expensive.cost > cheap.cost * 20, "an $84/M output model must estimate far higher");
 });
 
 // ---------- state & config ----------
@@ -270,6 +281,154 @@ test("config falls back to defaults and honors overrides", async () => {
 		await writeFile(join(dir, "config.yaml"), "default_lenses:\n  - bogus\n  - architecture\n");
 		const filtered = await loadBroadsideConfig(dir);
 		assert.deepEqual(filtered.defaultLenses, ["architecture"], "unknown lens ids must be dropped");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+// ---------- pricing resolution & expense limits ----------
+
+function modelsCatalog(body) {
+	return { data: body };
+}
+
+test("builtInPricing covers only the default model", () => {
+	assert.ok(core.builtInPricing(BROADSIDE_MODEL));
+	assert.equal(core.builtInPricing("openai/gpt-5.2-pro:batch"), null);
+});
+
+test("resolveModelPricing prefers config overrides over everything", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-pricing-"));
+	try {
+		const config = {
+			model: "custom/model",
+			apiKey: "",
+			defaultLenses: ["architecture"],
+			maxCost: 0,
+			pricing: { inputPerM: 1.5, outputPerM: 42 },
+		};
+		const fetcher = async () => {
+			throw new Error("the network must not be touched when config pricing exists");
+		};
+		const pricing = await resolveModelPricing(dir, config, "custom/model", "sk-fake", fetcher);
+		assert.deepEqual(pricing, { inputPerM: 1.5, outputPerM: 42, source: "config" });
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("resolveModelPricing falls back to built-in for the default model without network", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-pricing-"));
+	try {
+		const config = { model: BROADSIDE_MODEL, apiKey: "", defaultLenses: ["architecture"], maxCost: 0, pricing: null };
+		const fetcher = async () => {
+			throw new Error("the default model needs no lookup");
+		};
+		const pricing = await resolveModelPricing(dir, config, BROADSIDE_MODEL, "sk-fake", fetcher);
+		assert.equal(pricing.source, "built-in");
+		assert.equal(pricing.inputPerM, 0.1875);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("resolveModelPricing looks up unknown models live and caches the result", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-pricing-"));
+	try {
+		const config = { model: "openai/gpt-5.2-pro:batch", apiKey: "", defaultLenses: ["architecture"], maxCost: 0, pricing: null };
+		let fetches = 0;
+		const fetcher = async () => {
+			fetches += 1;
+			return fakeResponse(
+				200,
+				modelsCatalog([{ id: "openai/gpt-5.2-pro:batch", pricing: { prompt: "0.00000375", completion: "0.000084" } }]),
+			);
+		};
+		const pricing = await resolveModelPricing(dir, config, "openai/gpt-5.2-pro:batch", "sk-fake", fetcher);
+		assert.equal(pricing.source, "live");
+		assert.equal(pricing.inputPerM, 3.75);
+		assert.equal(pricing.outputPerM, 84);
+		assert.equal(fetches, 1);
+
+		const cached = await resolveModelPricing(dir, config, "openai/gpt-5.2-pro:batch", "sk-fake", fetcher);
+		assert.equal(cached.source, "cache");
+		assert.equal(fetches, 1, "second resolution must come from the 24h cache");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("resolveModelPricing refuses unknown models it cannot price", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-pricing-"));
+	try {
+		const config = { model: "vendor/mystery", apiKey: "", defaultLenses: ["architecture"], maxCost: 0, pricing: null };
+		const fetcher = async () => fakeResponse(200, modelsCatalog([{ id: "other/model", pricing: { prompt: "0.000001", completion: "0.000002" } }]));
+		await assert.rejects(
+			() => resolveModelPricing(dir, config, "vendor/mystery", "sk-fake", fetcher),
+			/Could not resolve per-token pricing/,
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("submit refuses over-budget runs and creates no run entry; force bypasses", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-limit-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await mkdir(join(dir, "big"), { recursive: true });
+		for (let i = 0; i < 40; i++) {
+			await writeFile(join(dir, "big", `file${i}.go`), "package big\n" + `// ${"y".repeat(2000)}\n`);
+		}
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				return fakeResponse(202, { id: "batch-ok", status: "validating" });
+			}
+			return fakeResponse(200, { id: "x", status: "in_progress" });
+		};
+
+		await assert.rejects(
+			() => runBroadsideSubmit(dir, "sk-fake", { lenses: ["defect"], fetcher, maxCost: 0.0001 }),
+			/estimated.*exceeds the run limit|exceeds the run limit/i,
+		);
+		let state = await loadBroadsideState(join(dir, ".codecarto", "broadside"));
+		assert.equal(state.runs.length, 0, "a refused submit must not create a run entry");
+
+		const forced = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["defect"], fetcher, maxCost: 0.0001, force: true });
+		assert.equal(forced.batches.defect.status, "validating");
+		assert.equal(forced.maxCost, 0.0001);
+
+		state = await loadBroadsideState(join(dir, ".codecarto", "broadside"));
+		assert.equal(state.runs.length, 1);
+		assert.equal(state.runs[0].pricing.source, "built-in");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("submit passes the configured model into batch payloads", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-model-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await writeFile(join(dir, "main.go"), "package main\n");
+		let payload;
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				payload = JSON.parse(init.body);
+				return fakeResponse(202, { id: "batch-m", status: "validating" });
+			}
+			return fakeResponse(200, { id: "x", status: "in_progress" });
+		};
+		// config pricing override: submit must not hit the network for pricing.
+		await mkdir(join(dir, ".codecarto", "broadside"), { recursive: true });
+		await writeFile(
+			join(dir, ".codecarto", "broadside", "config.yaml"),
+			"model: openai/gpt-5.2-pro:batch\npricing:\n  input_per_m: 3.75\n  output_per_m: 84\n",
+		);
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher, model: "openai/gpt-5.2-pro:batch" });
+		assert.equal(payload.model, "openai/gpt-5.2-pro:batch");
+		assert.equal(payload.requests[0].body.model, "openai/gpt-5.2-pro:batch");
+		assert.equal(result.pricing.source, "config");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
