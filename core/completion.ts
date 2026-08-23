@@ -1,7 +1,7 @@
 import { appendFile, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { getNextEligiblePhase, resolvePhase } from "./pipeline.ts";
+import { getNextEligiblePhase, resolvePhase, validatePhaseOutput } from "./pipeline.ts";
 import { applyHandoff, autoAssignIds, buildTerminalNextActions, loadHandoffFile, normalizeStatus } from "./status.ts";
 import type { NormalizedStatus, OpenQuestionEntry, PhaseHandoff, ProposedConventionEntry, ValidationResult, WorkspaceState } from "./types.ts";
 import { dateOnly, pathExists, uniqueStrings } from "./utils.ts";
@@ -335,6 +335,25 @@ export async function completeValidatedPhase(
 		const phase = resolvePhase(lockedState, validation.phaseId);
 		if (!phase?.primary_output) throw new Error(`Phase ${validation.phaseId} is missing primary_output.`);
 
+		// Re-validate the output under the lock (#132). The caller's
+		// validation snapshot can predate a concurrent edit or another
+		// session's completion; a stale PASS must not complete a phase whose
+		// output no longer validates. The locked recheck is the authoritative
+		// one and is what every artifact below is written from.
+		// A validation that never touched a file on disk (no outputPath)
+		// has nothing to race against, so the caller's result stands — the
+		// real surfaces (MCP, Pi) always validate real files.
+		const authoritative = validation.outputPath
+			? await validatePhaseOutput(lockedState, validation.phaseId)
+			: validation;
+		if (authoritative.overall === "FAIL" || authoritative.overall === "MISSING") {
+			throw new Error(
+				`Refusing to complete ${validation.phaseId}: the output no longer validates under the status lock ` +
+				`(now ${authoritative.overall}). It changed since the last validation — re-run validation and fix the output first.`,
+			);
+		}
+		const lockedValidation = authoritative;
+
 		const nextStatus = normalizeStatus(lockedState.status, lockedState.pipeline, lockedState.status.pipeline, lockedState.cwd);
 		const existingPhase = nextStatus.phases[validation.phaseId] ?? {
 			status: "pending",
@@ -343,7 +362,7 @@ export async function completeValidatedPhase(
 			open_questions: [],
 			carry_forward: [],
 		};
-		const gapEntries: OpenQuestionEntry[] = validation.rows
+		const gapEntries: OpenQuestionEntry[] = lockedValidation.rows
 			.filter((row) => row.result.toUpperCase().includes("PARTIAL"))
 			.map((row) => ({
 				kind: "needs-maintainer-decision",
@@ -363,7 +382,7 @@ export async function completeValidatedPhase(
 				...existingPhase.owner_notes,
 				`Completed via ${sourceLabel}.`,
 				`Primary output: .codecarto/${validation.primaryOutput}`,
-				`Validation: ${validation.overall}`,
+				`Validation: ${lockedValidation.overall}`,
 			]),
 			outputs_present: uniqueStrings([...existingPhase.outputs_present, validation.primaryOutput]),
 			open_questions: mergedOpenQuestions,
@@ -378,7 +397,7 @@ export async function completeValidatedPhase(
 			? [`Begin ${nextEligible.id} phase by producing ${nextEligible.primary_output ?? `findings/${nextEligible.id}/`}`]
 			: buildTerminalNextActions(nextStatus);
 
-		const artifacts = await writeCompletionArtifacts(lockedState.workspaceDir, validation.phaseId, validation, completionTimestamp, handoff);
+		const artifacts = await writeCompletionArtifacts(lockedState.workspaceDir, validation.phaseId, lockedValidation, completionTimestamp, handoff);
 		closeoutPath = artifacts.closeoutPath;
 		orchestratorCheckpoint = buildOrchestratorCheckpoint(artifacts.decisionsAppended, artifacts.totalPendingProposals, nextStatus);
 		return { state: { ...nextWorkspace, status: nextStatus } };

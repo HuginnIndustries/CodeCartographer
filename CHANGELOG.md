@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: `writeLibraryConfig` no longer ENOENTs on parentless paths** (#128). The hand-rolled `includes("/")` separator check treated every Windows path as a bare filename, leaving `mkdir` a no-op before the write failed. Now derives the parent directory with `dirname()`.
+- **`isWithinPath` accepts subpaths of filesystem roots** (#130). Appending a separator to an already-terminated root (`/` → `//`, `C:\` → `C:\\`) produced a prefix no real path starts with, rejecting every legitimate subpath. Trailing separators are now respected before prefixing.
+- **`acquireLock` closes the lock descriptor when `writeFile` throws** (#131). A non-EEXIST write failure previously leaked the file handle until GC.
+- **Phase continuation no longer burns the full compaction settle timeout** (#129). When a phase run ends without a compaction event, the pending compaction promise is now settled with `false`, so `waitForCompaction` returns immediately instead of waiting out `COMPACTION_SETTLE_TIMEOUT_MS` on every continuation.
+- **Completion re-validates under the status lock** (#132). `completeValidatedPhase` now re-runs `validatePhaseOutput` inside the atomic status update; a stale PASS whose output changed since the caller's validation refuses to complete (and leaves status untouched) instead of completing a phase on evidence that no longer holds. Validations that never touched a file on disk (no `outputPath`) keep the legacy path, matching the synthetic-validation contract in unit tests.
+
 ## [0.16.0] — 2026-08-17
 
 The field-test round. Immediately after 0.15.0 shipped, the same 7-phase deepseek-harness analysis was re-run on a fresh worktree through the published binary — this time with the driving chat as orchestrator — and the run's own gaps became this release (#111–#114): the very first completion appended decision rows without their promised heading, both full runs ended with no dashboard ever rendered, the analysis→publish→synthesis library loop was unreachable from any served text, and the terminal completion message named nothing actionable while skills, amendments, a publishable spec, and the usage log all sat unused.
