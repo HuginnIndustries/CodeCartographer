@@ -5,7 +5,9 @@
 // content-hash idempotence, force-new-version override, namespacing
 // (on and off), slug validation, readEntry (latest + specific version),
 // listEntries filters, reindex from a hand-edited tree, malformed
-// metadata graceful fallback, and commitPublish in a non-git directory.
+// metadata graceful fallback, commitPublish in a non-git directory, and the
+// source_repo collision guard that stops one project's spec landing in
+// another's version history.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -34,6 +36,8 @@ const {
 	listEntries,
 	reindex,
 	commitPublish,
+	normalizeSourceRepo,
+	sameSourceRepo,
 } = lib;
 
 async function makeLibrary({ namespaced = true, name = "test-library" } = {}) {
@@ -507,6 +511,276 @@ test("listEntries regenerates index when it is missing", async () => {
 });
 
 // ─── Git ──────────────────────────────────────────────────────────────────
+
+// ─── source_repo collision guard ───────────────────────────────────────────
+
+test("normalizeSourceRepo collapses spellings of the same repository", () => {
+	const canonical = "github.com/acme/tool";
+	for (const variant of [
+		"https://github.com/acme/tool",
+		"https://github.com/acme/tool.git",
+		"https://github.com/acme/tool/",
+		"http://github.com/acme/tool",
+		"ssh://github.com/acme/tool.git",
+		"git@github.com:acme/tool.git",
+		"https://www.github.com/acme/tool",
+		"github.com/acme/tool",
+		"https://GitHub.com/Acme/Tool",
+		"github.com\\acme\\tool",
+		"  https://github.com/acme/tool.git  ",
+		// Scheme plus credentials. These have to survive the userinfo strip, and
+		// the scheme has to come off before the SCP branch sees the colon.
+		"ssh://git@github.com/acme/tool.git",
+		"ssh://git@github.com:22/acme/tool.git",
+		"https://git@github.com/acme/tool",
+		"https://user:token@github.com/acme/tool.git",
+		"https://oauth2:x-oauth-basic@github.com/acme/tool.git",
+		"git+https://github.com/acme/tool.git",
+		"git://github.com/acme/tool.git",
+		"https://github.com:443/acme/tool",
+		"http://github.com:80/acme/tool",
+		// Repeated separators name the same location.
+		"https://github.com//acme//tool",
+		"github.com/acme//tool/",
+	]) {
+		assert.equal(normalizeSourceRepo(variant), canonical, `variant: ${variant}`);
+	}
+});
+
+test("normalizeSourceRepo folds case only where the target is case-insensitive", () => {
+	// Hosts and the repository paths the forges serve over them are
+	// case-insensitive, so these collapse.
+	assert.equal(sameSourceRepo("https://GitHub.com/Acme/Tool", "https://github.com/acme/tool"), true);
+	assert.equal(sameSourceRepo("git@GitHub.com:Acme/Tool.git", "github.com/acme/tool"), true);
+	// Windows drive paths are case-insensitive too.
+	assert.equal(sameSourceRepo("C:\\Repos\\Tool", "c:/repos/tool"), true);
+
+	// A POSIX absolute path is not. /srv/Repos/tool and /srv/repos/tool are two
+	// directories on Linux, and folding them would hide the very collision this
+	// comparison exists to catch. Pi records the analyzed directory as
+	// source_repo, so this is the common shape there, not a curiosity.
+	assert.equal(sameSourceRepo("/srv/Repos/tool", "/srv/repos/tool"), false);
+	assert.equal(sameSourceRepo("~/Work/tool", "~/work/tool"), false);
+	// Same path, same case, reached via file:// — still one location.
+	assert.equal(sameSourceRepo("file:///srv/Repos/tool", "/srv/Repos/tool"), true);
+	// A leading `//` is a UNC share on Windows, not /server/share.
+	assert.equal(sameSourceRepo("//server/share/tool", "/server/share/tool"), false);
+});
+
+test("normalizeSourceRepo keeps genuinely different repositories distinct", () => {
+	assert.equal(sameSourceRepo("https://github.com/openai/whisper", "https://github.com/acme/whisper"), false);
+	assert.equal(sameSourceRepo("https://github.com/acme/tool", "https://gitlab.com/acme/tool"), false);
+	assert.equal(sameSourceRepo("https://github.com/acme/tool", "https://github.com/acme/tool-2"), false);
+	assert.equal(sameSourceRepo("/home/a/tool", "/home/b/tool"), false);
+	// A non-default port distinguishes two services on one host, so it survives
+	// normalization even though 22/80/443 do not.
+	assert.equal(sameSourceRepo("https://git.internal:8080/a/tool", "https://git.internal:9090/a/tool"), false);
+	// Windows drive letters must not be read as SCP host:path syntax.
+	assert.equal(sameSourceRepo("C:/repos/tool", "D:/repos/tool"), false);
+	assert.equal(sameSourceRepo("git@github.com:acme/tool", "git@github.com:acme/other"), false);
+	assert.equal(sameSourceRepo("https://github.com/acme/tool", "https://github.com/acme"), false);
+});
+
+test("publish is not refused when the same repo is re-published over SSH", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		// The realistic shape of the false positive: one clone uses HTTPS, a later
+		// one uses an ssh:// remote carrying a git@ user. Same repository.
+		await publishEntry(libraryRoot, "# v1\n", sampleInput({
+			source_repo: "https://github.com/myorg/hexbridge",
+		}));
+		const result = await publishEntry(libraryRoot, "# v2\n", sampleInput({
+			source_repo: "ssh://git@github.com/myorg/hexbridge.git",
+		}));
+		assert.equal(result.version, 2);
+		assert.equal(result.isNewVersion, true);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("publish refuses a second project that derived the same slug", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		// Both repos end in "whisper", so deriveSlug produces one slug for both.
+		assert.equal(deriveSlug("https://github.com/openai/whisper"), "whisper");
+		assert.equal(deriveSlug("https://github.com/acme/whisper"), "whisper");
+
+		await publishEntry(libraryRoot, "# spec A\n", sampleInput({
+			slug: "whisper",
+			source_repo: "https://github.com/openai/whisper",
+		}));
+
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# spec B\n", sampleInput({
+				slug: "whisper",
+				source_repo: "https://github.com/acme/whisper",
+			})),
+			/Refusing to publish.*openai\/whisper.*acme\/whisper/s,
+		);
+
+		// The first project's entry is untouched: still v1, still its own repo.
+		const entry = await readEntry(libraryRoot, { slug: "whisper", namespace: "james" });
+		assert.equal(entry.metadata.version, 1);
+		assert.equal(entry.metadata.source_repo, "https://github.com/openai/whisper");
+		assert.equal(entry.spec, "# spec A\n");
+	} finally {
+		await cleanup();
+	}
+});
+
+test("publish refuses two local directories that differ only in case", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		// The Pi shape of the bug: source_repo is the analyzed directory, and slug
+		// derives from the same string, so sibling trees collide. Case is the part
+		// a naive fold would throw away.
+		await publishEntry(libraryRoot, "# spec A\n", sampleInput({
+			slug: "tool",
+			source_repo: "/srv/Repos/tool",
+		}));
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# spec B\n", sampleInput({
+				slug: "tool",
+				source_repo: "/srv/repos/tool",
+			})),
+			/Refusing to publish/,
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("the refusal names where the override actually lives", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishEntry(libraryRoot, "# spec A\n", sampleInput({
+			slug: "whisper",
+			source_repo: "https://github.com/openai/whisper",
+		}));
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# spec B\n", sampleInput({
+				slug: "whisper",
+				source_repo: "https://github.com/acme/whisper",
+			})),
+			(err) => {
+				// Both spellings, so the reader can act on whichever surface they are
+				// on. The message must not tell them to "pass" an option the caller
+				// may not expose: /codecarto-publish in Pi takes no arguments.
+				assert.match(err.message, /allow_source_repo_change/);
+				assert.match(err.message, /allowSourceRepoChange/);
+				assert.doesNotMatch(err.message, /Pass an explicit/);
+				return true;
+			},
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("the collision guard also covers the metadata-only path", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		const spec = "# identical bytes\n";
+		await publishEntry(libraryRoot, spec, sampleInput({
+			slug: "whisper",
+			source_repo: "https://github.com/openai/whisper",
+		}));
+
+		// Identical spec bytes would otherwise take the in-place metadata update
+		// branch and silently rewrite the other project's source_repo.
+		await assert.rejects(
+			() => publishEntry(libraryRoot, spec, sampleInput({
+				slug: "whisper",
+				source_repo: "https://github.com/acme/whisper",
+				headline: "A different project entirely.",
+			})),
+			/Refusing to publish/,
+		);
+
+		const entry = await readEntry(libraryRoot, { slug: "whisper", namespace: "james" });
+		assert.equal(entry.metadata.source_repo, "https://github.com/openai/whisper");
+		assert.equal(entry.metadata.headline, sampleInput().headline);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("publish accepts the same repository spelled differently", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishEntry(libraryRoot, "# v1\n", sampleInput({
+			source_repo: "https://github.com/myorg/hexbridge",
+		}));
+		// A later run reporting the SCP form plus .git must not read as a new project.
+		const result = await publishEntry(libraryRoot, "# v2\n", sampleInput({
+			source_repo: "git@github.com:myorg/hexbridge.git",
+		}));
+		assert.equal(result.version, 2);
+		assert.equal(result.isNewVersion, true);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("allowSourceRepoChange permits a genuine repository move", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishEntry(libraryRoot, "# v1\n", sampleInput({
+			source_repo: "https://github.com/oldorg/hexbridge",
+		}));
+		const result = await publishEntry(
+			libraryRoot,
+			"# v2\n",
+			sampleInput({ source_repo: "https://github.com/neworg/hexbridge" }),
+			{ allowSourceRepoChange: true },
+		);
+		assert.equal(result.version, 2);
+		const entry = await readEntry(libraryRoot, { slug: "hexbridge", namespace: "james" });
+		assert.equal(entry.metadata.source_repo, "https://github.com/neworg/hexbridge");
+	} finally {
+		await cleanup();
+	}
+});
+
+test("the collision guard stays out of the way when metadata is unreadable", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishEntry(libraryRoot, "# v1\n", sampleInput());
+		// Corrupt the recorded metadata: source_repo becomes undeterminable, so the
+		// guard has nothing to compare and must not block the publish.
+		const metaPath = join(libraryRoot, ENTRIES_DIR, "james", "hexbridge", "v1", METADATA_FILE);
+		await writeFile(metaPath, ":::not valid yaml:::\n", "utf8");
+
+		const result = await publishEntry(libraryRoot, "# v2\n", sampleInput({
+			source_repo: "https://github.com/someoneelse/hexbridge",
+		}));
+		assert.equal(result.version, 2);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("forceNewVersion does not bypass the collision guard", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishEntry(libraryRoot, "# spec A\n", sampleInput({
+			slug: "whisper",
+			source_repo: "https://github.com/openai/whisper",
+		}));
+		await assert.rejects(
+			() => publishEntry(
+				libraryRoot,
+				"# spec B\n",
+				sampleInput({ slug: "whisper", source_repo: "https://github.com/acme/whisper" }),
+				{ forceNewVersion: true },
+			),
+			/Refusing to publish/,
+		);
+	} finally {
+		await cleanup();
+	}
+});
 
 test("commitPublish returns not-a-git-repo when .git is missing", async () => {
 	const { libraryRoot, cleanup } = await makeLibrary();

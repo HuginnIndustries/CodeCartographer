@@ -684,7 +684,10 @@ export async function handlePublish(args: Record<string, unknown>) {
 			confidentiality,
 			generation,
 		},
-		{ forceNewVersion: args.force_new_version === true },
+		{
+			forceNewVersion: args.force_new_version === true,
+			allowSourceRepoChange: args.allow_source_repo_change === true,
+		},
 	);
 
 	const lines = [
@@ -1244,6 +1247,11 @@ const TOOLS = [
 					},
 				},
 				force_new_version: { type: "boolean" },
+				allow_source_repo_change: {
+					type: "boolean",
+					description:
+						"Permit publishing when the target entry already records a different source_repo. Off by default, because a mismatch usually means two projects derived the same slug and the spec would land in the wrong version history. Set only when the repository itself moved.",
+				},
 			},
 			required: ["source_repo", "headline"],
 		},
