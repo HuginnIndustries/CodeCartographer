@@ -22,7 +22,11 @@ file only moves when a tier completes.
 - Live per-model pricing lookup (OpenRouter catalog, 24h cache) with
   `max_cost` expense guardrail and `force` override; configurable model
   (`config.yaml` `model` key, now wired through submissions).
-- Tests: 26 unit tests (fake-fetcher based), opt-in live smoke script.
+- `models` action: batch-model catalog with pricing, context, output caps,
+  structured-output support, and optional Artificial Analysis coding
+  benchmarks; submit pre-flight refuses models without structured outputs
+  and clamps lens `max_tokens` to the provider's completion ceiling.
+- Tests: 31 unit tests (fake-fetcher based), opt-in live smoke script.
 
 ## Tier 1 — make Broad-Side better at what it does
 
@@ -45,7 +49,7 @@ file only moves when a tier completes.
 
 | Item | Issue | Notes |
 |---|---|---|
-| **Multi-model** — DeepSeek/Anthropic batch endpoints behind the lens registry | [#141](https://github.com/HuginnIndustries/CodeCartographer/issues/141) | Stronger batch models for semantic lenses at ~2-3× cost |
+| **Multi-model** — DeepSeek/Anthropic batch endpoints behind the lens registry | [#141](https://github.com/HuginnIndustries/CodeCartographer/issues/141) | Partially shipped: catalog lookup, `models` action, pricing + capability pre-flight. Remaining: per-model prompt tweaks and a stronger default for semantic lenses |
 | **Incremental re-scouting** — diff against previous run's HEAD, rescan changed modules only | [#142](https://github.com/HuginnIndustries/CodeCartographer/issues/142) | Makes recurring scans O(delta) |
 | **CodeCartoShow pipeline stage** — BATCH-SCOUT between SELECT and the interactive run | [CodeCartoShow#1](https://github.com/HuginnIndustries/CodeCartoShow/issues/1) | `scripts/batch-analyze.py` proved it; evidence rules apply unchanged |
 

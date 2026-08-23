@@ -55,9 +55,11 @@ import {
 	isWithinPathResolved,
 	type LibraryIndexEntry,
 	type LibraryVisibility,
+	listBatchModels,
 	listEntries,
 	listGuideTopics,
 	loadBroadsideConfig,
+	modelsText,
 	readGuide,
 	listSkillNames,
 	loadCodecartoConfig,
@@ -991,18 +993,19 @@ function resolveBroadsideApiKey(explicit: string | undefined, config: { apiKey: 
 
 export async function handleBroadside(args: {
 	cwd: string;
-	action: "submit" | "collect" | "status";
+	action: "submit" | "collect" | "status" | "models";
 	lenses?: string[];
 	api_key?: string;
 	wait_seconds?: number;
 	include_synthesis?: boolean;
 	max_cost?: number;
 	force?: boolean;
+	include_benchmarks?: boolean;
 }) {
 	const cwd = await validateCwd(args.cwd);
 	const action = args.action ?? "submit";
-	if (!["submit", "collect", "status"].includes(action)) {
-		throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${action}. Valid actions: submit, collect, status.`);
+	if (!["submit", "collect", "status", "models"].includes(action)) {
+		throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${action}. Valid actions: submit, collect, status, models.`);
 	}
 
 	const config = await loadBroadsideConfig(broadsideDirFor(cwd));
@@ -1014,6 +1017,19 @@ export async function handleBroadside(args: {
 
 	const apiKey = resolveBroadsideApiKey(args.api_key, config);
 	const waitMs = typeof args.wait_seconds === "number" && args.wait_seconds > 0 ? args.wait_seconds * 1000 : undefined;
+
+	if (action === "models") {
+		const { entries, benchmarks } = await listBatchModels(broadsideDirFor(cwd), config, apiKey, {
+			includeBenchmarks: args.include_benchmarks === true,
+		}).catch((error) => {
+			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		});
+		return textResult(modelsText(entries, { benchmarks, defaultModel: config.model }), {
+			models: entries,
+			defaultModel: config.model,
+			benchmarkMeta: benchmarks?.meta ?? null,
+		});
+	}
 
 	if (action === "submit") {
 		let lenses: BroadsideLensId[];
@@ -1368,15 +1384,15 @@ const TOOLS = [
 	{
 		name: "codecarto_broadside",
 		description:
-			"Broad-Side: fire a cheap batch reconnaissance scan at a repository via the OpenRouter Batch API. Six lenses (architecture, api, security, defect, conventions, porting) run as asynchronous single-turn prompts with structured JSON schemas; results land in .codecarto/broadside/<run>/ as JSON plus markdown, with an optional cross-lens synthesis report. Works on any git repository — no CodeCartographer workspace required. Requires an OpenRouter API key (api_key param, OPENROUTER_API_KEY env var, or .codecarto/broadside/config.yaml). Findings are unverified scouting signals from a batch model, not validated claims — they tell the interactive pipeline where to look. Actions: submit (fire batches, returns batch ids and cost estimate), collect (poll to completion, save results, optionally synthesize), status (show recorded runs).",
+			"Broad-Side: fire a cheap batch reconnaissance scan at a repository via the OpenRouter Batch API. Six lenses (architecture, api, security, defect, conventions, porting) run as asynchronous single-turn prompts with structured JSON schemas; results land in .codecarto/broadside/<run>/ as JSON plus markdown, with an optional cross-lens synthesis report. Works on any git repository — no CodeCartographer workspace required. Requires an OpenRouter API key (api_key param, OPENROUTER_API_KEY env var, or .codecarto/broadside/config.yaml). Findings are unverified scouting signals from a batch model, not validated claims — they tell the interactive pipeline where to look. Actions: submit (fire batches, returns batch ids and cost estimate), collect (poll to completion, save results, optionally synthesize), status (show recorded runs), models (list batch-capable models with pricing, context, output caps, structured-output support, and optional coding benchmarks).",
 		inputSchema: {
 			type: "object",
 			properties: {
 				cwd: { type: "string", description: "Absolute path to the target repository." },
 				action: {
 					type: "string",
-					enum: ["submit", "collect", "status"],
-					description: "submit fires all lens batches and returns batch ids; collect polls submitted batches, saves results, and optionally runs the synthesis pass; status shows recorded runs.",
+					enum: ["submit", "collect", "status", "models"],
+					description: "submit fires all lens batches and returns batch ids; collect polls submitted batches, saves results, and optionally runs the synthesis pass; status shows recorded runs; models lists batch-capable models with pricing and capabilities.",
 				},
 				lenses: {
 					type: "array",
@@ -1403,6 +1419,10 @@ const TOOLS = [
 				force: {
 					type: "boolean",
 					description: "Submit even when the cost estimate exceeds max_cost (default false).",
+				},
+				include_benchmarks: {
+					type: "boolean",
+					description: "For action 'models': annotate each model with its Artificial Analysis coding index (extra API call; default false).",
 				},
 			},
 			required: ["cwd", "action"],

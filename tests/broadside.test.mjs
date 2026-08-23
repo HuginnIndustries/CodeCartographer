@@ -21,11 +21,14 @@ const {
 	collectRepoInfo,
 	defaultBroadsideState,
 	estimateCost,
+	fetchCodingBenchmarks,
 	gatherSlices,
 	getLens,
+	listBatchModels,
 	loadBroadsideConfig,
 	loadBroadsideState,
 	listLenses,
+	modelsText,
 	renderFindingsMarkdown,
 	resolveModelPricing,
 	runBroadsideCollect,
@@ -432,6 +435,131 @@ test("submit passes the configured model into batch payloads", async () => {
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+});
+
+// ---------- model catalog & models action ----------
+
+function catalogWith(...models) {
+	return { data: models };
+}
+
+const BATCH_MODEL_SHAPE = (id, prompt, completion, extra = {}) => ({
+	id,
+	name: id,
+	pricing: { prompt: String(prompt), completion: String(completion) },
+	context_length: 1_000_000,
+	top_provider: { max_completion_tokens: 65_536 },
+	supported_parameters: ["tools", "structured_outputs"],
+	expiration_date: null,
+	...extra,
+});
+
+test("listBatchModels keeps only :batch variants and sorts cheapest first", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-models-"));
+	try {
+		const config = { model: BROADSIDE_MODEL, apiKey: "", defaultLenses: ["architecture"], maxCost: 0, pricing: null };
+		const fetcher = async () =>
+			fakeResponse(
+				200,
+				catalogWith(
+					BATCH_MODEL_SHAPE("openai/gpt-5.2-pro:batch", 0.00000375, 0.000084),
+					BATCH_MODEL_SHAPE("google/gemini-3.7-flash:batch", 0.0000001875, 0.0000009375),
+					{ id: "openai/gpt-5.2-pro", pricing: { prompt: "0.00001", completion: "0.0001" } }, // non-batch, must be excluded
+					BATCH_MODEL_SHAPE("deepseek/deepseek-v4-pro:batch", 0.000000481, 0.000000963),
+				),
+			);
+		const { entries } = await listBatchModels(dir, config, "sk-fake", { fetcher });
+		assert.equal(entries.length, 3);
+		assert.ok(!entries.some((e) => !e.id.endsWith(":batch")));
+		assert.equal(entries[0].id, "google/gemini-3.7-flash:batch", "cheapest first");
+		assert.equal(entries[2].id, "openai/gpt-5.2-pro:batch", "most expensive last");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("submit refuses models that do not advertise structured outputs", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-cap-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await writeFile(join(dir, "main.go"), "package main\n");
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				return fakeResponse(202, { id: "batch-x", status: "validating" });
+			}
+		return fakeResponse(
+			200,
+			catalogWith(BATCH_MODEL_SHAPE("vendor/no-structured:batch", 0.0000001, 0.0000002, { supported_parameters: ["tools"] })),
+		);
+		};
+		await assert.rejects(
+			() => runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher, model: "vendor/no-structured:batch" }),
+			/does not advertise structured-output support/,
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("submit clamps lens max_tokens to the provider completion ceiling", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-clamp-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await writeFile(join(dir, "main.go"), "package main\n");
+		let payload;
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				payload = JSON.parse(init.body);
+				return fakeResponse(202, { id: "batch-c", status: "validating" });
+			}
+		return fakeResponse(
+			200,
+			catalogWith(BATCH_MODEL_SHAPE("vendor/tiny-out:batch", 0.0000001, 0.0000002, { top_provider: { max_completion_tokens: 1000 } })),
+		);
+		};
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher, model: "vendor/tiny-out:batch" });
+		assert.equal(payload.requests[0].body.max_tokens, 1000, "8000-token lens must clamp to the 1000-token ceiling");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("fetchCodingBenchmarks maps indices by base slug (batch suffix stripped)", async () => {
+	const fetcher = async () =>
+		fakeResponse(
+			200,
+			{
+				data: [{ model_permaslug: "google/gemini-3.7-flash", coding_index: 62.4, intelligence_index: 58.1 }],
+				meta: { as_of: "2026-08-23", source_url: "https://example.com" },
+			},
+		);
+	const benchmarks = await fetchCodingBenchmarks("sk-fake", fetcher);
+	assert.equal(benchmarks.byBaseSlug["google/gemini-3.7-flash"].codingIndex, 62.4);
+	assert.ok("google/gemini-3.7-flash:batch".indexOf(":") >= 0, "the batch variant resolves through its base slug");
+	assert.equal(benchmarks.meta.as_of, "2026-08-23");
+});
+
+test("modelsText renders pricing, caps, support, and benchmark columns", () => {
+	const entries = [
+		{
+			id: "google/gemini-3.7-flash:batch",
+			name: "Google: Gemini 3.7 Flash (batch)",
+			inputPerM: 0.1875,
+			outputPerM: 0.9375,
+			contextLength: 1_048_576,
+			maxCompletionTokens: 65_536,
+			supportedParameters: ["tools", "structured_outputs"],
+			expirationDate: null,
+		},
+	];
+	const text = modelsText(entries, {
+		benchmarks: { byBaseSlug: { "google/gemini-3.7-flash": { codingIndex: 62.4 } }, meta: { as_of: "2026-08-23" } },
+		defaultModel: "google/gemini-3.7-flash:batch",
+	});
+	assert.match(text, /0\.188/);
+	assert.match(text, /64k/);
+	assert.match(text, /62\.4/);
+	assert.match(text, /\(default\)/);
 });
 
 // ---------- batch client with a fake fetcher ----------

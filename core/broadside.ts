@@ -39,11 +39,13 @@ export const BROADSIDE_STATE_SCHEMA_VERSION = 1;
 export const BROADSIDE_INPUT_PRICE_PER_M = 0.1875;
 export const BROADSIDE_OUTPUT_PRICE_PER_M = 0.9375;
 
-// OpenRouter's public model catalog; pricing lives per model id.
+// OpenRouter's public model catalog; pricing, context, and capabilities live
+// per model id. The benchmarks endpoint adds coding/intelligence indices.
 export const BROADSIDE_MODELS_URL = "https://openrouter.ai/api/v1/models";
+export const BROADSIDE_BENCHMARKS_URL = "https://openrouter.ai/api/v1/benchmarks";
 
-export const BROADSIDE_PRICING_CACHE_FILE = "pricing-cache.json";
-export const BROADSIDE_PRICING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+export const BROADSIDE_CATALOG_CACHE_FILE = "model-catalog.json";
+export const BROADSIDE_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const BROADSIDE_LENS_IDS = [
 	"architecture",
@@ -67,6 +69,34 @@ export type ModelPricing = {
 	outputPerM: number;
 	/** Where the numbers came from — affects what the submit text claims. */
 	source: "built-in" | "config" | "live" | "cache";
+};
+
+/** The subset of the OpenRouter model catalog Broad-Side actually uses. */
+export type CatalogEntry = {
+	id: string;
+	name: string;
+	inputPerM: number;
+	outputPerM: number;
+	cachedInputPerM?: number;
+	contextLength?: number;
+	maxCompletionTokens?: number;
+	/** Empty array means unknown, not "supports nothing". */
+	supportedParameters: string[];
+	expirationDate?: string | null;
+};
+
+export type CodingBenchmarks = {
+	/** Base model slug (batch suffix stripped) → indices. */
+	byBaseSlug: Record<string, { codingIndex?: number; intelligenceIndex?: number }>;
+	/** Citation/attribution metadata from the benchmarks endpoint. */
+	meta: Record<string, unknown>;
+};
+
+export type BroadsideCatalogResult = {
+	model: string;
+	source: "built-in" | "config" | "live" | "cache";
+	entry: CatalogEntry | null;
+	benchmarks?: CodingBenchmarks;
 };
 
 export type JsonSchemaDef = {
@@ -163,6 +193,12 @@ export type BroadsideSubmitResult = {
 	estimatedOutputTokens: number;
 	pricing: ModelPricing;
 	maxCost?: number;
+	modelInfo: {
+		contextLength?: number;
+		maxCompletionTokens?: number;
+		supportsStructuredOutputs?: boolean;
+		expirationDate?: string | null;
+	};
 };
 
 export type BroadsideCollectResult = {
@@ -1062,6 +1098,7 @@ export function buildBatchRequest(
 	index: number,
 	sliceCount: number,
 	model: string = BROADSIDE_MODEL,
+	maxTokensOverride?: number,
 ): BatchRequest {
 	const moduleTag = sanitizeId(slice.moduleName);
 	const customId = sliceCount > 1 ? `${lens.id}-${moduleTag}-${index + 1}` : `${lens.id}-${moduleTag}`;
@@ -1074,7 +1111,7 @@ export function buildBatchRequest(
 				{ role: "user", content: lens.userPrompt(info, slice.content, slice.moduleName) },
 			],
 			response_format: { type: "json_schema", json_schema: SCHEMAS[lens.schemaName] },
-			max_tokens: lens.maxTokens,
+			max_tokens: maxTokensOverride ?? lens.maxTokens,
 		},
 	};
 }
@@ -1083,13 +1120,14 @@ export function estimateCost(
 	lens: LensDefinition,
 	slices: FileSlice[],
 	pricing: ModelPricing,
+	maxTokensOverride?: number,
 ): {
 	inputTokens: number;
 	outputTokens: number;
 	cost: number;
 } {
 	const inputTokens = Math.ceil(slices.reduce((sum, s) => sum + (lens.maxChars === 0 ? 6000 : s.chars), 0) / 4);
-	const outputTokens = Math.ceil(lens.maxTokens * 0.75);
+	const outputTokens = Math.ceil((maxTokensOverride ?? lens.maxTokens) * 0.75);
 	const cost =
 		(inputTokens / 1_000_000) * pricing.inputPerM +
 		(outputTokens / 1_000_000) * pricing.outputPerM;
@@ -1151,18 +1189,19 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 	};
 }
 
-// ---------- pricing resolution ----------
+// ---------- model catalog, pricing, benchmarks ----------
 
-type PricingCacheFile = {
+type CatalogCacheFile = {
 	schema_version: number;
-	models: Record<string, { inputPerM: number; outputPerM: number; fetchedAt: string }>;
+	fetched_at: string;
+	models: Record<string, CatalogEntry>;
 };
 
-async function readPricingCache(broadsideDir: string): Promise<PricingCacheFile | null> {
-	const cachePath = join(broadsideDir, BROADSIDE_PRICING_CACHE_FILE);
+async function readCatalogCache(broadsideDir: string): Promise<CatalogCacheFile | null> {
+	const cachePath = join(broadsideDir, BROADSIDE_CATALOG_CACHE_FILE);
 	if (!(await pathExists(cachePath))) return null;
 	try {
-		const parsed = JSON.parse(await readFile(cachePath, "utf8")) as PricingCacheFile;
+		const parsed = JSON.parse(await readFile(cachePath, "utf8")) as CatalogCacheFile;
 		if (!parsed || typeof parsed !== "object" || typeof parsed.models !== "object") return null;
 		return parsed;
 	} catch {
@@ -1170,14 +1209,126 @@ async function readPricingCache(broadsideDir: string): Promise<PricingCacheFile 
 	}
 }
 
-async function writePricingCache(broadsideDir: string, cache: PricingCacheFile): Promise<void> {
+async function writeCatalogCache(broadsideDir: string, cache: CatalogCacheFile): Promise<void> {
 	await mkdir(broadsideDir, { recursive: true });
-	await writeFile(join(broadsideDir, BROADSIDE_PRICING_CACHE_FILE), `${JSON.stringify(cache, null, "\t")}\n`, "utf8");
+	await writeFile(join(broadsideDir, BROADSIDE_CATALOG_CACHE_FILE), `${JSON.stringify(cache, null, "\t")}\n`, "utf8");
+}
+
+function parseCatalogEntry(raw: Record<string, unknown>): CatalogEntry | null {
+	const id = String(raw.id ?? "");
+	if (!id) return null;
+	const p = (raw.pricing ?? {}) as { prompt?: unknown; completion?: unknown; cached_input?: unknown };
+	const input = typeof p.prompt === "string" ? Number(p.prompt) : NaN;
+	const output = typeof p.completion === "string" ? Number(p.completion) : NaN;
+	if (!Number.isFinite(input) || !Number.isFinite(output)) return null;
+	const cached = typeof p.cached_input === "string" ? Number(p.cached_input) : NaN;
+	const topProvider = (raw.top_provider ?? {}) as Record<string, unknown>;
+	const contextLength = typeof raw.context_length === "number" ? raw.context_length : undefined;
+	const maxCompletion =
+		typeof topProvider.max_completion_tokens === "number" ? topProvider.max_completion_tokens : undefined;
+	return {
+		id,
+		name: String(raw.name ?? id),
+		inputPerM: input * 1_000_000,
+		outputPerM: output * 1_000_000,
+		cachedInputPerM: Number.isFinite(cached) ? cached * 1_000_000 : undefined,
+		contextLength,
+		maxCompletionTokens: maxCompletion,
+		supportedParameters: Array.isArray(raw.supported_parameters)
+			? raw.supported_parameters.map((entry) => String(entry))
+			: [],
+		expirationDate: typeof raw.expiration_date === "string" ? raw.expiration_date : null,
+	};
+}
+
+export function builtInCatalogEntry(model: string): CatalogEntry | null {
+	// The default model's rates are compile-time constants; its capabilities
+	// are asserted from the shipped configuration (1M context, 64K output,
+	// structured outputs used by every lens).
+	if (model !== BROADSIDE_MODEL) return null;
+	return {
+		id: BROADSIDE_MODEL,
+		name: "Google: Gemini 3.7 Flash (batch)",
+		inputPerM: BROADSIDE_INPUT_PRICE_PER_M,
+		outputPerM: BROADSIDE_OUTPUT_PRICE_PER_M,
+		contextLength: 1_048_576,
+		maxCompletionTokens: 65_536,
+		supportedParameters: ["tools", "structured_outputs", "json_schema", "response_format"],
+		expirationDate: null,
+	};
 }
 
 export function builtInPricing(model: string): ModelPricing | null {
-	if (model !== BROADSIDE_MODEL) return null;
-	return { inputPerM: BROADSIDE_INPUT_PRICE_PER_M, outputPerM: BROADSIDE_OUTPUT_PRICE_PER_M, source: "built-in" };
+	const entry = builtInCatalogEntry(model);
+	if (!entry) return null;
+	return { inputPerM: entry.inputPerM, outputPerM: entry.outputPerM, source: "built-in" };
+}
+
+export async function resolveCatalogEntry(
+	broadsideDir: string,
+	config: BroadsideConfig,
+	model: string,
+	apiKey: string,
+	fetcher: FetchLike = fetch as FetchLike,
+): Promise<BroadsideCatalogResult> {
+	// Manual overrides always win for pricing — the user is asserting a rate,
+	// and a config assertion is cheaper to respect than to second-guess.
+	// Capabilities stay unknown in that case: nothing is refused, nothing
+	// is clamped, and the submit text says the pricing came from config.
+	if (config.pricing) {
+		return {
+			model,
+			source: "config",
+			entry: {
+				id: model,
+				name: model,
+				inputPerM: config.pricing.inputPerM,
+				outputPerM: config.pricing.outputPerM,
+				supportedParameters: [],
+			},
+		};
+	}
+
+	const builtIn = builtInCatalogEntry(model);
+	if (builtIn) return { model, source: "built-in", entry: builtIn };
+
+	// Unknown model: on-disk cache first, then the live catalog.
+	const cache = await readCatalogCache(broadsideDir);
+	const cached = cache?.models[model];
+	if (cached && Date.now() - new Date(cache!.fetched_at).getTime() < BROADSIDE_CATALOG_CACHE_TTL_MS) {
+		return { model, source: "cache", entry: cached };
+	}
+
+	let live: CatalogEntry | null = null;
+	try {
+		const resp = await fetcher(BROADSIDE_MODELS_URL, {
+			method: "GET",
+			headers: { Authorization: `Bearer ${apiKey}` },
+			signal: AbortSignal.timeout(30_000),
+		});
+		const data = (await resp.json()) as { data?: Array<Record<string, unknown>> };
+		const hit = (data.data ?? []).find((m) => String(m.id) === model);
+		if (hit) live = parseCatalogEntry(hit);
+	} catch {
+		live = null;
+	}
+
+	if (live) {
+		const updated: CatalogCacheFile = {
+			schema_version: 2,
+			fetched_at: new Date().toISOString(),
+			models: { ...(cache?.models ?? {}) },
+		};
+		updated.models[model] = live;
+		await writeCatalogCache(broadsideDir, updated);
+		return { model, source: "live", entry: live };
+	}
+
+	throw new Error(
+		`Could not resolve per-token pricing for batch model "${model}". ` +
+		"Set pricing.input_per_m and pricing.output_per_m in .codecarto/broadside/config.yaml " +
+		"(USD per million tokens), or check the model id against https://openrouter.ai/models?variant=batch.",
+	);
 }
 
 export async function resolveModelPricing(
@@ -1187,54 +1338,75 @@ export async function resolveModelPricing(
 	apiKey: string,
 	fetcher: FetchLike = fetch as FetchLike,
 ): Promise<ModelPricing> {
-	// Manual overrides always win — the user is asserting a price, and a
-	// config assertion is cheaper to respect than to second-guess.
-	if (config.pricing) {
-		return { ...config.pricing, source: "config" };
-	}
-	const builtIn = builtInPricing(model);
-	if (builtIn) return builtIn;
+	const { source, entry } = await resolveCatalogEntry(broadsideDir, config, model, apiKey, fetcher);
+	if (!entry) throw new Error(`No pricing resolved for ${model}.`);
+	return { inputPerM: entry.inputPerM, outputPerM: entry.outputPerM, source };
+}
 
-	// Unknown model: check the on-disk cache first, then the live catalog.
-	const cache = await readPricingCache(broadsideDir);
-	const cached = cache?.models[model];
-	if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < BROADSIDE_PRICING_CACHE_TTL_MS) {
-		return { inputPerM: cached.inputPerM, outputPerM: cached.outputPerM, source: "cache" };
-	}
+/** Base slug with the OpenRouter variant suffix (e.g. `:batch`) stripped. */
+function baseSlug(modelId: string): string {
+	const idx = modelId.indexOf(":");
+	return idx >= 0 ? modelId.slice(0, idx) : modelId;
+}
 
-	let live: { inputPerM: number; outputPerM: number } | null = null;
+export async function fetchCodingBenchmarks(
+	apiKey: string,
+	fetcher: FetchLike = fetch as FetchLike,
+): Promise<CodingBenchmarks | null> {
 	try {
-		const resp = await fetcher(BROADSIDE_MODELS_URL, {
+		const resp = await fetcher(`${BROADSIDE_BENCHMARKS_URL}?source=artificial-analysis&task_type=coding`, {
 			method: "GET",
 			headers: { Authorization: `Bearer ${apiKey}` },
 			signal: AbortSignal.timeout(30_000),
 		});
-		const data = (await resp.json()) as { data?: Array<Record<string, unknown>> };
-		const hit = (data.data ?? []).find((m) => String(m.id) === model);
-		if (hit && typeof hit.pricing === "object") {
-			const p = hit.pricing as { prompt?: string; completion?: string };
-			const input = typeof p.prompt === "string" ? Number(p.prompt) : NaN;
-			const output = typeof p.completion === "string" ? Number(p.completion) : NaN;
-			if (Number.isFinite(input) && Number.isFinite(output)) {
-				live = { inputPerM: input * 1_000_000, outputPerM: output * 1_000_000 };
-			}
+		const data = (await resp.json()) as { data?: Array<Record<string, unknown>>; meta?: Record<string, unknown> };
+		const byBaseSlug: CodingBenchmarks["byBaseSlug"] = {};
+		for (const row of data.data ?? []) {
+			const slug = baseSlug(String(row.model_permaslug ?? ""));
+			if (!slug) continue;
+			const toIndex = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+			byBaseSlug[slug] = {
+				codingIndex: toIndex(row.coding_index),
+				intelligenceIndex: toIndex(row.intelligence_index),
+			};
 		}
+		return { byBaseSlug, meta: data.meta ?? {} };
 	} catch {
-		live = null;
+		return null;
 	}
+}
 
-	if (live) {
-		const updated: PricingCacheFile = { schema_version: 1, models: { ...(cache?.models ?? {}) } };
-		updated.models[model] = { ...live, fetchedAt: new Date().toISOString() };
-		await writePricingCache(broadsideDir, updated);
-		return { ...live, source: "live" };
+export async function listBatchModels(
+	broadsideDir: string,
+	config: BroadsideConfig,
+	apiKey: string,
+	opts: { includeBenchmarks?: boolean; fetcher?: FetchLike } = {},
+): Promise<{ entries: CatalogEntry[]; source: string; benchmarks: CodingBenchmarks | null; defaultModel: string }> {
+	const fetcher = opts.fetcher ?? (fetch as FetchLike);
+	const resp = await fetcher(BROADSIDE_MODELS_URL, {
+		method: "GET",
+		headers: { Authorization: `Bearer ${apiKey}` },
+		signal: AbortSignal.timeout(30_000),
+	});
+	const data = (await resp.json()) as { data?: Array<Record<string, unknown>> };
+	const entries: CatalogEntry[] = [];
+	const seen = new Set<string>();
+	for (const raw of data.data ?? []) {
+		const entry = parseCatalogEntry(raw);
+		if (!entry || seen.has(entry.id)) continue;
+		seen.add(entry.id);
+		if (!entry.id.endsWith(":batch")) continue;
+		entries.push(entry);
 	}
+	entries.sort((a, b) => a.inputPerM + a.outputPerM - (b.inputPerM + b.outputPerM));
 
-	throw new Error(
-		`Could not resolve per-token pricing for batch model "${model}". ` +
-		"Set pricing.input_per_m and pricing.output_per_m in .codecarto/broadside/config.yaml " +
-		"(USD per million tokens), or check the model id against https://openrouter.ai/models?variant=batch.",
-	);
+	// Persist the catalog so the next submit's pricing resolution hits cache.
+	const cache: CatalogCacheFile = { schema_version: 2, fetched_at: new Date().toISOString(), models: {} };
+	for (const entry of entries) cache.models[entry.id] = entry;
+	await writeCatalogCache(broadsideDir, cache);
+
+	const benchmarks = opts.includeBenchmarks ? await fetchCodingBenchmarks(apiKey, fetcher) : null;
+	return { entries, source: "live", benchmarks, defaultModel: config.model };
 }
 
 // ---------- batch client ----------
@@ -1340,27 +1512,52 @@ export async function runBroadsideSubmit(
 	const broadsideDir = broadsideDirFor(cwd);
 	const model = opts.model ?? BROADSIDE_MODEL;
 
-	// Resolve pricing before anything is submitted: the guardrail must know
-	// the model's real per-token rates, not the default model's.
+	// Resolve the model's catalog entry before anything is submitted: the
+	// guardrail must know real per-token rates, and every lens requires
+	// structured-output support that not all batch models offer.
 	const config = await loadBroadsideConfig(broadsideDir);
-	const pricing = await resolveModelPricing(broadsideDir, config, model, apiKey, opts.fetcher);
+	const catalog = await resolveCatalogEntry(broadsideDir, config, model, apiKey, opts.fetcher);
+	const pricing: ModelPricing = {
+		inputPerM: catalog.entry!.inputPerM,
+		outputPerM: catalog.entry!.outputPerM,
+		source: catalog.source,
+	};
 	const limit = opts.maxCost ?? config.maxCost;
+
+	const entry = catalog.entry!;
+	const supportsStructuredOutputs =
+		entry.supportedParameters.length === 0 ||
+		entry.supportedParameters.some((p) =>
+			["structured_outputs", "json_schema", "response_format", "structuredoutputs"].includes(p.toLowerCase()),
+		);
+	if (!supportsStructuredOutputs) {
+		throw new Error(
+			`Batch model "${model}" does not advertise structured-output support ` +
+			`(supported_parameters: ${entry.supportedParameters.join(", ") || "unknown"}), but every ` +
+			"Broad-Side lens requires json_schema response_format. Choose another batch model " +
+			"(codecarto_broadside action 'models') or pass a pricing override only if you know it works.",
+		);
+	}
+	// Respect the provider's completion ceiling: a request asking for more
+	// output than the model can produce fails the whole batch.
+	const outputCap = entry.maxCompletionTokens;
 
 	// Slice offline first so the estimate covers every request we would send.
 	const slicesByLens = new Map<BroadsideLensId, FileSlice[]>();
 	let estimatedInputTokens = 0;
 	let estimatedOutputTokens = 0;
 	let estimatedTotalCost = 0;
-	const perLensEstimate: Array<{ lens: LensDefinition; cost: number }> = [];
+	const perLensEstimate: Array<{ lens: LensDefinition; cost: number; maxTokens: number }> = [];
 	for (const lensId of lensIds) {
 		const lens = getLens(lensId);
 		const slices = await gatherSlices(cwd, lens, info);
 		slicesByLens.set(lensId, slices);
-		const estimate = estimateCost(lens, slices, pricing);
+		const maxTokens = outputCap ? Math.min(lens.maxTokens, outputCap) : lens.maxTokens;
+		const estimate = estimateCost(lens, slices, pricing, maxTokens);
 		estimatedInputTokens += estimate.inputTokens;
 		estimatedOutputTokens += estimate.outputTokens;
 		estimatedTotalCost += estimate.cost;
-		perLensEstimate.push({ lens, cost: estimate.cost });
+		perLensEstimate.push({ lens, cost: estimate.cost, maxTokens });
 	}
 
 	if (limit > 0 && !opts.force && estimatedTotalCost > limit) {
@@ -1395,8 +1592,9 @@ export async function runBroadsideSubmit(
 	for (const lensId of lensIds) {
 		const lens = getLens(lensId);
 		const slices = slicesByLens.get(lensId) ?? [];
-		const requests = slices.map((s, i) => buildBatchRequest(lens, info, s, i, slices.length, model));
-		const estimate = estimateCost(lens, slices, pricing);
+		const maxTokens = outputCap ? Math.min(lens.maxTokens, outputCap) : lens.maxTokens;
+		const requests = slices.map((s, i) => buildBatchRequest(lens, info, s, i, slices.length, model, maxTokens));
+		const estimate = estimateCost(lens, slices, pricing, maxTokens);
 
 		const entry: BroadsideBatchEntry = {
 			batchId: "",
@@ -1443,6 +1641,12 @@ export async function runBroadsideSubmit(
 		estimatedOutputTokens,
 		pricing,
 		maxCost: limit > 0 ? limit : undefined,
+		modelInfo: {
+			contextLength: entry.contextLength,
+			maxCompletionTokens: entry.maxCompletionTokens,
+			supportsStructuredOutputs: entry.supportedParameters.length === 0 ? undefined : supportsStructuredOutputs,
+			expirationDate: entry.expirationDate ?? null,
+		},
 	};
 }
 
@@ -1751,6 +1955,15 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		`Estimated total: ~$${result.estimatedTotalCost.toFixed(4)}`,
 		`Pricing: $${result.pricing.inputPerM.toFixed(4)}/M in, $${result.pricing.outputPerM.toFixed(4)}/M out (${result.pricing.source})`,
 	);
+	if (result.modelInfo.contextLength) {
+		lines.push(`Model: ${result.modelInfo.contextLength.toLocaleString()} context, ${result.modelInfo.maxCompletionTokens?.toLocaleString() ?? "?"} max output`);
+	}
+	if (result.modelInfo.supportsStructuredOutputs === false) {
+		lines.push("Warning: model does not advertise structured-output support; lens JSON may be unreliable.");
+	}
+	if (result.modelInfo.expirationDate) {
+		lines.push(`Warning: this model is deprecated (expires ${result.modelInfo.expirationDate}).`);
+	}
 	if (result.maxCost) {
 		lines.push(`Run limit: $${result.maxCost.toFixed(2)} (enforced on estimate; pass force to override)`);
 	}
@@ -1759,6 +1972,42 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		"Call codecarto_broadside with action 'collect' once batches finish, or pass wait_seconds on submit to block.",
 		"Disclaimer: Broad-Side findings are unverified scouting signals from a batch model, not validated claims.",
 	);
+	return lines.join("\n");
+}
+
+export function modelsText(
+	entries: CatalogEntry[],
+	opts: { benchmarks: CodingBenchmarks | null; defaultModel: string },
+): string {
+	const lines = [
+		`Batch models on OpenRouter (${entries.length}, cheapest first).`,
+		"",
+		"id | $/M in | $/M out | ctx | max out | structured | coding idx",
+	];
+	for (const entry of entries) {
+		const bench = opts.benchmarks?.byBaseSlug[baseSlug(entry.id)];
+		const structured = entry.supportedParameters.length === 0
+			? "?"
+			: entry.supportedParameters.some((p) => ["structured_outputs", "json_schema", "response_format", "structuredoutputs"].includes(p.toLowerCase()))
+				? "yes"
+				: "no";
+		const coding = bench?.codingIndex !== undefined ? bench.codingIndex.toFixed(1) : "-";
+		const ctx = entry.contextLength
+			? entry.contextLength >= 1_000_000
+				? `${(entry.contextLength / 1_000_000).toFixed(1)}M`
+				: `${(entry.contextLength / 1024).toFixed(0)}k`
+			: "?";
+		const out = entry.maxCompletionTokens ? `${(entry.maxCompletionTokens / 1024).toFixed(0)}k` : "?";
+		const tag = entry.id === opts.defaultModel ? "  (default)" : "";
+		const exp = entry.expirationDate ? "  [deprecated]" : "";
+		lines.push(
+			`${entry.id}${tag}${exp} | ${entry.inputPerM.toFixed(3)} | ${entry.outputPerM.toFixed(3)} | ${ctx} | ${out} | ${structured} | ${coding}`,
+		);
+	}
+	if (opts.benchmarks?.meta.as_of) {
+		lines.push("", `Benchmarks: Artificial Analysis coding index (as of ${String(opts.benchmarks.meta.as_of)}).`);
+	}
+	lines.push("", "Set the batch model in .codecarto/broadside/config.yaml (model key). Higher coding index ≠ better scout: precision, context, and structured-output support matter most here.");
 	return lines.join("\n");
 }
 

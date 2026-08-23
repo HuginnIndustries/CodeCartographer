@@ -4,11 +4,13 @@
 # OpenRouter model to use for batch requests. The default is Google Gemini
 # 3.7 Flash (batch) — the cheapest batch model with tool-calling support and
 # a 1M-token context window. Change this to another OpenRouter batch model
-# (https://openrouter.ai/models?variant=batch) if you need a different
-# cost/capability trade-off; Broad-Side looks up its per-token pricing
-# automatically and uses it for cost estimates and the max_cost guardrail.
-# Beware the expensive end of that list — some batch models exceed
-# $80 per million output tokens.
+# if you need a different cost/capability trade-off. To compare what's
+# available, run codecarto_broadside with action "models" — it lists every
+# :batch variant with pricing, context, output caps, structured-output
+# support, and optional coding benchmarks. Beware the expensive end of that
+# list — some batch models exceed $80 per million output tokens — and note
+# that every lens requires structured-output (json_schema) support, which
+# submit refuses to proceed without.
 #
 # model: google/gemini-3.7-flash:batch
 

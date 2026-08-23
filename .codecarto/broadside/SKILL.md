@@ -61,7 +61,17 @@ Broad-Side is an executable-surface feature (MCP today):
 codecarto_broadside {cwd, action: "submit", lenses: [...]}   # fire the batches
 codecarto_broadside {cwd, action: "collect"}                  # poll, save, synthesize
 codecarto_broadside {cwd, action: "status"}                   # show recorded runs
+codecarto_broadside {cwd, action: "models"}                   # compare batch models
 ```
+
+The `models` action lists every `:batch` variant on OpenRouter — pricing per
+million tokens, context window, output ceiling, structured-output support, and
+(optionally) Artificial Analysis coding indices — cheapest first, with the
+configured model marked. Use it before switching models in `config.yaml`.
+Submits pre-flight the chosen model: pricing comes from the live catalog
+(cached 24h), requests clamp to the provider's completion ceiling, and a
+model that does not advertise structured-output support is refused outright,
+because every lens depends on `json_schema` response_format.
 
 It works on any git repository — no initialized workspace required — and needs
 an OpenRouter API key via the `api_key` parameter, the `OPENROUTER_API_KEY`
