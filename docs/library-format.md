@@ -346,10 +346,24 @@ against the one recorded on the entry's newest version. If they denote
 different repositories, publish fails and writes nothing.
 
 Comparison is normalized, so these are all the same repository and none
-of them trip the check: a `https://`, `http://`, `ssh://` or `git://`
-scheme or none at all, `git@host:owner/name` SCP syntax, a `www.` host
-prefix, a trailing `.git`, trailing slashes, backslash separators, and
-any letter casing.
+of them trip the check: a `https://`, `http://`, `ssh://`, `git://` or
+`file://` scheme or none at all, `git@host:owner/name` SCP syntax, a
+`www.` host prefix, a trailing `.git`, repeated and trailing slashes,
+backslash separators, and any letter casing in a host, a forge-served
+repository path, or a Windows drive path.
+
+Case in an absolute POSIX path is *not* folded, because `/srv/Repos/tool`
+and `/srv/repos/tool` are two directories on a case-sensitive filesystem.
+Folding them would hide the collision the check exists to catch, and the
+Pi surface records the analyzed directory as `source_repo`, so local
+paths are the common shape there rather than an edge case.
+
+Normalization is deliberately conservative: it collapses only spellings
+that are unambiguously the same target. Host aliases (`ssh.github.com`
+for `github.com`) and provider-specific SSH path layouts (Azure DevOps
+`v3/org/proj/name` against the HTTPS `org/proj/_git/name`) are left
+distinct, so re-publishing through one of those will need the override
+below.
 
 The check is skipped when the recorded `source_repo` cannot be read at
 all (absent, unreadable, or malformed metadata), since there is nothing

@@ -245,12 +245,13 @@ export function deriveSlug(sourceRepo: string): string {
 /**
  * Reduce a repo reference to a comparable form so that spellings of the same
  * repository do not read as different projects. Handles scheme, `git@host:path`
- * SCP syntax, a `www.` host prefix, a trailing `.git`, trailing slashes,
- * backslash separators, and case.
+ * SCP syntax, a `www.` host prefix, a trailing `.git`, repeated and trailing
+ * slashes, backslash separators, and case.
  *
  * This is deliberately conservative: it only collapses spellings that are
  * unambiguously the same target. Anything it cannot prove equivalent stays
- * distinct, because the caller treats "different" as a hard error.
+ * distinct, because the caller treats "different" as a hard error. Case is the
+ * one place that cuts the other way — see the note above the return.
  */
 export function normalizeSourceRepo(sourceRepo: string): string {
 	let s = sourceRepo.trim().replace(/\\/g, "/");
@@ -279,8 +280,26 @@ export function normalizeSourceRepo(sourceRepo: string): string {
 
 	s = s.replace(/^www\./i, "");
 	s = s.replace(/\.git$/i, "");
+
+	// Repeated separators name the same location. A leading `//` is the one
+	// exception: on Windows that is a UNC share (\\server\share), which is not
+	// the same place as /server/share.
+	s = s.startsWith("//") ? `/${s.replace(/\/{2,}/g, "/")}` : s.replace(/\/{2,}/g, "/");
 	s = s.replace(/\/+$/, "");
-	return s.toLowerCase();
+
+	// Case folding is only safe where the target is case-insensitive. Hosts are,
+	// as are the repository paths the major forges serve over them, and so are
+	// Windows drive paths. A POSIX absolute path is not: /srv/Repos/tool and
+	// /srv/repos/tool are two directories on Linux, and folding them together
+	// would hide exactly the cross-project collision this comparison exists to
+	// catch. Pi records the analyzed directory as source_repo, so local paths
+	// are a common case here rather than a curiosity.
+	return isCaseSensitivePath(s) ? s : s.toLowerCase();
+}
+
+/** An absolute POSIX path (or a `~` home reference), where case is significant. */
+function isCaseSensitivePath(s: string): boolean {
+	return s.startsWith("/") || s === "~" || s.startsWith("~/");
 }
 
 /** True when two repo references denote the same repository. */
@@ -441,9 +460,11 @@ export async function publishEntry(
 			throw new Error(
 				`Refusing to publish: entry "${label}" v${latestVersion} records source_repo ` +
 					`"${recorded}", but this publish carries "${input.source_repo}". Publishing would ` +
-					`append this spec to a different project's version history. Pass an explicit, ` +
-					`distinct slug to shelve it separately, or set allowSourceRepoChange if the ` +
-					`repository itself moved.`,
+					`append this spec to a different project's version history. Publish this project ` +
+					`under a distinct slug to shelve it separately, or — if the repository itself ` +
+					`moved (rename, org transfer, host change) — re-publish with the source-repo ` +
+					`change allowed: allow_source_repo_change on codecarto_publish, ` +
+					`allowSourceRepoChange in PublishOptions.`,
 			);
 		}
 	}

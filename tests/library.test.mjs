@@ -539,9 +539,32 @@ test("normalizeSourceRepo collapses spellings of the same repository", () => {
 		"git://github.com/acme/tool.git",
 		"https://github.com:443/acme/tool",
 		"http://github.com:80/acme/tool",
+		// Repeated separators name the same location.
+		"https://github.com//acme//tool",
+		"github.com/acme//tool/",
 	]) {
 		assert.equal(normalizeSourceRepo(variant), canonical, `variant: ${variant}`);
 	}
+});
+
+test("normalizeSourceRepo folds case only where the target is case-insensitive", () => {
+	// Hosts and the repository paths the forges serve over them are
+	// case-insensitive, so these collapse.
+	assert.equal(sameSourceRepo("https://GitHub.com/Acme/Tool", "https://github.com/acme/tool"), true);
+	assert.equal(sameSourceRepo("git@GitHub.com:Acme/Tool.git", "github.com/acme/tool"), true);
+	// Windows drive paths are case-insensitive too.
+	assert.equal(sameSourceRepo("C:\\Repos\\Tool", "c:/repos/tool"), true);
+
+	// A POSIX absolute path is not. /srv/Repos/tool and /srv/repos/tool are two
+	// directories on Linux, and folding them would hide the very collision this
+	// comparison exists to catch. Pi records the analyzed directory as
+	// source_repo, so this is the common shape there, not a curiosity.
+	assert.equal(sameSourceRepo("/srv/Repos/tool", "/srv/repos/tool"), false);
+	assert.equal(sameSourceRepo("~/Work/tool", "~/work/tool"), false);
+	// Same path, same case, reached via file:// — still one location.
+	assert.equal(sameSourceRepo("file:///srv/Repos/tool", "/srv/Repos/tool"), true);
+	// A leading `//` is a UNC share on Windows, not /server/share.
+	assert.equal(sameSourceRepo("//server/share/tool", "/server/share/tool"), false);
 });
 
 test("normalizeSourceRepo keeps genuinely different repositories distinct", () => {
@@ -601,6 +624,55 @@ test("publish refuses a second project that derived the same slug", async () => 
 		assert.equal(entry.metadata.version, 1);
 		assert.equal(entry.metadata.source_repo, "https://github.com/openai/whisper");
 		assert.equal(entry.spec, "# spec A\n");
+	} finally {
+		await cleanup();
+	}
+});
+
+test("publish refuses two local directories that differ only in case", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		// The Pi shape of the bug: source_repo is the analyzed directory, and slug
+		// derives from the same string, so sibling trees collide. Case is the part
+		// a naive fold would throw away.
+		await publishEntry(libraryRoot, "# spec A\n", sampleInput({
+			slug: "tool",
+			source_repo: "/srv/Repos/tool",
+		}));
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# spec B\n", sampleInput({
+				slug: "tool",
+				source_repo: "/srv/repos/tool",
+			})),
+			/Refusing to publish/,
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("the refusal names where the override actually lives", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishEntry(libraryRoot, "# spec A\n", sampleInput({
+			slug: "whisper",
+			source_repo: "https://github.com/openai/whisper",
+		}));
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# spec B\n", sampleInput({
+				slug: "whisper",
+				source_repo: "https://github.com/acme/whisper",
+			})),
+			(err) => {
+				// Both spellings, so the reader can act on whichever surface they are
+				// on. The message must not tell them to "pass" an option the caller
+				// may not expose: /codecarto-publish in Pi takes no arguments.
+				assert.match(err.message, /allow_source_repo_change/);
+				assert.match(err.message, /allowSourceRepoChange/);
+				assert.doesNotMatch(err.message, /Pass an explicit/);
+				return true;
+			},
+		);
 	} finally {
 		await cleanup();
 	}
