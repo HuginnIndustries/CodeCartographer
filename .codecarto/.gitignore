@@ -17,6 +17,13 @@ findings/config-model/config-model.md
 scratch/*
 !scratch/.gitkeep
 
+# Broad-Side machine-local state and generated results (batch ids, run
+# directories, costs). The SKILL.md guidance and the config template are
+# tracked; the API key inside config.yaml is your own risk to commit.
+broadside/*
+!broadside/SKILL.md
+!broadside/config.yaml
+
 # Orchestrator session pointer (machine-local, written by /codecarto-init
 # when run from the Pi extension; the MCP path doesn't write it). Contains
 # absolute paths into the user's Pi session storage, so it must never be
