@@ -2,8 +2,7 @@
 
 Broad-Side is CodeCartographer's batch reconnaissance feature: a cheap,
 unattended multi-lens scan over the OpenRouter Batch API that produces
-unverified scouting leads for the interactive pipeline to confirm. Shipped
-behind the `feat/103-broadside` branch (MCP surface first).
+unverified scouting leads for the interactive pipeline to confirm. Shipped via PR #144 (branch `feat/103-broadside`, MCP surface first).
 
 This roadmap is the working agreement on what comes next. Items are tracked
 as GitHub issues labeled `feat`; status changes happen in the issues, this
