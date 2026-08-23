@@ -57,6 +57,7 @@ Read these files in order before doing any analysis:
 4. `scratch/checkpoints/<phase>.md`, if present, to resume durable in-phase progress after compaction or interruption.
 5. The current phase's `SKILL.md` for detailed instructions on what to analyze and produce.
 6. The output template from `templates/` for the current phase (if starting a new output).
+7. `broadside/synthesis.md`, if a Broad-Side batch reconnaissance run has completed — it carries unverified scouting leads (see `broadside/SKILL.md`) that tell you where the interactive phases should spend attention.
 
 All paths in this guide are relative to `.codecarto/` unless stated otherwise.
 
@@ -71,7 +72,7 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Category | Files | Access |
 |---|---|---|
 | Orchestration (read-only) | `GUIDE.md`, `CONTRIBUTING.md`, `LICENSE` | Read only. Never modify. |
-| Skills (read-only) | `findings/*/SKILL.md`, `findings/defect-scan/passes/*.md`, `skills/*/SKILL.md` | Read only. Never modify. |
+| Skills (read-only) | `findings/*/SKILL.md`, `findings/defect-scan/passes/*.md`, `skills/*/SKILL.md`, `broadside/SKILL.md` | Read only. Never modify. |
 | Templates (read-only) | `templates/*.md` | Read only. Never modify. |
 | Pipeline definitions (read-only) | `workflow/pipeline*.yaml`, `workflow/VALIDATE.md` | Read only. Never modify. |
 | Source code (read-only) | `../` (everything outside `.codecarto/`) | Read only. Analyze but never modify. |
@@ -313,6 +314,10 @@ your-repo/
       VALIDATE.md              # Validation protocol. Run after every phase.
     closeouts/                 # Per-session closeout files (replaces monolithic THREAD_LOG body).
       <YYYY-MM-DD>-<phase-or-module>.md
+    broadside/                 # Batch reconnaissance state and results (see broadside/SKILL.md).
+      SKILL.md                 # How to read Broad-Side scouting leads (unverified, not evidence).
+      config.yaml              # Broad-Side model/key/lens configuration.
+      <run-id>/                # Per-run JSON + markdown findings, run-meta.json, synthesis report.
     CONVENTIONS.md             # (Optional, project-grown) Cross-cutting invariants. Orchestrator-maintained.
     DECISIONS.md               # (Optional, project-grown) Numbered decisions log. Orchestrator-maintained.
     BACKLOG.md                 # (Optional) Deferred items with rationale.

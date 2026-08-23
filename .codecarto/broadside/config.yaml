@@ -1,0 +1,54 @@
+# Broad-Side batch reconnaissance configuration. Optional.
+# Missing keys fall back to the defaults listed below.
+
+# OpenRouter model to use for batch requests. The default is Google Gemini
+# 3.7 Flash (batch) — the cheapest batch model with tool-calling support and
+# a 1M-token context window. Change this to another OpenRouter batch model
+# if you need a different cost/capability trade-off. To compare what's
+# available, run codecarto_broadside with action "models" — it lists every
+# :batch variant with pricing, context, output caps, structured-output
+# support, and optional coding benchmarks. Beware the expensive end of that
+# list — some batch models exceed $80 per million output tokens — and note
+# that every lens requires structured-output (json_schema) support, which
+# submit refuses to proceed without.
+#
+# model: google/gemini-3.7-flash:batch
+
+# OpenRouter API key. Prefer the OPENROUTER_API_KEY environment variable —
+# keys in this file are committed if you track .codecarto/ after init.
+# The codecarto_broadside tool also accepts api_key as a parameter.
+#
+# api_key: ""
+
+# Default lens set for codecarto_broadside submit when no lenses are
+# specified. All six lenses are on by default. Remove a lens id to skip it
+# globally, or pass an explicit lenses array on the submit call to override.
+#
+# default_lenses:
+#   - architecture
+#   - api
+#   - security
+#   - defect
+#   - conventions
+#   - porting
+
+# Approximate run expense limit in USD (0 = no limit). Before submitting,
+# Broad-Side estimates the run cost from the collected file sizes and the
+# model's per-token pricing — fetched live from OpenRouter's model catalog
+# and cached for 24h. If the estimate exceeds max_cost, submit refuses and
+# prints the per-lens breakdown; pass force: true to override, or set a
+# value here so every run is guarded by default.
+#
+# This is a pre-flight estimate guardrail, not a runtime stop: OpenRouter
+# bills actual usage, which may differ from the estimate either direction.
+# Actual cost lands in each run's run-meta.json after collect.
+#
+# max_cost: 1.00
+
+# Manual pricing overrides in USD per MILLION tokens. Normally Broad-Side
+# looks the model's pricing up automatically; set both fields only when the
+# lookup fails (offline, private model) or you want to assert a ceiling.
+#
+# pricing:
+#   input_per_m: 0.1875
+#   output_per_m: 0.9375
