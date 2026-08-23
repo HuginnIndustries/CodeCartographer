@@ -19,14 +19,19 @@ import {
 	ListToolsRequestSchema,
 	McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 
 import {
 	buildPhasePrompt,
 	buildSkillPrompt,
 	buildValidationSummary,
+	BROADSIDE_DIR,
+	broadsideDirFor,
+	BROADSIDE_LENS_IDS,
+	type BroadsideLensId,
 	canonicalPath,
+	collectResultText,
 	completeValidatedPhase,
 	computePerPhaseTotals,
 	computeTotals,
@@ -38,9 +43,11 @@ import {
 
 	describeScaffoldStaleness,
 	type EntryGeneration,
+	estimateSubmitText,
 	type GuideDocument,
 	type GenerationReasoning,
 	type GenerationSurface,
+	getLens,
 	getNextEligiblePhase,
 	getPipelineLabel,
 	getWorkspaceState,
@@ -48,8 +55,11 @@ import {
 	isWithinPathResolved,
 	type LibraryIndexEntry,
 	type LibraryVisibility,
+	listBatchModels,
 	listEntries,
 	listGuideTopics,
+	loadBroadsideConfig,
+	modelsText,
 	readGuide,
 	listSkillNames,
 	loadCodecartoConfig,
@@ -68,8 +78,12 @@ import {
 	refreshScaffold,
 	resolvePhase,
 	resolvePipelineChoice,
+	runBroadsideCollect,
+	runBroadsideStatus,
+	runBroadsideSubmit,
 	seedOrchestratorFiles,
 	type StatusFile,
+	statusText,
 	stringifySimpleYaml,
 	switchPipeline,
 	validatePhaseOutput,
@@ -160,7 +174,17 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 			normalizeForComparison(await canonicalPath(packagedWorkspaceDir));
 	}
 
+	// Broad-Side (batch reconnaissance) creates .codecarto/broadside/ on any
+	// repo, workspace or not. A .codecarto/ holding only that directory is not
+	// an existing workspace — init must proceed and merge the template into it
+	// rather than demanding force and a backup of pure scout state.
+	let broadsideOnly = false;
 	if (targetExists && !sameWorkspace) {
+		const entries = (await readdir(targetWorkspaceDir)).filter((entry) => entry !== BROADSIDE_DIR);
+		broadsideOnly = entries.length === 0 && (await pathExists(join(targetWorkspaceDir, BROADSIDE_DIR)));
+	}
+
+	if (targetExists && !sameWorkspace && !broadsideOnly) {
 		if (!args.force) {
 			throw new McpError(
 				ErrorCode.InvalidRequest,
@@ -173,6 +197,10 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 
 	if (!(await pathExists(targetWorkspaceDir))) {
 		await mkdir(cwd, { recursive: true });
+		await cp(packagedWorkspaceDir, targetWorkspaceDir, { recursive: true });
+	} else if (broadsideOnly) {
+		// Merge the template into the scout-only .codecarto/, preserving the
+		// broadside state and results already on disk.
 		await cp(packagedWorkspaceDir, targetWorkspaceDir, { recursive: true });
 	}
 
@@ -950,6 +978,127 @@ export async function handleAmend(args: { cwd: string; name: string }) {
 	});
 }
 
+// ---------- broadside (batch reconnaissance) ----------
+
+function resolveBroadsideApiKey(explicit: string | undefined, config: { apiKey: string }): string {
+	if (explicit && explicit.trim()) return explicit.trim();
+	const fromEnv = process.env.OPENROUTER_API_KEY?.trim();
+	if (fromEnv) return fromEnv;
+	if (config.apiKey) return config.apiKey;
+	throw new McpError(
+		ErrorCode.InvalidParams,
+		"No OpenRouter API key found. Pass api_key, set the OPENROUTER_API_KEY environment variable, or add api_key to .codecarto/broadside/config.yaml.",
+	);
+}
+
+export async function handleBroadside(args: {
+	cwd: string;
+	action: "submit" | "collect" | "status" | "models";
+	lenses?: string[];
+	api_key?: string;
+	wait_seconds?: number;
+	include_synthesis?: boolean;
+	include_triage?: boolean;
+	max_cost?: number;
+	force?: boolean;
+	include_benchmarks?: boolean;
+}) {
+	const cwd = await validateCwd(args.cwd);
+	const action = args.action ?? "submit";
+	if (!["submit", "collect", "status", "models"].includes(action)) {
+		throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${action}. Valid actions: submit, collect, status, models.`);
+	}
+
+	const config = await loadBroadsideConfig(broadsideDirFor(cwd));
+
+	if (action === "status") {
+		const { state } = await runBroadsideStatus(cwd);
+		return textResult(statusText(state), { state });
+	}
+
+	const apiKey = resolveBroadsideApiKey(args.api_key, config);
+	const waitMs = typeof args.wait_seconds === "number" && args.wait_seconds > 0 ? args.wait_seconds * 1000 : undefined;
+
+	if (action === "models") {
+		const { entries, benchmarks } = await listBatchModels(broadsideDirFor(cwd), config, apiKey, {
+			includeBenchmarks: args.include_benchmarks === true,
+		}).catch((error) => {
+			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		});
+		return textResult(modelsText(entries, { benchmarks, defaultModel: config.model }), {
+			models: entries,
+			defaultModel: config.model,
+			benchmarkMeta: benchmarks?.meta ?? null,
+		});
+	}
+
+	if (action === "submit") {
+		let lenses: BroadsideLensId[];
+		if (args.lenses && args.lenses.length > 0) {
+			const unknown = args.lenses.filter((l) => !BROADSIDE_LENS_IDS.includes(l as BroadsideLensId));
+			if (unknown.length > 0) {
+				throw new McpError(ErrorCode.InvalidParams, `Unknown lens(es): ${unknown.join(", ")}. Valid: ${BROADSIDE_LENS_IDS.join(", ")}`);
+			}
+			lenses = args.lenses as BroadsideLensId[];
+		} else {
+			lenses = config.defaultLenses;
+		}
+
+		const maxCost = typeof args.max_cost === "number" && args.max_cost > 0 ? args.max_cost : config.maxCost;
+
+		const result = await runBroadsideSubmit(cwd, apiKey, {
+			lenses,
+			model: config.model,
+			maxCost,
+			force: args.force === true,
+		}).catch((error) => {
+			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		});
+
+		const lines = [estimateSubmitText(result, lenses.map(getLens))];
+		if (waitMs) {
+			lines.push("", "Waiting for batches to complete...");
+			const collect = await runBroadsideCollect(cwd, apiKey, {
+				waitMs,
+				includeSynthesis: args.include_synthesis !== false,
+				includeTriage: args.include_triage !== false,
+				onStatus: (lensId, status, counts) =>
+					lines.push(`  ${lensId}: ${status} (${counts.completed ?? 0}/${counts.total ?? "?"})`),
+			});
+			lines.push("", collectResultText(collect));
+		}
+		return textResult(lines.join("\n"), {
+			runId: result.runId,
+			outputDir: result.outputDir,
+			batches: result.batches,
+			estimatedTotalCost: result.estimatedTotalCost,
+			pricing: result.pricing,
+			maxCost: result.maxCost,
+		});
+	}
+
+	// action === "collect"
+	const collect = await runBroadsideCollect(cwd, apiKey, {
+		waitMs,
+		includeSynthesis: args.include_synthesis !== false,
+		includeTriage: args.include_triage !== false,
+	}).catch((error) => {
+		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+	});
+	return textResult(collectResultText(collect), {
+		runId: collect.runId,
+		status: collect.status,
+		totalCost: collect.totalCost,
+		resultCount: collect.resultCount,
+		truncatedCount: collect.truncatedCount,
+		lensOutcomes: collect.lensOutcomes,
+		synthesis: collect.synthesis,
+		triage: collect.triage,
+		topFindings: collect.topFindings,
+		topTriageItems: collect.topTriageItems,
+	});
+}
+
 // ---------- tool registry ----------
 
 const TOOLS = [
@@ -1238,6 +1387,58 @@ const TOOLS = [
 			required: ["cwd"],
 		},
 	},
+	{
+		name: "codecarto_broadside",
+		description:
+			"Broad-Side: fire a cheap batch reconnaissance scan at a repository via the OpenRouter Batch API. Six lenses (architecture, api, security, defect, conventions, porting) run as asynchronous single-turn prompts with structured JSON schemas; results land in .codecarto/broadside/<run>/ as JSON plus markdown, with an optional cross-lens synthesis report. Works on any git repository — no CodeCartographer workspace required. Requires an OpenRouter API key (api_key param, OPENROUTER_API_KEY env var, or .codecarto/broadside/config.yaml). Findings are unverified scouting signals from a batch model, not validated claims — they tell the interactive pipeline where to look. Actions: submit (fire batches, returns batch ids and cost estimate), collect (poll to completion, save results, optionally synthesize), status (show recorded runs), models (list batch-capable models with pricing, context, output caps, structured-output support, and optional coding benchmarks).",
+		inputSchema: {
+			type: "object",
+			properties: {
+				cwd: { type: "string", description: "Absolute path to the target repository." },
+				action: {
+					type: "string",
+					enum: ["submit", "collect", "status", "models"],
+					description: "submit fires all lens batches and returns batch ids; collect polls submitted batches, saves results, and optionally runs the synthesis pass; status shows recorded runs; models lists batch-capable models with pricing and capabilities.",
+				},
+				lenses: {
+					type: "array",
+					items: { type: "string", enum: [...BROADSIDE_LENS_IDS] },
+					description: "Lenses to run (submit only). Defaults to all six.",
+				},
+				api_key: {
+					type: "string",
+					description: "OpenRouter API key. Prefer the OPENROUTER_API_KEY environment variable or .codecarto/broadside/config.yaml.",
+				},
+				wait_seconds: {
+					type: "number",
+					description: "For submit: after submitting, poll up to this many seconds before returning. For collect: poll up to this many seconds before returning with partial state.",
+				},
+				include_synthesis: {
+					type: "boolean",
+					description: "Run the cross-lens synthesis pass once all lens batches complete (default true).",
+				},
+				include_triage: {
+					type: "boolean",
+					description:
+						"Run the triage pass once all lens batches complete: turns the findings into a prioritized work order (impact × difficulty, P0-P3, effort estimates). Default true.",
+				},
+				max_cost: {
+					type: "number",
+					description:
+						"Approximate run expense limit in USD. The submit action estimates the run cost from slice sizes and the configured model's per-token pricing (live OpenRouter lookup, cached 24h) and refuses to submit when the estimate exceeds the limit unless force is true. Falls back to max_cost in .codecarto/broadside/config.yaml.",
+				},
+				force: {
+					type: "boolean",
+					description: "Submit even when the cost estimate exceeds max_cost (default false).",
+				},
+				include_benchmarks: {
+					type: "boolean",
+					description: "For action 'models': annotate each model with its Artificial Analysis coding index (extra API call; default false).",
+				},
+			},
+			required: ["cwd", "action"],
+		},
+	},
 ] as const;
 
 const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
@@ -1262,6 +1463,7 @@ const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 	codecarto_dashboard: handleDashboard,
 	codecarto_list_skills: handleListSkills,
 	codecarto_guide: handleGuide,
+	codecarto_broadside: handleBroadside,
 };
 
 export async function handleGuide(args: { topic?: string }) {

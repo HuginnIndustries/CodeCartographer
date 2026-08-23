@@ -87,6 +87,7 @@ async function setupFixture() {
 
 const EXPECTED_TOOLS = [
 	"codecarto_amend",
+	"codecarto_broadside",
 	"codecarto_complete",
 	"codecarto_config",
 	"codecarto_dashboard",
