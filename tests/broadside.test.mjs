@@ -638,11 +638,9 @@ test("runBroadsideSubmit records a run and fires one batch per lens", async () =
 
 // ---------- collect with fake fetcher ----------
 
-test("runBroadsideCollect polls, saves results, and runs synthesis", async () => {
+test("runBroadsideCollect polls, saves results, and runs synthesis + triage", async () => {
 	const dir = await makeFixture();
 	try {
-		let submits = 0;
-		let gets = 0;
 		const lensPayload = {
 			results: [
 				{
@@ -675,15 +673,35 @@ test("runBroadsideCollect polls, saves results, and runs synthesis", async () =>
 			usage: { cost: 0.002 },
 			request_counts: { total: 1, completed: 1, failed: 0 },
 		};
+		const triagePayload = {
+			results: [
+				{
+					custom_id: "triage",
+					response: {
+						status_code: 200,
+						body: {
+							choices: [{ message: { role: "assistant", content: JSON.stringify({ summary: "work order", items: [{ title: "fix the thing", severity: "high", module: "server", impact: "high", difficulty: "low", priority: "P0", effort_estimate: "2h", rationale: "obvious" }] }) } }],
+						},
+					},
+					error: null,
+				},
+			],
+			usage: { cost: 0.003 },
+			request_counts: { total: 1, completed: 1, failed: 0 },
+		};
+		let postCount = 0;
 		const fetcher = async (url, init) => {
 			if (init.method === "POST") {
-				submits += 1;
-				return fakeResponse(202, { id: submits === 1 ? "batch-lens" : "batch-synth", status: "validating" });
+				postCount += 1;
+				const payload = JSON.parse(init.body);
+				const id = payload.requests[0].custom_id === "synthesis" ? "batch-synth" : payload.requests[0].custom_id === "triage" ? "batch-triage" : "batch-lens";
+				return fakeResponse(202, { id, status: "validating" });
 			}
-			gets += 1;
-			// First GET per batch returns completed immediately.
 			if (String(url).includes("batch-lens")) {
 				return fakeResponse(200, { id: "batch-lens", status: "completed", ...lensPayload });
+			}
+			if (String(url).includes("batch-triage")) {
+				return fakeResponse(200, { id: "batch-triage", status: "completed", ...triagePayload });
 			}
 			return fakeResponse(200, { id: "batch-synth", status: "completed", ...synthPayload });
 		};
@@ -696,6 +714,64 @@ test("runBroadsideCollect polls, saves results, and runs synthesis", async () =>
 		assert.equal(collect.synthesis.status, "completed");
 		assert.equal(collect.topFindings.length, 1);
 		assert.equal(collect.topFindings[0].title, "lead");
+		assert.equal(collect.triage.status, "completed");
+		assert.equal(collect.topTriageItems.length, 1);
+		assert.equal(collect.topTriageItems[0].title, "fix the thing");
+		assert.equal(collect.topTriageItems[0].priority, "P0");
+		assert.equal(postCount, 3, "lens + synthesis + triage batches");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("runBroadsideCollect skips triage when include_triage is false", async () => {
+	const dir = await makeFixture();
+	try {
+		const lensPayload = {
+			results: [
+				{
+					custom_id: "architecture-root",
+					response: {
+						status_code: 200,
+						body: { choices: [{ message: { content: JSON.stringify({ tech_stack: { language: "Go", build_system: "x" }, module_architecture: [], data_flow: "x", entry_points: [] }) } }] },
+					},
+					error: null,
+				},
+			],
+			usage: { cost: 0.001 },
+			request_counts: { total: 1, completed: 1, failed: 0 },
+		};
+		const synthPayload = {
+			results: [
+				{
+					custom_id: "synthesis",
+					response: {
+						status_code: 200,
+						body: { choices: [{ message: { content: JSON.stringify({ executive_summary: "ok", severity_summary: { critical: 0, high: 0, medium: 0, low: 0 }, top_findings: [] }) } }] },
+					},
+					error: null,
+				},
+			],
+			usage: { cost: 0.002 },
+			request_counts: { total: 1, completed: 1, failed: 0 },
+		};
+		const seenPosts = [];
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				const payload = JSON.parse(init.body);
+				seenPosts.push(payload.requests[0].custom_id);
+				return fakeResponse(202, { id: `batch-${payload.requests[0].custom_id}`, status: "validating" });
+			}
+			if (String(url).includes("batch-synthesis")) {
+				return fakeResponse(200, { id: "batch-synthesis", status: "completed", ...synthPayload });
+			}
+			return fakeResponse(200, { id: "batch-architecture-root", status: "completed", ...lensPayload });
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeTriage: false });
+		assert.deepEqual(seenPosts, ["architecture-root", "synthesis"], "no triage batch may be submitted");
+		assert.equal(collect.triage.status, "pending");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

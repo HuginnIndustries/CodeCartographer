@@ -26,13 +26,15 @@ file only moves when a tier completes.
   structured-output support, and optional Artificial Analysis coding
   benchmarks; submit pre-flight refuses models without structured outputs
   and clamps lens `max_tokens` to the provider's completion ceiling.
-- Tests: 31 unit tests (fake-fetcher based), opt-in live smoke script.
+- Triage post-pass on collect: findings scored by impact × difficulty into
+  a P0–P3 work order with effort estimates, saved as triage.json/md.
+- Tests: 35 unit tests (fake-fetcher based), opt-in live smoke script.
 
 ## Tier 1 — make Broad-Side better at what it does
 
 | Item | Issue | Notes |
 |---|---|---|
-| **Triage lens** — prioritized fix queue (impact × difficulty, grouped by module) | [#135](https://github.com/HuginnIndustries/CodeCartographer/issues/135) | Highest-value next lens: turns leads into a work order |
+| **Triage lens** — prioritized fix queue (impact × difficulty, grouped by module) | [#135](https://github.com/HuginnIndustries/CodeCartographer/issues/135) | **Shipped**: triage pass runs on collect alongside synthesis (`include_triage` to skip) |
 | **Truncation repair** — detect max_tokens-cutoff JSON, resubmit slices, report truncation in summaries | [#133](https://github.com/HuginnIndustries/CodeCartographer/issues/133) | Partially shipped: fence-tolerant parsing + `truncated` flagging in collect, meta, and synthesis. Remaining: automatic resubmit of truncated slices |
 | **Concurrent polling** — poll all in-flight batches round-robin against one deadline | [#136](https://github.com/HuginnIndustries/CodeCartographer/issues/136) | Submissions already parallel; polling is sequential today |
 | **Per-language prompts** — Go/Python/Rust/TS lens prompts; globs already adapt | [#137](https://github.com/HuginnIndustries/CodeCartographer/issues/137) | Schemas stay shared so synthesis is unaffected |

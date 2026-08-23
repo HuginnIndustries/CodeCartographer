@@ -168,6 +168,24 @@ export type BroadsideSynthesisEntry = {
 	cost?: number;
 };
 
+/** One triage item — a scouting lead turned into a work-order entry. */
+export type TriageItem = {
+	title: string;
+	severity: string;
+	module: string;
+	impact: "high" | "medium" | "low";
+	difficulty: "high" | "medium" | "low";
+	priority: string;
+	effort_estimate: string;
+	rationale: string;
+};
+
+export type BroadsideTriageEntry = {
+	batchId?: string;
+	status: "pending" | "submitted" | "completed" | "failed";
+	cost?: number;
+};
+
 export type BroadsideRun = {
 	id: string;
 	createdAt: string;
@@ -177,6 +195,7 @@ export type BroadsideRun = {
 	outputDir: string; // relative to .codecarto/broadside/
 	batches: Partial<Record<BroadsideLensId, BroadsideBatchEntry>>;
 	synthesis: BroadsideSynthesisEntry;
+	triage: BroadsideTriageEntry;
 	totalCost?: number;
 	pricing?: ModelPricing;
 	maxCost?: number;
@@ -226,7 +245,9 @@ export type BroadsideCollectResult = {
 		Record<BroadsideLensId, { status: string; cost?: number; resultCount?: number; truncated?: number }>
 	>;
 	synthesis: BroadsideSynthesisEntry;
+	triage: BroadsideTriageEntry;
 	topFindings: { title: string; severity: string; sourceLens: string; summary: string }[];
+	topTriageItems: TriageItem[];
 };
 
 // ---------- JSON schemas (one per lens, plus synthesis) ----------
@@ -529,6 +550,41 @@ const SCHEMAS: Record<string, JsonSchemaDef> = {
 				coverage: { type: "string" },
 			},
 			required: ["executive_summary", "severity_summary", "top_findings"],
+			additionalProperties: false,
+		},
+	},
+	triage: {
+		name: "triage_report",
+		strict: true,
+		schema: {
+			type: "object",
+			properties: {
+				summary: { type: "string" },
+				items: {
+					type: "array",
+					items: {
+						type: "object",
+						properties: {
+							title: { type: "string" },
+							severity: { type: "string" },
+							module: { type: "string" },
+							impact: { type: "string", enum: ["high", "medium", "low"] },
+							difficulty: { type: "string", enum: ["high", "medium", "low"] },
+							priority: { type: "string" },
+							effort_estimate: { type: "string" },
+							rationale: { type: "string" },
+						},
+						required: ["title", "severity", "module", "impact", "difficulty", "priority", "rationale"],
+						additionalProperties: false,
+					},
+				},
+				omitted: {
+					type: "array",
+					items: { type: "string" },
+					description: "Leads deliberately dropped from the queue and why (duplicates, too vague, out of scope)",
+				},
+			},
+			required: ["summary", "items"],
 			additionalProperties: false,
 		},
 	},
@@ -1600,6 +1656,7 @@ export async function runBroadsideSubmit(
 		outputDir: runId,
 		batches: {},
 		synthesis: { status: "pending" },
+		triage: { status: "pending" },
 		pricing,
 		maxCost: limit > 0 ? limit : undefined,
 	};
@@ -1745,12 +1802,105 @@ export async function saveLensResults(
 	return out;
 }
 
+// ---------- post-lens passes: synthesis + triage ----------
+
+function buildSynthesisRequest(findingsText: string, truncatedNote: string, model: string): BatchRequest {
+	return {
+		custom_id: "synthesis",
+		body: {
+			model,
+			messages: [
+				{
+					role: "system",
+					content:
+						"You are a technical editor synthesizing multiple analysis reports about a single " +
+						"codebase into one coherent summary. The reports come from different lenses — " +
+						"architecture, API surface, security review, defect scanning, convention extraction, " +
+						"and porting assessment. Cross-reference findings across lenses: if a security issue " +
+						"also appears as a defect, merge them. Produce a JSON object following the " +
+						"synthesis_report schema. Prioritize the most actionable findings. " +
+						"Be honest about gaps — if a lens found nothing, say 'no issues found' rather than " +
+						"inventing problems. These are scouting signals from a batch model, not verified " +
+						"claims; note that in the summary.",
+				},
+				{
+					role: "user",
+					content:
+						"Synthesize these analysis reports into a single summary.\n\n" +
+						findingsText +
+						truncatedNote +
+						"\nReturn the synthesis_report JSON schema.",
+				},
+			],
+			response_format: { type: "json_schema", json_schema: SCHEMAS.synthesis },
+			max_tokens: 12_000,
+		},
+	};
+}
+
+function buildTriageRequest(findingsText: string, truncatedNote: string, model: string): BatchRequest {
+	return {
+		custom_id: "triage",
+		body: {
+			model,
+			messages: [
+				{
+					role: "system",
+					content:
+						"You are a senior engineering lead turning unverified scouting findings into a " +
+						"prioritized work order. Given the findings below, produce a JSON object following " +
+						"the triage_report schema. Score every lead by impact and fix difficulty, assign a " +
+						"priority (P0 urgent/safety-critical to P3 nice-to-have), give a rough effort " +
+						"estimate, group the queue by module where sensible, and justify each call in the " +
+						"rationale. Merge duplicate leads instead of listing them twice. Drop leads that are " +
+						"too vague to act on and record each drop in omitted with the reason. These findings " +
+						"are UNVERIFIED scouting signals from a cheap batch model: the queue is a starting " +
+						"point for re-verification, not a commitment — say so in the summary, and never " +
+						"inflate a severity you cannot see evidence for.",
+				},
+				{
+					role: "user",
+					content:
+						"Triage these scouting findings into a prioritized work order.\n\n" +
+						findingsText +
+						truncatedNote +
+						"\nReturn the triage_report JSON schema.",
+				},
+			],
+			response_format: { type: "json_schema", json_schema: SCHEMAS.triage },
+			max_tokens: 10_000,
+		},
+	};
+}
+
+function parseTriageItems(content: string): TriageItem[] {
+	try {
+		const parsed = JSON.parse(content) as Record<string, unknown>;
+		const items = Array.isArray(parsed.items) ? (parsed.items as Array<Record<string, unknown>>) : [];
+		return items
+			.filter((item) => typeof item.title === "string")
+			.map((item) => ({
+				title: String(item.title),
+				severity: String(item.severity ?? "unknown"),
+				module: String(item.module ?? "unknown"),
+				impact: (["high", "medium", "low"].includes(String(item.impact)) ? String(item.impact) : "medium") as TriageItem["impact"],
+				difficulty: (["high", "medium", "low"].includes(String(item.difficulty)) ? String(item.difficulty) : "medium") as TriageItem["difficulty"],
+				priority: String(item.priority ?? "?"),
+				effort_estimate: String(item.effort_estimate ?? ""),
+				rationale: String(item.rationale ?? ""),
+			}));
+	} catch {
+		return [];
+	}
+}
+
 export async function runBroadsideCollect(
 	cwd: string,
 	apiKey: string,
 	opts: {
 		waitMs?: number;
 		includeSynthesis?: boolean;
+		includeTriage?: boolean;
 		onStatus?: (lensId: string, status: string, counts: Record<string, unknown>) => void;
 		fetcher?: FetchLike;
 	} = {},
@@ -1819,14 +1969,19 @@ export async function runBroadsideCollect(
 		await saveBroadsideState(broadsideDir, state);
 	}
 
-	// Synthesis: one cross-lens report, only after every lens batch is terminal.
+	// Synthesis + triage: cross-lens post-passes, only after every lens batch
+	// is terminal. Triage turns the leads into a prioritized work order.
+	run.triage ??= { status: "pending" };
 	let topFindings: BroadsideCollectResult["topFindings"] = [];
-	if (opts.includeSynthesis !== false && allLensResults.length > 0) {
+	let topTriageItems: BroadsideCollectResult["topTriageItems"] = [];
+	const wantSynthesis = opts.includeSynthesis !== false;
+	const wantTriage = opts.includeTriage !== false;
+	if ((wantSynthesis || wantTriage) && allLensResults.length > 0) {
 		const allTerminal = run.lenses.every((lensId) => {
 			const entry = run.batches[lensId];
 			return entry && ["completed", "failed", "expired", "cancelled", "auth-failed", "skipped", "rejected"].includes(entry.status);
 		});
-		if (allTerminal && run.synthesis.status === "pending") {
+		if (allTerminal && (run.synthesis.status === "pending" || run.triage.status === "pending")) {
 			const findingsText = allLensResults
 				.map((r) => `## ${r.lensId} — ${r.customId}\n\n${r.content}\n`)
 				.join("\n");
@@ -1836,65 +1991,77 @@ export async function runBroadsideCollect(
 						"not included above. Any gap they would have covered is unrepresented — do not treat " +
 						"silence on a module as a clean bill.\n"
 					: "";
-			const request: BatchRequest = {
-				custom_id: "synthesis",
-				body: {
-					model: run.model,
-					messages: [
-						{
-							role: "system",
-							content:
-								"You are a technical editor synthesizing multiple analysis reports about a single " +
-								"codebase into one coherent summary. The reports come from different lenses — " +
-								"architecture, API surface, security review, defect scanning, convention extraction, " +
-								"and porting assessment. Cross-reference findings across lenses: if a security issue " +
-								"also appears as a defect, merge them. Produce a JSON object following the " +
-								"synthesis_report schema. Prioritize the most actionable findings. " +
-								"Be honest about gaps — if a lens found nothing, say 'no issues found' rather than " +
-								"inventing problems. These are scouting signals from a batch model, not verified " +
-								"claims; note that in the summary.",
-						},
-						{
-							role: "user",
-							content:
-								"Synthesize these analysis reports into a single summary.\n\n" +
-								findingsText +
-								truncatedNote +
-								"\nReturn the synthesis_report JSON schema.",
-						},
-					],
-					response_format: { type: "json_schema", json_schema: SCHEMAS.synthesis },
-					max_tokens: 12_000,
-				},
-			};
-			run.synthesis.status = "submitted";
+
+			// Both post-passes consume the same findings; they run as two
+			// batches (different response_format schemas cannot share one)
+			// submitted together and polled in turn.
+			const passes: Array<{
+				kind: "synthesis" | "triage";
+				request: BatchRequest;
+				entry: BroadsideSynthesisEntry;
+			}> = [
+				...(wantSynthesis && run.synthesis.status === "pending"
+					? [{
+							kind: "synthesis" as const,
+							request: buildSynthesisRequest(findingsText, truncatedNote, run.model),
+							entry: run.synthesis,
+						}]
+					: []),
+				...(wantTriage && run.triage.status === "pending"
+					? [{
+							kind: "triage" as const,
+							request: buildTriageRequest(findingsText, truncatedNote, run.model),
+							entry: run.triage,
+						}]
+					: []),
+			];
+
+			const submitted = new Map<string, { batchId: string; pass: (typeof passes)[number] }>();
+			await Promise.allSettled(
+				passes.map(async (pass) => {
+					pass.entry.status = "submitted";
+					try {
+						const { batchId, error } = await submitBatch([pass.request], apiKey, opts.fetcher, run.model);
+						if (error) {
+							pass.entry.status = "failed";
+							return;
+						}
+						pass.entry.batchId = batchId;
+						submitted.set(batchId, { batchId, pass });
+					} catch {
+						pass.entry.status = "failed";
+					}
+				}),
+			);
 			await saveBroadsideState(broadsideDir, state);
-			const { batchId, error } = await submitBatch([request], apiKey, opts.fetcher, run.model);
-			if (error) {
-				run.synthesis.status = "failed";
-			} else {
-				run.synthesis.batchId = batchId;
+
+			for (const { batchId, pass } of submitted.values()) {
 				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
 					deadlineMs: BROADSIDE_DEFAULT_POLL_BUDGET_MS,
-					onStatus: (status, counts) => opts.onStatus?.("synthesis", status, counts),
+					onStatus: (status, counts) => opts.onStatus?.(pass.kind, status, counts),
 					fetcher: opts.fetcher,
 				});
 				if (batch.status === "completed") {
 					const usage = (batch.usage ?? {}) as Record<string, unknown>;
 					const cost = typeof usage.cost === "number" ? usage.cost : undefined;
-					run.synthesis.status = "completed";
-					run.synthesis.cost = cost;
+					pass.entry.status = "completed";
+					pass.entry.cost = cost;
 					totalCost += cost ?? 0;
 					const results = Array.isArray(batch.results) ? (batch.results as Array<Record<string, unknown>>) : [];
 					const content = results.length > 0 ? extractContent(results[0]) : null;
 					if (content !== null) {
-						await writeFile(join(runDir, "synthesis.json"), `${content}\n`, "utf8");
-						await writeFile(join(runDir, "synthesis.md"), renderFindingsMarkdown(content), "utf8");
-						topFindings = parseSynthesisTopFindings(content);
+						await writeFile(join(runDir, `${pass.kind}.json`), `${content}\n`, "utf8");
+						await writeFile(join(runDir, `${pass.kind}.md`), renderFindingsMarkdown(content), "utf8");
+						if (pass.kind === "synthesis") {
+							topFindings = parseSynthesisTopFindings(content);
+						} else {
+							topTriageItems = parseTriageItems(content);
+						}
 					}
 				} else if (batch.error) {
-					run.synthesis.status = "failed";
+					pass.entry.status = "failed";
 				}
+				await saveBroadsideState(broadsideDir, state);
 			}
 		}
 	}
@@ -1922,6 +2089,8 @@ export async function runBroadsideCollect(
 				total_cost: totalCost,
 				result_count: resultCount,
 				truncated_count: truncatedCount,
+				synthesis: run.synthesis,
+				triage: run.triage,
 				lenses: run.lenses,
 				disclaimer:
 					"Findings are unverified scouting signals from a batch model, not validated claims. " +
@@ -1941,7 +2110,9 @@ export async function runBroadsideCollect(
 		truncatedCount,
 		lensOutcomes,
 		synthesis: run.synthesis,
+		triage: run.triage,
 		topFindings,
+		topTriageItems,
 	};
 }
 
@@ -2113,6 +2284,20 @@ export function collectResultText(result: BroadsideCollectResult): string {
 			}
 		}
 	}
+	if (result.triage.status === "completed") {
+		lines.push(`  triage: completed, $${(result.triage.cost ?? 0).toFixed(6)}`);
+		if (result.topTriageItems.length > 0) {
+			lines.push("", "Triage — prioritized work order (re-verify before acting):");
+			for (const item of result.topTriageItems.slice(0, 10)) {
+				lines.push(
+					`  ${item.priority} [${item.severity}/${item.module}] ${item.title}` +
+					(item.effort_estimate ? ` (${item.effort_estimate})` : ""),
+				);
+			}
+		}
+	} else if (result.triage.status === "failed") {
+		lines.push("  triage: failed");
+	}
 	lines.push("", "Disclaimer: Broad-Side findings are unverified scouting signals from a batch model, not validated claims.");
 	return lines.join("\n");
 }
@@ -2130,6 +2315,7 @@ export function statusText(state: BroadsideStateFile): string {
 			lines.push(`  ${lensId}: ${entry.status}${entry.batchId ? ` (${entry.batchId})` : ""}${entry.cost !== undefined ? `, $${entry.cost.toFixed(6)}` : ""}`);
 		}
 		lines.push(`  synthesis: ${run.synthesis.status}`);
+		lines.push(`  triage: ${run.triage?.status ?? "pending"}`);
 		if (run.totalCost !== undefined) lines.push(`  total cost: $${run.totalCost.toFixed(6)}`);
 	}
 	return lines.join("\n");

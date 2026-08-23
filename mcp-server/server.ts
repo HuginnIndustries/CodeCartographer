@@ -998,6 +998,7 @@ export async function handleBroadside(args: {
 	api_key?: string;
 	wait_seconds?: number;
 	include_synthesis?: boolean;
+	include_triage?: boolean;
 	max_cost?: number;
 	force?: boolean;
 	include_benchmarks?: boolean;
@@ -1060,6 +1061,7 @@ export async function handleBroadside(args: {
 			const collect = await runBroadsideCollect(cwd, apiKey, {
 				waitMs,
 				includeSynthesis: args.include_synthesis !== false,
+				includeTriage: args.include_triage !== false,
 				onStatus: (lensId, status, counts) =>
 					lines.push(`  ${lensId}: ${status} (${counts.completed ?? 0}/${counts.total ?? "?"})`),
 			});
@@ -1079,6 +1081,7 @@ export async function handleBroadside(args: {
 	const collect = await runBroadsideCollect(cwd, apiKey, {
 		waitMs,
 		includeSynthesis: args.include_synthesis !== false,
+		includeTriage: args.include_triage !== false,
 	}).catch((error) => {
 		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
@@ -1090,7 +1093,9 @@ export async function handleBroadside(args: {
 		truncatedCount: collect.truncatedCount,
 		lensOutcomes: collect.lensOutcomes,
 		synthesis: collect.synthesis,
+		triage: collect.triage,
 		topFindings: collect.topFindings,
+		topTriageItems: collect.topTriageItems,
 	});
 }
 
@@ -1411,6 +1416,11 @@ const TOOLS = [
 				include_synthesis: {
 					type: "boolean",
 					description: "Run the cross-lens synthesis pass once all lens batches complete (default true).",
+				},
+				include_triage: {
+					type: "boolean",
+					description:
+						"Run the triage pass once all lens batches complete: turns the findings into a prioritized work order (impact × difficulty, P0-P3, effort estimates). Default true.",
 				},
 				max_cost: {
 					type: "number",

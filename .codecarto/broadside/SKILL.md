@@ -28,14 +28,18 @@ not replace any phase; it tells phases where to look.
 
 1. Read `synthesis.md` first. It carries the executive summary, severity counts,
    the top cross-lens findings, and per-module risk levels.
-2. Read the per-lens files behind anything that matters to your current phase:
+2. Read `triage.md` for the work order: each lead scored by impact ×
+   difficulty with a P0–P3 priority and an effort estimate. It is a starting
+   point for re-verification, not a commitment — every item still needs
+   confirmation against the source before work begins.
+3. Read the per-lens files behind anything that matters to your current phase:
    - `architecture-*.json` → the architecture phase's seed of prior knowledge
    - `api-*.json` → endpoints and data types (contracts/protocols phases)
    - `security-*.json` → auth, trust boundaries (defect-scan-semantic pass 5)
    - `defect-*.json` → mechanical defect leads (defect-scan-mechanical)
    - `conventions-*.json` → naming/idiom candidates for CONVENTIONS.md
    - `porting-*.json` → platform coupling (porting phase)
-3. `run-meta.json` records scope: which lenses ran, at what cost, with what
+4. `run-meta.json` records scope: which lenses ran, at what cost, with what
    coverage caps.
 
 ## How to use the leads
@@ -72,6 +76,10 @@ Submits pre-flight the chosen model: pricing comes from the live catalog
 (cached 24h), requests clamp to the provider's completion ceiling, and a
 model that does not advertise structured-output support is refused outright,
 because every lens depends on `json_schema` response_format.
+
+Collect runs two cross-lens post-passes by default: **synthesis** (the
+executive report) and **triage** (the prioritized work order). Pass
+`include_synthesis: false` or `include_triage: false` on collect to skip one.
 
 It works on any git repository — no initialized workspace required — and needs
 an OpenRouter API key via the `api_key` parameter, the `OPENROUTER_API_KEY`
