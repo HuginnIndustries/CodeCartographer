@@ -2,8 +2,7 @@
 
 Broad-Side is CodeCartographer's batch reconnaissance feature: a cheap,
 unattended multi-lens scan over the OpenRouter Batch API that produces
-unverified scouting leads for the interactive pipeline to confirm. Shipped
-behind the `feat/103-broadside` branch (MCP surface first).
+unverified scouting leads for the interactive pipeline to confirm. Shipped via PR #144 (branch `feat/103-broadside`, MCP surface first).
 
 This roadmap is the working agreement on what comes next. Items are tracked
 as GitHub issues labeled `feat`; status changes happen in the issues, this
@@ -36,7 +35,7 @@ file only moves when a tier completes.
 |---|---|---|
 | **Triage lens** — prioritized fix queue (impact × difficulty, grouped by module) | [#135](https://github.com/HuginnIndustries/CodeCartographer/issues/135) | **Shipped**: triage pass runs on collect alongside synthesis (`include_triage` to skip) |
 | **Truncation repair** — detect max_tokens-cutoff JSON, resubmit slices, report truncation in summaries | [#133](https://github.com/HuginnIndustries/CodeCartographer/issues/133) | Partially shipped: fence-tolerant parsing + `truncated` flagging in collect, meta, and synthesis. Remaining: automatic resubmit of truncated slices |
-| **Concurrent polling** — poll all in-flight batches round-robin against one deadline | [#136](https://github.com/HuginnIndustries/CodeCartographer/issues/136) | Submissions already parallel; polling is sequential today |
+| **Concurrent polling** — poll all in-flight batches round-robin against one deadline | [#136](https://github.com/HuginnIndustries/CodeCartographer/issues/136) | **Shipped**: `pollBatchesConcurrently` polls in parallel with per-lens progress tags |
 | **Per-language prompts** — Go/Python/Rust/TS lens prompts; globs already adapt | [#137](https://github.com/HuginnIndustries/CodeCartographer/issues/137) | Schemas stay shared so synthesis is unaffected |
 
 ## Tier 2 — integration depth
