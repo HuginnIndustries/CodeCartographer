@@ -39,6 +39,10 @@
 # prints the per-lens breakdown; pass force: true to override, or set a
 # value here so every run is guarded by default.
 #
+# This is a pre-flight estimate guardrail, not a runtime stop: OpenRouter
+# bills actual usage, which may differ from the estimate either direction.
+# Actual cost lands in each run's run-meta.json after collect.
+#
 # max_cost: 1.00
 
 # Manual pricing overrides in USD per MILLION tokens. Normally Broad-Side

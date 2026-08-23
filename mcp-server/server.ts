@@ -1087,6 +1087,7 @@ export async function handleBroadside(args: {
 		status: collect.status,
 		totalCost: collect.totalCost,
 		resultCount: collect.resultCount,
+		truncatedCount: collect.truncatedCount,
 		lensOutcomes: collect.lensOutcomes,
 		synthesis: collect.synthesis,
 		topFindings: collect.topFindings,

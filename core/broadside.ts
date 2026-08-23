@@ -14,6 +14,19 @@
 // of labor is the point: a ~$0.50 unattended sweep that tells the expensive
 // interactive run where to look.
 //
+// Field shapes for the model catalog and benchmarks endpoints follow the
+// official OpenRouter skills (OpenRouterTeam/skills: openrouter-models,
+// openrouter-benchmarks).
+//
+// RESUBMISSION INVARIANT: batch requests are pure functions of their input —
+// no tools, no filesystem, no side effects — so resubmitting a failed or
+// truncated slice is always safe. This is the retry rule OpenRouter's own
+// headless-agent scaffold states the hard way (retry only before tool calls,
+// because replaying a mutating tool would double-execute it); here the rule is
+// satisfied by construction. If Broad-Side ever gains server tools
+// (openrouter:web_search etc.), this invariant becomes load-bearing and the
+// resubmit path must gate on whether any tool executed.
+//
 // Deliberately not in .codecarto/ template prose: Broad-Side requires runtime
 // code, so it lives on the executable surfaces (MCP today, Pi on the roadmap).
 
@@ -206,7 +219,12 @@ export type BroadsideCollectResult = {
 	status: string;
 	totalCost: number;
 	resultCount: number;
-	lensOutcomes: Partial<Record<BroadsideLensId, { status: string; cost?: number; resultCount?: number }>>;
+	/** Results whose JSON did not parse even after fence stripping —
+	 * the signature of an output cut off at max_tokens. */
+	truncatedCount: number;
+	lensOutcomes: Partial<
+		Record<BroadsideLensId, { status: string; cost?: number; resultCount?: number; truncated?: number }>
+	>;
 	synthesis: BroadsideSynthesisEntry;
 	topFindings: { title: string; severity: string; sourceLens: string; summary: string }[];
 };
@@ -1656,6 +1674,9 @@ export type StoredLensResult = {
 	moduleName: string;
 	content: string;
 	raw: Record<string, unknown>;
+	/** True when the content is not parseable JSON even after fence stripping —
+	 * the telltale of an output cut off at max_tokens. */
+	truncated: boolean;
 };
 
 function extractContent(result: Record<string, unknown>): string | null {
@@ -1665,6 +1686,25 @@ function extractContent(result: Record<string, unknown>): string | null {
 	const choices = body.choices as Array<Record<string, unknown>> | undefined;
 	const message = choices?.[0]?.message as Record<string, unknown> | undefined;
 	return typeof message?.content === "string" ? message.content : null;
+}
+
+/**
+ * Parse lens content as JSON, tolerating the markdown code fences some models
+ * wrap structured output in (the same tolerance OpenRouter's headless-agent
+ * scaffold ships for --output-schema). Returns null when the content is not
+ * JSON at all — which for a strict json_schema request means the output was
+ * truncated at max_tokens, not that the model chose prose.
+ */
+export function parseLensJson(content: string): unknown | null {
+	const trimmed = content.trim();
+	const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/.exec(trimmed);
+	const candidate = fenced ? fenced[1].trim() : trimmed;
+	if (!candidate.startsWith("{") && !candidate.startsWith("[")) return null;
+	try {
+		return JSON.parse(candidate);
+	} catch {
+		return null;
+	}
 }
 
 export async function saveLensResults(
@@ -1683,9 +1723,24 @@ export async function saveLensResults(
 			}
 			continue;
 		}
-		await writeFile(join(runDir, `${sanitizeId(customId)}.json`), `${content}\n`, "utf8");
+		const parsed = parseLensJson(content);
+		const truncated = parsed === null;
+		if (parsed !== null) {
+			await writeFile(join(runDir, `${sanitizeId(customId)}.json`), `${JSON.stringify(parsed, null, "\t")}\n`, "utf8");
+		} else {
+			// Save the raw bytes verbatim so nothing is lost, but name the
+			// gap: an unparseable strict-schema response is a truncation.
+			await writeFile(join(runDir, `${sanitizeId(customId)}.json`), `${content}\n`, "utf8");
+		}
 		await writeFile(join(runDir, `${sanitizeId(customId)}.md`), renderFindingsMarkdown(content), "utf8");
-		out.push({ lensId, customId, moduleName: String(customId).replace(/^[a-z]+-/, ""), content, raw: result });
+		out.push({
+			lensId,
+			customId,
+			moduleName: String(customId).replace(/^[a-z]+-/, ""),
+			content,
+			raw: result,
+			truncated,
+		});
 	}
 	return out;
 }
@@ -1713,6 +1768,7 @@ export async function runBroadsideCollect(
 	const deadline = Date.now() + (opts.waitMs ?? BROADSIDE_DEFAULT_POLL_BUDGET_MS);
 	let totalCost = 0;
 	let resultCount = 0;
+	let truncatedCount = 0;
 	const lensOutcomes: BroadsideCollectResult["lensOutcomes"] = {};
 
 	const allLensResults: StoredLensResult[] = [];
@@ -1745,18 +1801,21 @@ export async function runBroadsideCollect(
 			entry.completedAt = new Date().toISOString();
 			const stored = await saveLensResults(runDir, lensId, batch);
 			entry.resultCount = stored.length;
+			const truncated = stored.filter((s) => s.truncated).length;
 			allLensResults.push(...stored);
 			resultCount += stored.length;
+			truncatedCount += truncated;
 			totalCost += cost ?? 0;
 			await writeFile(
 				join(runDir, `raw-${lensId}.json`),
 				`${JSON.stringify(batch, null, "\t")}\n`,
 				"utf8",
 			);
+			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount, truncated };
 		} else if (batch.error) {
 			entry.error = batch.error;
+			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount };
 		}
-		lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount };
 		await saveBroadsideState(broadsideDir, state);
 	}
 
@@ -1771,6 +1830,12 @@ export async function runBroadsideCollect(
 			const findingsText = allLensResults
 				.map((r) => `## ${r.lensId} — ${r.customId}\n\n${r.content}\n`)
 				.join("\n");
+			const truncatedNote =
+				truncatedCount > 0
+					? `\n\nNOTE: ${truncatedCount} lens result(s) were truncated at the output token limit and are ` +
+						"not included above. Any gap they would have covered is unrepresented — do not treat " +
+						"silence on a module as a clean bill.\n"
+					: "";
 			const request: BatchRequest = {
 				custom_id: "synthesis",
 				body: {
@@ -1794,7 +1859,8 @@ export async function runBroadsideCollect(
 							content:
 								"Synthesize these analysis reports into a single summary.\n\n" +
 								findingsText +
-								"\n\nReturn the synthesis_report JSON schema.",
+								truncatedNote +
+								"\nReturn the synthesis_report JSON schema.",
 						},
 					],
 					response_format: { type: "json_schema", json_schema: SCHEMAS.synthesis },
@@ -1855,6 +1921,7 @@ export async function runBroadsideCollect(
 				status: run.status,
 				total_cost: totalCost,
 				result_count: resultCount,
+				truncated_count: truncatedCount,
 				lenses: run.lenses,
 				disclaimer:
 					"Findings are unverified scouting signals from a batch model, not validated claims. " +
@@ -1866,7 +1933,16 @@ export async function runBroadsideCollect(
 		"utf8",
 	);
 
-	return { runId: run.id, status: run.status, totalCost, resultCount, lensOutcomes, synthesis: run.synthesis, topFindings };
+	return {
+		runId: run.id,
+		status: run.status,
+		totalCost,
+		resultCount,
+		truncatedCount,
+		lensOutcomes,
+		synthesis: run.synthesis,
+		topFindings,
+	};
 }
 
 export async function runBroadsideStatus(cwd: string): Promise<{ state: BroadsideStateFile }> {
@@ -1878,12 +1954,8 @@ export async function runBroadsideStatus(cwd: string): Promise<{ state: Broadsid
 // ---------- rendering ----------
 
 export function renderFindingsMarkdown(content: string): string {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(content);
-	} catch {
-		return content;
-	}
+	const parsed = parseLensJson(content);
+	if (parsed === null) return content;
 	return formatAsMarkdown(parsed);
 }
 
@@ -2019,10 +2091,17 @@ export function collectResultText(result: BroadsideCollectResult): string {
 	for (const lensId of BROADSIDE_LENS_IDS) {
 		const outcome = result.lensOutcomes[lensId];
 		if (!outcome) continue;
+		const truncation = outcome.truncated ? `, ${outcome.truncated} truncated` : "";
 		lines.push(
 			`  ${lensId}: ${outcome.status}` +
 				(outcome.cost !== undefined ? `, $${outcome.cost.toFixed(6)}` : "") +
-				(outcome.resultCount !== undefined ? `, ${outcome.resultCount} result(s)` : ""),
+				(outcome.resultCount !== undefined ? `, ${outcome.resultCount} result(s)` : "") +
+				truncation,
+		);
+	}
+	if (result.truncatedCount > 0) {
+		lines.push(
+			`  ⚠ ${result.truncatedCount} result(s) truncated at the output limit — their modules are unscouted, not clean.`,
 		);
 	}
 	if (result.synthesis.status === "completed") {

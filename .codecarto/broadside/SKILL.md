@@ -82,3 +82,25 @@ collected file sizes against the model's live per-token pricing and refuses
 when the estimate exceeds `max_cost` (`config.yaml` or the tool parameter)
 unless `force` is passed. See `config.yaml` for the model, limit, and manual
 pricing-override keys.
+
+The `max_cost` guardrail is an **estimate-based pre-flight limit**, distinct
+from OpenRouter's runtime cost tracking: it predicts from file sizes before
+spend, it does not stop a batch mid-flight. Actual spend appears in
+`run-meta.json` after collect.
+
+## Resilience notes
+
+- **Truncation is spoken.** A lens output whose JSON does not parse — even
+  after code-fence stripping — is saved verbatim but marked `truncated`:
+  the collect summary counts it, `run-meta.json` records it, and the
+  synthesis prompt is told its module is unrepresented, not clean.
+- **Resubmission is always safe.** Batch requests are pure (no tools, no
+  filesystem, no side effects), so a failed or truncated slice can be
+  resubmitted freely. This is the same retry-safety rule OpenRouter's
+  headless-agent scaffold enforces for tool-using agents ("retry only
+  before tool calls"); Broad-Side satisfies it by construction. If
+  Broad-Side ever gains server tools, this invariant becomes load-bearing.
+- **Field shapes** for the model catalog and benchmarks endpoints follow
+  the official OpenRouter skills (`OpenRouterTeam/skills`:
+  `openrouter-models`, `openrouter-benchmarks`) — consult them when
+  extending catalog parsing.

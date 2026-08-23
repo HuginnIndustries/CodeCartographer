@@ -33,7 +33,7 @@ file only moves when a tier completes.
 | Item | Issue | Notes |
 |---|---|---|
 | **Triage lens** — prioritized fix queue (impact × difficulty, grouped by module) | [#135](https://github.com/HuginnIndustries/CodeCartographer/issues/135) | Highest-value next lens: turns leads into a work order |
-| **Truncation repair** — detect max_tokens-cutoff JSON, resubmit slices, report truncation in summaries | [#133](https://github.com/HuginnIndustries/CodeCartographer/issues/133) | Found in the self-scan: 3/10 defect slices truncated |
+| **Truncation repair** — detect max_tokens-cutoff JSON, resubmit slices, report truncation in summaries | [#133](https://github.com/HuginnIndustries/CodeCartographer/issues/133) | Partially shipped: fence-tolerant parsing + `truncated` flagging in collect, meta, and synthesis. Remaining: automatic resubmit of truncated slices |
 | **Concurrent polling** — poll all in-flight batches round-robin against one deadline | [#136](https://github.com/HuginnIndustries/CodeCartographer/issues/136) | Submissions already parallel; polling is sequential today |
 | **Per-language prompts** — Go/Python/Rust/TS lens prompts; globs already adapt | [#137](https://github.com/HuginnIndustries/CodeCartographer/issues/137) | Schemas stay shared so synthesis is unaffected |
 
@@ -52,6 +52,12 @@ file only moves when a tier completes.
 | **Multi-model** — DeepSeek/Anthropic batch endpoints behind the lens registry | [#141](https://github.com/HuginnIndustries/CodeCartographer/issues/141) | Partially shipped: catalog lookup, `models` action, pricing + capability pre-flight. Remaining: per-model prompt tweaks and a stronger default for semantic lenses |
 | **Incremental re-scouting** — diff against previous run's HEAD, rescan changed modules only | [#142](https://github.com/HuginnIndustries/CodeCartographer/issues/142) | Makes recurring scans O(delta) |
 | **CodeCartoShow pipeline stage** — BATCH-SCOUT between SELECT and the interactive run | [CodeCartoShow#1](https://github.com/HuginnIndustries/CodeCartoShow/issues/1) | `scripts/batch-analyze.py` proved it; evidence rules apply unchanged |
+
+## Tier 4 — open questions, not commitments
+
+| Item | Issue | Notes |
+|---|---|---|
+| **Headless-agent lens queue** — sync-priced, tool-using variant via `@openrouter/agent` | [#143](https://github.com/HuginnIndustries/CodeCartographer/issues/143) | 2× batch pricing; overlaps the interactive pipeline. The likelier winner is the hybrid: batch sweeps + one sync-priced verification pass on the top N findings |
 
 ## Principles
 

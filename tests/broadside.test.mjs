@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -701,7 +701,7 @@ test("runBroadsideCollect polls, saves results, and runs synthesis", async () =>
 	}
 });
 
-// ---------- markdown rendering ----------
+// ---------- markdown rendering & fence-tolerant parsing ----------
 
 test("renderFindingsMarkdown turns parsed JSON into readable text", () => {
 	const md = renderFindingsMarkdown(JSON.stringify({ title: "T", severity: "high", nested: { a: "b" }, list: [{ title: "x" }] }));
@@ -713,4 +713,52 @@ test("renderFindingsMarkdown turns parsed JSON into readable text", () => {
 
 test("renderFindingsMarkdown passes invalid JSON through untouched", () => {
 	assert.equal(renderFindingsMarkdown("not json"), "not json");
+});
+
+test("parseLensJson strips markdown code fences", () => {
+	const fenced = '```json\n{"title": "F", "severity": "low"}\n```';
+	const parsed = core.parseLensJson(fenced);
+	assert.deepEqual(parsed, { title: "F", severity: "low" });
+	const withoutLang = '```\n{"title": "F"}\n```';
+	assert.deepEqual(core.parseLensJson(withoutLang), { title: "F" });
+});
+
+test("parseLensJson returns null for truncated or non-JSON content", () => {
+	assert.equal(core.parseLensJson('```json\n{"title": "unterminated\n```'), null);
+	assert.equal(core.parseLensJson("The findings are numerous."), null);
+});
+
+test("saveLensResults marks truncated content and writes parsed JSON cleanly", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-trunc-"));
+	try {
+		const batch = {
+			results: [
+				{
+					custom_id: "defect-core-1",
+					response: {
+						status_code: 200,
+						body: { choices: [{ message: { content: '```json\n{"module": "core", "findings": []}\n```' } }] },
+					},
+					error: null,
+				},
+				{
+					custom_id: "defect-core-2",
+					response: {
+						status_code: 200,
+						body: { choices: [{ message: { content: '{"module": "core-2", "findin' } }] },
+					},
+					error: null,
+				},
+			],
+		};
+		const stored = await core.saveLensResults(dir, "defect", batch);
+		assert.equal(stored.length, 2);
+		assert.equal(stored[0].truncated, false);
+		assert.equal(stored[1].truncated, true);
+
+		const written = JSON.parse(await readFile(join(dir, "defect-core-1.json"), "utf8"));
+		assert.equal(written.module, "core", "fenced JSON must be saved parsed, not verbatim");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
