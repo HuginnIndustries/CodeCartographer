@@ -141,7 +141,9 @@ export async function seedOrchestratorFiles(workspaceDir: string): Promise<strin
  * Everything else present in the packaged template is framework-owned.
  */
 const REFRESH_EXCLUDED_TOP_LEVEL = new Set(["BACKLOG.md", "THREAD_LOG.md", "CONVENTIONS.md", "DECISIONS.md"]);
-const REFRESH_EXCLUDED_DIRS = new Set(["scratch", "inputs", "closeouts"]);
+// broadside/ holds machine-local scout state (batch ids, API key config,
+// generated results) — refresh must never overwrite it.
+const REFRESH_EXCLUDED_DIRS = new Set(["scratch", "inputs", "closeouts", "broadside"]);
 const REFRESH_EXCLUDED_WORKFLOW_FILES = new Set(["status.yaml", "config.yaml", ".usage.local.yaml"]);
 
 /** One scaffold refresh's outcome. */

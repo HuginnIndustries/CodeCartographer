@@ -357,6 +357,7 @@ Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/spec
 | `codecarto_publish` | MCP-only library publish |
 | `codecarto_library_list` | MCP-only library listing |
 | `codecarto_library_reindex` | MCP-only library reindex |
+| `codecarto_broadside` | MCP-only batch reconnaissance (Broad-Side) |
 
 Each workflow tool accepts an absolute `cwd` for the target repository. `codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation). The library tools accept an explicit absolute `library_path` or resolve `library.path` from `.codecarto/workflow/config.yaml` / `~/.codecarto/config.yaml`. The library schema is experimental and may break before v2.
 

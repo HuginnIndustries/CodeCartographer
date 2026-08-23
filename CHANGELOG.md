@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- **Broad-Side: batch reconnaissance over the OpenRouter Batch API** (#103). New `codecarto_broadside` MCP tool (actions: `submit`, `collect`, `status`) fires six single-turn analysis lenses — architecture, API surface, security, mechanical defect scan, convention extraction, porting — at any git repository as asynchronous batch jobs on a cheap batch model (~50% of sync pricing, unattended, 24h window), slices large modules by top-level directory, saves JSON plus rendered markdown to `.codecarto/broadside/<run>/`, and optionally synthesizes a cross-lens executive report. Works without an initialized workspace; needs an OpenRouter key via the `api_key` parameter, `OPENROUTER_API_KEY`, or `.codecarto/broadside/config.yaml`. Broad-Side findings are explicitly unverified scouting signals — file:line leads for the interactive pipeline to confirm, never evidence themselves. `codecarto_init` tolerates a `.codecarto/` that holds only `broadside/` (no force/backup needed), and scaffold refresh never touches broadside state, config, or results.
+
 ## [0.16.0] — 2026-08-17
 
 The field-test round. Immediately after 0.15.0 shipped, the same 7-phase deepseek-harness analysis was re-run on a fresh worktree through the published binary — this time with the driving chat as orchestrator — and the run's own gaps became this release (#111–#114): the very first completion appended decision rows without their promised heading, both full runs ended with no dashboard ever rendered, the analysis→publish→synthesis library loop was unreachable from any served text, and the terminal completion message named nothing actionable while skills, amendments, a publishable spec, and the usage log all sat unused.

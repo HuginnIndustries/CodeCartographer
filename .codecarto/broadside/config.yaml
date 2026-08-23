@@ -1,0 +1,27 @@
+# Broad-Side batch reconnaissance configuration. Optional.
+# Missing keys fall back to the defaults listed below.
+
+# OpenRouter model to use for batch requests. The default is Google Gemini
+# 3.7 Flash (batch) — the cheapest batch model with tool-calling support and
+# a 1M-token context window. Change this to another OpenRouter batch model
+# if you need a different cost/capability trade-off.
+#
+# model: google/gemini-3.7-flash:batch
+
+# OpenRouter API key. Prefer the OPENROUTER_API_KEY environment variable —
+# keys in this file are committed if you track .codecarto/ after init.
+# The codecarto_broadside tool also accepts api_key as a parameter.
+#
+# api_key: ""
+
+# Default lens set for codecarto_broadside submit when no lenses are
+# specified. All six lenses are on by default. Remove a lens id to skip it
+# globally, or pass an explicit lenses array on the submit call to override.
+#
+# default_lenses:
+#   - architecture
+#   - api
+#   - security
+#   - defect
+#   - conventions
+#   - porting

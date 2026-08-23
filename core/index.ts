@@ -17,3 +17,4 @@ export * from "./guide.ts";
 export * from "./dashboard.ts";
 export * from "./library.ts";
 export * from "./synthesis.ts";
+export * from "./broadside.ts";
