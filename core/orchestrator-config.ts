@@ -15,7 +15,7 @@
 // don't have to expand themselves.
 
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { PathLike } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { expandTilde, pathExists } from "./utils.ts";
@@ -179,7 +179,10 @@ export async function writeLibraryConfig(
 	if (namespace) library.namespace = namespace;
 
 	const updated: Record<string, unknown> = { ...existing, library };
-	const dir = configPath.includes("/") ? configPath.slice(0, configPath.lastIndexOf("/")) : ".";
+	// dirname() honors the platform separator; the previous hand-rolled
+	// `includes("/")` check treated every Windows path as a bare filename
+	// and left mkdir a no-op before the writeFile ENOENT'd (#128).
+	const dir = dirname(configPath);
 	await mkdir(dir, { recursive: true });
 	await writeFile(configPath, `${stringifySimpleYaml(updated)}\n`, "utf8");
 }

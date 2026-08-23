@@ -37,7 +37,13 @@ export function isWithinPath(path: string, root: string): boolean {
 	const normalizedPath = normalizeForComparison(resolve(path));
 	const normalizedRoot = normalizeForComparison(resolve(root));
 	if (normalizedPath === normalizedRoot) return true;
-	return normalizedPath.startsWith(`${normalizedRoot}${process.platform === "win32" ? "\\" : "/"}`);
+	// A filesystem root (e.g. "/" or "C:\") already ends in a separator;
+	// appending another one produced a prefix ("//" / "C:\\") that no real
+	// path starts with, falsely rejecting every legitimate subpath (#130).
+	const prefix = normalizedRoot.endsWith("/") || normalizedRoot.endsWith("\\")
+		? normalizedRoot
+		: `${normalizedRoot}${process.platform === "win32" ? "\\" : "/"}`;
+	return normalizedPath.startsWith(prefix);
 }
 
 /**

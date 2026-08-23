@@ -256,6 +256,12 @@ export async function runPhase(
 
 	try {
 		await session.prompt(prompt);
+		// If no compaction fired during the run, the promise above would
+		// otherwise strand the continuation path for the full settle timeout
+		// (#129). Settle it with what actually happened — resolve() is
+		// idempotent, so a real compaction_end event earlier in the run
+		// keeps its `true`.
+		resolveCompaction?.(false);
 		let primaryOutputPresent = true;
 		if (options.primaryOutput) {
 			primaryOutputPresent = await primaryOutputExists(cwd, options.primaryOutput);

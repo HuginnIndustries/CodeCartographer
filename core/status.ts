@@ -358,7 +358,14 @@ export async function acquireLock(lockPath: string): Promise<{ release: () => Pr
 	while (true) {
 		try {
 			const handle = await open(lockPath, "wx");
-			await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+			try {
+				await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+			} catch (error) {
+				// A non-EEXIST write failure must not leak the descriptor the
+				// open just created (#131); close best-effort, then rethrow.
+				await handle.close().catch(() => undefined);
+				throw error;
+			}
 			await handle.close();
 			return {
 				release: async () => {
