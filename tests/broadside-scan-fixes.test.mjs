@@ -1,6 +1,21 @@
-// Regression tests for the five defects the Broad-Side self-scan found and
-// verified (#128–#132). Each test pins the fixed behavior; without the fix,
-// each fails in the documented way.
+// Tests for the five defects the Broad-Side self-scan found and verified
+// (#128–#132).
+//
+// Two of these are true regression tests — they fail against the unfixed
+// code: #130 (filesystem-root subpaths) and the #132 stale-PASS refusal.
+//
+// The other three pin behavior around a fix they cannot themselves provoke,
+// because the failing condition is not reachable from this suite:
+//   #128 is a Windows-only path bug. On POSIX the old `includes("/")` branch
+//        and dirname() agree, so no assertion here can separate them.
+//   #131 guards the path where `writeFile` throws on an open descriptor,
+//        which needs injection this suite has no seam for; the test covers
+//        acquire/release/re-acquire instead.
+//   #129 fixes runPhase settling the compaction promise, but runPhase needs
+//        an AgentSession; the test covers waitForCompaction's contract on an
+//        already-settled promise, which held before the fix too.
+// Treat those three as coverage, not as guards — a refactor could revert
+// their fixes without turning this file red.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
