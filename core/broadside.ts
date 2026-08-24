@@ -592,6 +592,131 @@ const SCHEMAS: Record<string, JsonSchemaDef> = {
 
 // ---------- lens definitions ----------
 
+// Lenses share their JSON schemas across languages, but prompts must speak
+// the language's idioms: "goroutines without ctx" is noise to a Python
+// scanner. Profiles supply per-language defect patterns and convention
+// vocabulary; unknown languages get the neutral default.
+type LanguageProfile = {
+	defectPatterns: string[];
+	conventionCategories: Array<{ key: string; label: string }>;
+	idiomHints: string[];
+};
+
+const TS_PROFILE: LanguageProfile = {
+	defectPatterns: [
+		"Null/undefined dereference risks (unchecked optional access)",
+		"Error handling gaps (unhandled promise rejections, swallowed catches)",
+		"Resource leaks (unclosed handles, missing cleanup, dangling timers/listeners)",
+		"Race conditions (shared mutable state, async interleavings without guards)",
+		"Integer/precision assumptions in arithmetic",
+		"Unsafe type assumptions (as-casts, any leaks, non-null assertions)",
+		"Panic-prone code (out-of-bounds access, runtime TypeError paths)",
+		"Timezone/locale assumptions",
+	],
+	conventionCategories: [
+		{ key: "packages", label: "modules and imports" },
+		{ key: "types", label: "interfaces and type aliases" },
+		{ key: "functions", label: "functions (camelCase), components (PascalCase)" },
+		{ key: "variables", label: "variables and constants (camelCase)" },
+		{ key: "files", label: "file naming (kebab vs camel) and folder organization" },
+		{ key: "tests", label: "test files (*.test.ts, describe/it patterns)" },
+	],
+	idiomHints: ["strict null checks usage", "async/await vs promise chains", "dependency injection patterns"],
+};
+
+const LANGUAGE_PROFILES: Record<string, LanguageProfile> = {
+	go: {
+		defectPatterns: [
+			"Nil pointer dereference risks (unchecked returns, missing nil guards)",
+			"Error handling gaps (ignored errors, deferred errors unchecked)",
+			"Resource leaks (unclosed files, connections, goroutines without ctx)",
+			"Race conditions (shared state without sync, channel misuse)",
+			"Integer overflow/underflow in arithmetic or bounds",
+			"Unsafe type assertions without ok check",
+			"Panic-prone code (slice out of bounds, map access without ok)",
+			"Timezone/locale assumptions",
+		],
+		conventionCategories: [
+			{ key: "packages", label: "packages" },
+			{ key: "types", label: "types and interfaces" },
+			{ key: "functions", label: "functions and methods" },
+			{ key: "variables", label: "variables and fields" },
+			{ key: "files", label: "file and directory organization" },
+			{ key: "tests", label: "test files and table-driven tests" },
+		],
+		idiomHints: ["error wrapping with %w", "zero-value construction"],
+	},
+	python: {
+		defectPatterns: [
+			"None dereference risks (unchecked optional returns, AttributeError paths)",
+			"Exception handling gaps (bare except, swallowed exceptions, broad catch-all)",
+			"Resource leaks (unclosed files, sockets, connections, context managers)",
+			"Race conditions (shared mutable state, threading without locks, async pitfalls)",
+			"Integer/float precision assumptions in arithmetic",
+			"Unsafe type assumptions (unpacking mismatches, isinstance without fallback)",
+			"Panic-prone code (IndexError/KeyError paths, unbounded slicing)",
+			"Timezone/locale assumptions (naive datetimes)",
+		],
+		conventionCategories: [
+			{ key: "packages", label: "modules and packages" },
+			{ key: "types", label: "classes and type hints" },
+			{ key: "functions", label: "functions and methods (snake_case vs camelCase)" },
+			{ key: "variables", label: "variables and constants" },
+			{ key: "files", label: "file and module organization" },
+			{ key: "tests", label: "test files (pytest fixtures, naming)" },
+		],
+		idiomHints: ["dunder method usage", "context manager idioms", "dataclass/pydantic models"],
+	},
+	rust: {
+		defectPatterns: [
+			"Unwrap/expect panics on fallible paths",
+			"Error handling gaps (swallowed Results, lossy conversions)",
+			"Resource leaks (unclosed handles, drop order assumptions)",
+			"Data races and Send/Sync violations (unsafe blocks, interior mutability misuse)",
+			"Integer overflow/underflow (arithmetic, casting)",
+			"Unsafe type assumptions (transmute/casts without invariants)",
+			"Panic-prone code (indexing, slicing, unreachable! in library paths)",
+			"Timezone/locale assumptions",
+		],
+		conventionCategories: [
+			{ key: "packages", label: "crates and modules" },
+			{ key: "types", label: "structs, enums, and traits" },
+			{ key: "functions", label: "functions and methods (snake_case)" },
+			{ key: "variables", label: "variables and constants (SCREAMING_SNAKE)" },
+			{ key: "files", label: "module file organization" },
+			{ key: "tests", label: "test modules and #[cfg(test)] patterns" },
+		],
+		idiomHints: ["Result/Option handling with ?", "builder patterns", "trait-based extension"],
+	},
+	typescript: TS_PROFILE,
+	javascript: TS_PROFILE,
+	default: {
+		defectPatterns: [
+			"Null/undefined dereference risks (unchecked optional access)",
+			"Error handling gaps (ignored or swallowed errors)",
+			"Resource leaks (unclosed files, connections, handles)",
+			"Race conditions (shared mutable state without synchronization)",
+			"Integer overflow/underflow in arithmetic or bounds",
+			"Unsafe type assumptions and unchecked casts",
+			"Panic-prone code (out-of-bounds access, missing keys)",
+			"Timezone/locale assumptions",
+		],
+		conventionCategories: [
+			{ key: "packages", label: "modules, packages, or namespaces" },
+			{ key: "types", label: "types, classes, and interfaces" },
+			{ key: "functions", label: "functions and methods" },
+			{ key: "variables", label: "variables and constants" },
+			{ key: "files", label: "file and directory organization" },
+			{ key: "tests", label: "test files and test organization" },
+		],
+		idiomHints: [],
+	},
+};
+
+function languageProfile(language: string): LanguageProfile {
+	return LANGUAGE_PROFILES[language] ?? LANGUAGE_PROFILES.default;
+}
+
 type LensDefinition = {
 	id: BroadsideLensId;
 	name: string;
@@ -710,21 +835,20 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 		maxChars: 60_000,
 		maxTokens: 6000,
 		globsFor: (info) => [info.sourceGlob],
-		systemPrompt: (info) =>
-			`You are a senior code reviewer performing an automated defect scan on ${info.language} ` +
-			"source files. Look for these specific patterns:\n" +
-			"  1. Nil/null pointer dereference risks (unchecked returns, missing guards)\n" +
-			"  2. Error handling gaps (ignored errors, deferred errors unchecked)\n" +
-			"  3. Resource leaks (unclosed files, connections, goroutines without ctx)\n" +
-			"  4. Race conditions (shared state without sync, channel misuse)\n" +
-			"  5. Integer overflow/underflow in arithmetic or bounds\n" +
-			"  6. Unsafe type assertions without ok check\n" +
-			"  7. Panic-prone code (slice out of bounds, map access without ok)\n" +
-			"  8. Timezone/locale assumptions\n\n" +
-			"Return a JSON object following the defect_scan_report schema. " +
-			"Cite file:line for every finding. List which patterns you checked. " +
-			"If the code looks clean for a pattern, say so rather than staying silent. " +
-			"Prefer precision over volume — 3 solid findings beat 15 vague ones.",
+		systemPrompt: (info) => {
+			const profile = languageProfile(info.language);
+			const patterns = profile.defectPatterns.map((p, i) => `  ${i + 1}. ${p}`).join("\n");
+			return (
+				`You are a senior code reviewer performing an automated defect scan on ${info.language} ` +
+				"source files. Look for these specific patterns:\n" +
+				patterns +
+				"\n\n" +
+				"Return a JSON object following the defect_scan_report schema. " +
+				"Cite file:line for every finding. List which patterns you checked. " +
+				"If the code looks clean for a pattern, say so rather than staying silent. " +
+				"Prefer precision over volume — 3 solid findings beat 15 vague ones."
+			);
+		},
 		userPrompt: (info, source, moduleName) =>
 			`Scan this ${info.language} module for mechanical defects.\n\n` +
 			`Module: ${moduleName}\n\n` +
@@ -741,15 +865,24 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 		maxChars: 60_000,
 		maxTokens: 6000,
 		globsFor: (info) => [info.sourceGlob],
-		systemPrompt: () =>
-			"You are a code style analyst extracting conventions from source files. " +
-			"Catalog: naming conventions per category (packages, types, functions, variables, " +
-			"source files, test files), the dominant error-handling pattern, logging approach, " +
-			"test organization patterns, file/package organization rules, and recurring idioms. " +
-			"Also flag inconsistencies — places where the same convention is violated. " +
-			"If you find well-established conventions worth formalizing, list them as " +
-			"promotable_conventions with a title, rule, and evidence from the code. " +
-			"Return a JSON object following the conventions_report schema.",
+		systemPrompt: (info) => {
+			const profile = languageProfile(info.language);
+			const categories = profile.conventionCategories.map((c) => `${c.key} (${c.label})`).join(", ");
+			const idiomHint =
+				profile.idiomHints.length > 0
+					? ` Keep an eye out for ${info.language} idioms such as ${profile.idiomHints.join(", ")}.`
+					: "";
+			return (
+				`You are a code style analyst extracting conventions from ${info.language} source files. ` +
+				"Catalog naming conventions per category — " + categories + " — plus the dominant " +
+				"error-handling pattern, logging approach, test organization patterns, file/package " +
+				"organization rules, and recurring idioms." + idiomHint +
+				" Also flag inconsistencies — places where the same convention is violated. " +
+				"If you find well-established conventions worth formalizing, list them as " +
+				"promotable_conventions with a title, rule, and evidence from the code. " +
+				"Return a JSON object following the conventions_report schema."
+			);
+		},
 		userPrompt: (info, source, moduleName) =>
 			"Extract coding conventions from this module.\n\n" +
 			`Module: ${moduleName}\n\n` +
@@ -930,7 +1063,13 @@ function detectLanguage(fileCounts: Record<string, number>, manifestPath: string
 			if (manifestPath === candidate) return lang;
 		}
 	}
-	const counts: Record<string, number> = { go: fileCounts[".go"] ?? 0, python: fileCounts[".py"] ?? 0, rust: fileCounts[".rs"] ?? 0, typescript: (fileCounts[".ts"] ?? 0) + (fileCounts[".tsx"] ?? 0) };
+	const counts: Record<string, number> = {
+		go: fileCounts[".go"] ?? 0,
+		python: fileCounts[".py"] ?? 0,
+		rust: fileCounts[".rs"] ?? 0,
+		typescript: (fileCounts[".ts"] ?? 0) + (fileCounts[".tsx"] ?? 0),
+		javascript: fileCounts[".js"] ?? 0,
+	};
 	const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
 	return best && best[1] > 0 ? best[0] : "unknown";
 }

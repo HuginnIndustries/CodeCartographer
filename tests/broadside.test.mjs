@@ -563,6 +563,41 @@ test("modelsText renders pricing, caps, support, and benchmark columns", () => {
 	assert.match(text, /\(default\)/);
 });
 
+// ---------- per-language prompts (#137) ----------
+
+test("defect lens prompt speaks the detected language, not Go", () => {
+	const python = getLens("defect").systemPrompt({ language: "python" });
+	assert.match(python, /bare except/);
+	assert.ok(!python.includes("goroutines"), "Go idioms must not leak into Python prompts");
+
+	const go = getLens("defect").systemPrompt({ language: "go" });
+	assert.match(go, /goroutines without ctx/);
+
+	const rust = getLens("defect").systemPrompt({ language: "rust" });
+	assert.match(rust, /Unwrap\/expect panics/);
+
+	const ts = getLens("defect").systemPrompt({ language: "typescript" });
+	assert.match(ts, /non-null assertions/);
+
+	const js = getLens("defect").systemPrompt({ language: "javascript" });
+	assert.match(js, /unhandled promise rejections/, "javascript rides the TS profile");
+
+	const unknown = getLens("defect").systemPrompt({ language: "whitespace-esque" });
+	assert.match(unknown, /unchecked casts/, "unknown languages get the neutral default profile");
+});
+
+test("conventions lens prompt names language-appropriate categories and idioms", () => {
+	const rust = getLens("conventions").systemPrompt({ language: "rust" });
+	assert.match(rust, /crates and modules/);
+
+	const python = getLens("conventions").systemPrompt({ language: "python" });
+	assert.match(python, /dunder method usage/);
+
+	const go = getLens("conventions").systemPrompt({ language: "go" });
+	assert.match(go, /error wrapping with %w/);
+	assert.ok(!go.includes("dunder"), "python idiom hints must not leak into Go prompts");
+});
+
 // ---------- concurrent polling (#136) ----------
 
 test("pollBatchesConcurrently polls all batches in parallel against one deadline", async () => {
