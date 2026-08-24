@@ -1679,9 +1679,11 @@ export async function pollBatchUntilTerminal(
 		deadlineMs?: number;
 		onStatus?: (status: string, counts: Record<string, unknown>) => void;
 		fetcher?: FetchLike;
+		pollIntervalMs?: number;
 	} = {},
 ): Promise<Record<string, unknown>> {
 	const deadline = Date.now() + (opts.deadlineMs ?? BROADSIDE_DEFAULT_POLL_BUDGET_MS);
+	const intervalMs = opts.pollIntervalMs ?? BROADSIDE_POLL_INTERVAL_MS;
 	const fetcher = opts.fetcher ?? (fetch as FetchLike);
 	for (;;) {
 		let batch: Record<string, unknown>;
@@ -1689,7 +1691,7 @@ export async function pollBatchUntilTerminal(
 			batch = await fetchBatch(batchId, apiKey, fetcher);
 		} catch {
 			if (Date.now() >= deadline) return { id: batchId, status: "timeout" };
-			await sleep(BROADSIDE_POLL_INTERVAL_MS);
+			await sleep(intervalMs);
 			continue;
 		}
 		const httpStatus = Number(batch.http_status ?? 200);
@@ -1701,8 +1703,41 @@ export async function pollBatchUntilTerminal(
 		opts.onStatus?.(status, counts);
 		if (["completed", "failed", "expired", "cancelled", "auth-failed"].includes(status)) return batch;
 		if (Date.now() >= deadline) return { id: batchId, status: "timeout" };
-		await sleep(BROADSIDE_POLL_INTERVAL_MS);
+		await sleep(intervalMs);
 	}
+}
+
+/**
+ * Poll several batch ids in parallel against one shared deadline. Collect
+ * previously polled one lens at a time, so a slow first lens serialized the
+ * wall clock for lenses that had already finished server-side (#136). The
+ * onStatus callback identifies the lens so progress output stays readable
+ * even while the polls interleave.
+ */
+export async function pollBatchesConcurrently(
+	entries: Array<{ lensId: BroadsideLensId; batchId: string }>,
+	apiKey: string,
+	opts: {
+		deadlineMs?: number;
+		fetcher?: FetchLike;
+		pollIntervalMs?: number;
+		onStatus?: (lensId: string, status: string, counts: Record<string, unknown>) => void;
+	} = {},
+): Promise<Map<string, Record<string, unknown>>> {
+	const results = new Map<string, Record<string, unknown>>();
+	const deadlineMs = opts.deadlineMs ?? BROADSIDE_DEFAULT_POLL_BUDGET_MS;
+	await Promise.all(
+		entries.map(async ({ lensId, batchId }) => {
+			const batch = await pollBatchUntilTerminal(batchId, apiKey, {
+				deadlineMs,
+				fetcher: opts.fetcher,
+				pollIntervalMs: opts.pollIntervalMs,
+				onStatus: (status, counts) => opts.onStatus?.(lensId, status, counts),
+			});
+			results.set(batchId, batch);
+		}),
+	);
+	return results;
 }
 
 // ---------- run orchestration ----------
@@ -2062,6 +2097,10 @@ export async function runBroadsideCollect(
 
 	const allLensResults: StoredLensResult[] = [];
 
+	// Terminal entries are settled already; everything else polls in parallel
+	// against one shared deadline (#136), then results save in lens order so
+	// output layout stays deterministic.
+	const inFlight: Array<{ lensId: BroadsideLensId; batchId: string }> = [];
 	for (const lensId of run.lenses) {
 		const entry = run.batches[lensId];
 		if (!entry || !entry.batchId) {
@@ -2074,12 +2113,19 @@ export async function runBroadsideCollect(
 			lensOutcomes[lensId] = { status: entry.status, cost: entry.cost, resultCount: entry.resultCount };
 			continue;
 		}
+		inFlight.push({ lensId, batchId: entry.batchId });
+	}
 
-		const batch = await pollBatchUntilTerminal(entry.batchId, apiKey, {
-			deadlineMs: Math.max(0, deadline - Date.now()),
-			onStatus: (status, counts) => opts.onStatus?.(lensId, status, counts),
-			fetcher: opts.fetcher,
-		});
+	const polled = await pollBatchesConcurrently(inFlight, apiKey, {
+		deadlineMs: Math.max(0, deadline - Date.now()),
+		fetcher: opts.fetcher,
+		onStatus: opts.onStatus,
+	});
+
+	for (const { lensId } of inFlight) {
+		const entry = run.batches[lensId];
+		if (!entry) continue;
+		const batch = polled.get(entry.batchId) ?? { id: entry.batchId, status: "timeout" };
 
 		const status = String(batch.status ?? "unknown");
 		entry.status = status;
