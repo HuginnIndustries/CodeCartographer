@@ -29,6 +29,7 @@ const {
 	loadBroadsideState,
 	listLenses,
 	modelsText,
+	pollBatchesConcurrently,
 	renderFindingsMarkdown,
 	resolveModelPricing,
 	runBroadsideCollect,
@@ -560,6 +561,102 @@ test("modelsText renders pricing, caps, support, and benchmark columns", () => {
 	assert.match(text, /64k/);
 	assert.match(text, /62\.4/);
 	assert.match(text, /\(default\)/);
+});
+
+// ---------- concurrent polling (#136) ----------
+
+test("pollBatchesConcurrently polls all batches in parallel against one deadline", async () => {
+	// Peak-concurrency tracking is deterministic: if polling were sequential,
+	// the fast batch would hold the loop and peak concurrent GETs would stay
+	// at 1. Under the fix, the fast batch polls while the slow one is still
+	// mid-polling.
+	let inFlightGets = 0;
+	let peak = 0;
+	const fetcher = async (url) => {
+		inFlightGets += 1;
+		peak = Math.max(peak, inFlightGets);
+		try {
+			await new Promise((r) => setTimeout(r, 15)); // overlap window
+			if (String(url).includes("batch-a")) {
+				return fakeResponse(200, { id: "batch-a", status: "completed", results: [], usage: { cost: 0.001 } });
+			}
+			return fakeResponse(200, { id: "batch-b", status: "completed", results: [], usage: { cost: 0.002 } });
+		} finally {
+			inFlightGets -= 1;
+		}
+	};
+
+	const results = await pollBatchesConcurrently(
+		[
+			{ lensId: "defect", batchId: "batch-a" },
+			{ lensId: "security", batchId: "batch-b" },
+		],
+		"sk-fake",
+		{ fetcher, pollIntervalMs: 20, deadlineMs: 5000 },
+	);
+	assert.equal(results.size, 2);
+	assert.equal(results.get("batch-a").status, "completed");
+	assert.equal(results.get("batch-b").status, "completed");
+	assert.ok(peak >= 2, `peak concurrent GETs was ${peak} — polling is sequential`);
+});
+
+test("collect polls multiple in-flight lenses concurrently", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-conc-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await writeFile(join(dir, "main.go"), "package main\n");
+		await mkdir(join(dir, "server"));
+		await writeFile(join(dir, "server", "routes.go"), "package server\n");
+
+		let inFlightGets = 0;
+		let peak = 0;
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				return fakeResponse(202, { id: "batch-x", status: "validating" });
+			}
+			inFlightGets += 1;
+			peak = Math.max(peak, inFlightGets);
+			try {
+				await new Promise((r) => setTimeout(r, 15));
+				const batchId = String(url).split("/").pop();
+				return fakeResponse(200, {
+					id: batchId,
+					status: "completed",
+					results: [
+						{
+							custom_id: `${batchId}-1`,
+							response: {
+								status_code: 200,
+								body: { choices: [{ message: { content: JSON.stringify({ module: "x", findings: [], patterns_checked: [], files_scanned: 0 }) } }] },
+							},
+							error: null,
+						},
+					],
+					usage: { cost: 0.001 },
+				});
+			} finally {
+				inFlightGets -= 1;
+			}
+		};
+
+		// Two submissions → two lens batches; rewrite state so both are
+		// in flight under distinct ids, then collect must poll both together.
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture", "security"], fetcher });
+		assert.equal(Object.keys(result.batches).length, 2);
+		const broadsideDir = join(dir, ".codecarto", "broadside");
+		const state = await loadBroadsideState(broadsideDir);
+		state.runs[0].batches.architecture.batchId = "batch-a";
+		state.runs[0].batches.architecture.status = "validating";
+		state.runs[0].batches.security.batchId = "batch-b";
+		state.runs[0].batches.security.status = "validating";
+		await saveBroadsideState(broadsideDir, state);
+
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeSynthesis: false, includeTriage: false });
+		assert.equal(collect.resultCount, 2);
+		assert.ok(peak >= 2, `peak concurrent GETs was ${peak} — collect is polling lenses sequentially`);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 // ---------- batch client with a fake fetcher ----------
