@@ -37,6 +37,40 @@ test("readGuide returns each reference body", async () => {
 	}
 });
 
+test("readGuide serves every document whole, never a prefix", async () => {
+	// A guide that arrives cut off is worse than one that fails to arrive: it
+	// reads as authoritative and the reader never learns what is missing. A run
+	// was reported where the drive loop stopped mid-diagram, right after
+	// "codecarto_init (first time only)", so the numbered steps and the whole
+	// handoff contract were simply absent. Nothing in the serving path capped
+	// length — readGuide is readFile plus a frontmatter strip — and nothing
+	// asserted that either, so a later length cap or summarizer would ship
+	// silently. Pin the invariant: the served body is an exact suffix of the
+	// file on disk, so only leading frontmatter may ever be removed.
+	const skillDir = join(SKILL_DIR, "references");
+	for (const topic of await core.listGuideTopics()) {
+		const served = (await core.readGuide(topic)).content;
+		const path = topic === "overview" ? join(SKILL_DIR, "SKILL.md") : join(skillDir, `${topic}.md`);
+		const raw = await readFile(path, "utf8");
+		assert.ok(
+			raw.endsWith(served),
+			`${topic} is not served whole — the body differs from the tail of ${path}`,
+		);
+	}
+});
+
+test("every served guide document closes the code fences it opens", async () => {
+	// The cheapest structural signature of a truncated markdown document, and
+	// the exact shape of the reported cutoff: the drive-loop diagram opened a
+	// fence that nothing closed. An odd fence count means some reader is being
+	// handed a document that ends inside a code block.
+	for (const topic of await core.listGuideTopics()) {
+		const content = (await core.readGuide(topic)).content;
+		const fences = (content.match(/^```/gm) ?? []).length;
+		assert.equal(fences % 2, 0, `${topic} ends inside an unclosed code fence (${fences} fence lines)`);
+	}
+});
+
 test("readGuide rejects an unknown topic and names the valid ones", async () => {
 	await assert.rejects(() => core.readGuide("nonsense"), /Unknown guide topic nonsense/);
 	await assert.rejects(() => core.readGuide("nonsense"), /overview/);
@@ -139,6 +173,22 @@ test("codecarto_guide returns the overview and advertises other topics", async (
 	assert.match(text, /# Driving CodeCartographer/);
 	assert.match(text, /Other guide topics: .*handoff-contract/);
 	assert.equal(result.structuredContent.topic, "overview");
+});
+
+test("codecarto_guide hands both payload fields the same whole document", async () => {
+	// Hosts read one field or the other: content[0].text is the conventional
+	// path, structuredContent.text the one a structured client prefers. If they
+	// ever diverge, a truncation bug reproduces on one surface and not the
+	// other, which is the hardest kind to diagnose from a bug report. Assert
+	// they are identical and that the served body is the document plus only the
+	// topics footer.
+	const { handleGuide } = await import(pathToFileURL(join(REPO_ROOT, "mcp-server/server.ts")).href);
+	const document = (await core.readGuide("overview")).content;
+	const result = await handleGuide({});
+
+	assert.equal(result.content[0].text, result.structuredContent.text, "payload fields must not diverge");
+	assert.ok(result.content[0].text.startsWith(document), "the document must be served entire, not summarized");
+	assert.match(result.content[0].text.slice(document.length), /^\n\n---\nOther guide topics: /, "only the footer may follow");
 });
 
 test("codecarto_guide serves a requested topic and rejects a bad one", async () => {
