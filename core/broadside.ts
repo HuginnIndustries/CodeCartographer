@@ -199,6 +199,8 @@ export type BroadsideRun = {
 	totalCost?: number;
 	pricing?: ModelPricing;
 	maxCost?: number;
+	/** The model's completion ceiling, recorded so collect can cap retries. */
+	outputCap?: number;
 };
 
 export type BroadsideStateFile = {
@@ -241,6 +243,8 @@ export type BroadsideCollectResult = {
 	/** Results whose JSON did not parse even after fence stripping —
 	 * the signature of an output cut off at max_tokens. */
 	truncatedCount: number;
+	/** Truncated slices recovered by the automatic re-submit pass (#133). */
+	retriedCount: number;
 	lensOutcomes: Partial<
 		Record<BroadsideLensId, { status: string; cost?: number; resultCount?: number; truncated?: number }>
 	>;
@@ -1833,16 +1837,19 @@ export async function runBroadsideSubmit(
 		triage: { status: "pending" },
 		pricing,
 		maxCost: limit > 0 ? limit : undefined,
+		outputCap,
 	};
 	state.runs.push(run);
 	await saveBroadsideState(broadsideDir, state);
 
+	const requestsByCustomId: Record<string, BatchRequest> = {};
 	const submissions: Promise<void>[] = [];
 	for (const lensId of lensIds) {
 		const lens = getLens(lensId);
 		const slices = slicesByLens.get(lensId) ?? [];
 		const maxTokens = outputCap ? Math.min(lens.maxTokens, outputCap) : lens.maxTokens;
 		const requests = slices.map((s, i) => buildBatchRequest(lens, info, s, i, slices.length, model, maxTokens));
+		for (const request of requests) requestsByCustomId[request.custom_id] = request;
 		const estimate = estimateCost(lens, slices, pricing, maxTokens);
 
 		const entry: BroadsideBatchEntry = {
@@ -1880,6 +1887,14 @@ export async function runBroadsideSubmit(
 	}
 	await Promise.allSettled(submissions);
 	await saveBroadsideState(broadsideDir, state);
+
+	// Persist the exact request bodies so collect can re-submit a truncated
+	// slice (bumped output cap) without re-walking the repo (#133). The run
+	// dir is created here rather than waiting for collect so a crash between
+	// submit and collect still leaves the retry input on disk.
+	const runDir = join(broadsideDir, runId);
+	await mkdir(runDir, { recursive: true });
+	await writeFile(join(runDir, "requests.json"), `${JSON.stringify(requestsByCustomId, null, "\t")}\n`, "utf8");
 
 	return {
 		runId,
@@ -1974,6 +1989,17 @@ export async function saveLensResults(
 		});
 	}
 	return out;
+}
+
+async function loadStoredRequests(runDir: string): Promise<Record<string, BatchRequest>> {
+	const path = join(runDir, "requests.json");
+	if (!(await pathExists(path))) return {};
+	try {
+		const parsed = JSON.parse(await readFile(path, "utf8")) as Record<string, BatchRequest>;
+		return parsed && typeof parsed === "object" ? parsed : {};
+	} catch {
+		return {};
+	}
 }
 
 // ---------- post-lens passes: synthesis + triage ----------
@@ -2075,6 +2101,8 @@ export async function runBroadsideCollect(
 		waitMs?: number;
 		includeSynthesis?: boolean;
 		includeTriage?: boolean;
+		/** Re-submit truncated slices once with a doubled output cap (#133). */
+		retryTruncated?: boolean;
 		onStatus?: (lensId: string, status: string, counts: Record<string, unknown>) => void;
 		fetcher?: FetchLike;
 	} = {},
@@ -2150,6 +2178,61 @@ export async function runBroadsideCollect(
 		} else if (batch.error) {
 			entry.error = batch.error;
 			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount };
+		}
+		await saveBroadsideState(broadsideDir, state);
+	}
+
+	// #133: re-submit truncated slices once with a bumped output cap. Batch
+	// requests are pure, so re-running is always safe; the aim is to recover
+	// coverage the first pass lost to a max_tokens cutoff, not to loop forever.
+	let retriedCount = 0;
+	if (opts.retryTruncated !== false && truncatedCount > 0) {
+		const requestsByCustomId = await loadStoredRequests(runDir);
+		for (const stored of allLensResults) {
+			if (!stored.truncated) continue;
+			const original = requestsByCustomId[stored.customId];
+			if (!original) continue;
+			const previousMax = original.body.max_tokens ?? getLens(stored.lensId).maxTokens;
+			const bumpedMax = run.outputCap ? Math.min(previousMax * 2, run.outputCap) : previousMax * 2;
+			if (bumpedMax <= previousMax) continue; // already at the ceiling
+
+			const bumped: BatchRequest = {
+				...original,
+				body: { ...original.body, max_tokens: bumpedMax },
+			};
+			try {
+				const { batchId, error } = await submitBatch([bumped], apiKey, opts.fetcher, run.model);
+				if (error) continue;
+				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
+					deadlineMs: BROADSIDE_DEFAULT_POLL_BUDGET_MS,
+					onStatus: (status, counts) => opts.onStatus?.(`${stored.lensId}:retry`, status, counts),
+					fetcher: opts.fetcher,
+				});
+				if (batch.status !== "completed") continue;
+				const results = Array.isArray(batch.results) ? (batch.results as Array<Record<string, unknown>>) : [];
+				const content = results.length > 0 ? extractContent(results[0]) : null;
+				if (content === null || parseLensJson(content) === null) continue; // still no good
+
+				const usage = (batch.usage ?? {}) as Record<string, unknown>;
+				totalCost += typeof usage.cost === "number" ? usage.cost : 0;
+
+				const parsed = parseLensJson(content);
+				await writeFile(join(runDir, `${sanitizeId(stored.customId)}.json`), `${JSON.stringify(parsed, null, "\t")}\n`, "utf8");
+				await writeFile(join(runDir, `${sanitizeId(stored.customId)}.md`), renderFindingsMarkdown(content), "utf8");
+
+				stored.content = content;
+				stored.truncated = false;
+				retriedCount += 1;
+			} catch {
+				// A retry that fails to submit/poll leaves the original
+				// truncated result in place — nothing is lost.
+			}
+		}
+		truncatedCount = allLensResults.filter((s) => s.truncated).length;
+		for (const [lensId, outcome] of Object.entries(lensOutcomes)) {
+			if (outcome.truncated !== undefined) {
+				outcome.truncated = allLensResults.filter((s) => s.lensId === lensId && s.truncated).length;
+			}
 		}
 		await saveBroadsideState(broadsideDir, state);
 	}
@@ -2274,6 +2357,7 @@ export async function runBroadsideCollect(
 				total_cost: totalCost,
 				result_count: resultCount,
 				truncated_count: truncatedCount,
+				retried_count: retriedCount,
 				synthesis: run.synthesis,
 				triage: run.triage,
 				lenses: run.lenses,
@@ -2293,6 +2377,7 @@ export async function runBroadsideCollect(
 		totalCost,
 		resultCount,
 		truncatedCount,
+		retriedCount,
 		lensOutcomes,
 		synthesis: run.synthesis,
 		triage: run.triage,
@@ -2455,9 +2540,12 @@ export function collectResultText(result: BroadsideCollectResult): string {
 				truncation,
 		);
 	}
+	if (result.retriedCount > 0) {
+		lines.push(`  ↻ ${result.retriedCount} truncated result(s) recovered by re-submission with a doubled output cap.`);
+	}
 	if (result.truncatedCount > 0) {
 		lines.push(
-			`  ⚠ ${result.truncatedCount} result(s) truncated at the output limit — their modules are unscouted, not clean.`,
+			`  ⚠ ${result.truncatedCount} result(s) still truncated after retry — their modules are unscouted, not clean.`,
 		);
 	}
 	if (result.synthesis.status === "completed") {

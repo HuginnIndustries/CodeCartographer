@@ -34,7 +34,7 @@ file only moves when a tier completes.
 | Item | Issue | Notes |
 |---|---|---|
 | **Triage lens** — prioritized fix queue (impact × difficulty, grouped by module) | [#135](https://github.com/HuginnIndustries/CodeCartographer/issues/135) | **Shipped**: triage pass runs on collect alongside synthesis (`include_triage` to skip) |
-| **Truncation repair** — detect max_tokens-cutoff JSON, resubmit slices, report truncation in summaries | [#133](https://github.com/HuginnIndustries/CodeCartographer/issues/133) | Partially shipped: fence-tolerant parsing + `truncated` flagging in collect, meta, and synthesis. Remaining: automatic resubmit of truncated slices |
+| **Truncation repair** — detect max_tokens-cutoff JSON, resubmit slices, report truncation in summaries | [#133](https://github.com/HuginnIndustries/CodeCartographer/issues/133) | **Shipped**: fence-tolerant parsing + `truncated` flags + automatic re-submit of truncated slices with a doubled output cap |
 | **Concurrent polling** — poll all in-flight batches round-robin against one deadline | [#136](https://github.com/HuginnIndustries/CodeCartographer/issues/136) | **Shipped**: `pollBatchesConcurrently` polls in parallel with per-lens progress tags |
 | **Per-language prompts** — Go/Python/Rust/TS lens prompts; globs already adapt | [#137](https://github.com/HuginnIndustries/CodeCartographer/issues/137) | **Shipped**: language profiles drive defect/conventions prompts; schemas unchanged |
 
