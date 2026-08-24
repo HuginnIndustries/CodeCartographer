@@ -87,9 +87,33 @@ test("collectRepoInfo detects Go and gathers manifest, tree, and counts", async 
 	}
 });
 
-test("directory slicing puts nested files under their top-level module", async () => {
+test("auto slicing collapses a small repo to a single whole-repo slice", async () => {
 	const dir = await makeFixture();
 	try {
+		const info = await collectRepoInfo(dir);
+		const lens = getLens("defect");
+		const slices = await gatherSlices(dir, lens, info);
+		assert.equal(slices.length, 1, "a repo that fits one slice must not be split per directory");
+		assert.equal(slices[0].moduleName, info.name);
+		assert.match(slices[0].content, /server\/routes\.go/);
+		assert.match(slices[0].content, /model\/deep\/nested\.go/);
+		assert.match(slices[0].content, /main\.go/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("auto slicing directory-splits a repo too large for one slice", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-auto-"));
+	try {
+		await mkdir(join(dir, "server"));
+		await mkdir(join(dir, "model"));
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await writeFile(join(dir, "main.go"), "package main\n");
+		for (let i = 0; i < 40; i++) {
+			await writeFile(join(dir, "server", `s${i}.go`), "package server\n" + `// ${"x".repeat(2000)}\n`);
+			await writeFile(join(dir, "model", `m${i}.go`), "package model\n" + `// ${"y".repeat(2000)}\n`);
+		}
 		const info = await collectRepoInfo(dir);
 		const lens = getLens("defect");
 		const slices = await gatherSlices(dir, lens, info);
@@ -97,9 +121,6 @@ test("directory slicing puts nested files under their top-level module", async (
 		assert.ok(byModule.server, "server/ must be its own slice");
 		assert.ok(byModule.model, "model/ must be its own slice");
 		assert.ok(byModule.root, "top-level main.go must land in the root slice");
-		assert.match(byModule.server.content, /server\/routes\.go/);
-		assert.match(byModule.model.content, /model\/deep\/nested\.go/, "nested files belong to the top-level module");
-		assert.match(byModule.root.content, /main\.go/);
 		for (const slice of slices) {
 			assert.ok(slice.chars <= lens.maxChars);
 		}

@@ -30,7 +30,7 @@
 // Deliberately not in .codecarto/ template prose: Broad-Side requires runtime
 // code, so it lives on the executable surfaces (MCP today, Pi on the roadmap).
 
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dirname, join } from "node:path";
@@ -597,7 +597,10 @@ type LensDefinition = {
 	name: string;
 	description: string;
 	schemaName: string;
-	sliceBy: "none" | "directory";
+	// "none" = one slice for the whole repo; "directory" = one slice per
+	// top-level module; "auto" = directory for large repos, none for small
+	// ones (see resolveSliceMode).
+	sliceBy: "none" | "directory" | "auto";
 	maxChars: number;
 	maxTokens: number;
 	// Test files rarely carry the surface a lens audits — they bulk up the
@@ -706,7 +709,7 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 		name: "Mechanical defect scan",
 		description: "Nil derefs, error gaps, leaks, races, panics — pattern-based, sliced per module.",
 		schemaName: "defect_mechanical",
-		sliceBy: "directory",
+		sliceBy: "auto",
 		maxChars: 60_000,
 		maxTokens: 6000,
 		globsFor: (info) => [info.sourceGlob],
@@ -737,7 +740,7 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 		name: "Convention extraction",
 		description: "Naming, error handling, idioms, inconsistencies, promotable conventions.",
 		schemaName: "conventions",
-		sliceBy: "directory",
+		sliceBy: "auto",
 		maxChars: 60_000,
 		maxTokens: 6000,
 		globsFor: (info) => [info.sourceGlob],
@@ -762,7 +765,7 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 		name: "Porting surface assessment",
 		description: "Platform coupling, external deps, build complexity, porting risk areas.",
 		schemaName: "porting",
-		sliceBy: "directory",
+		sliceBy: "auto",
 		maxChars: 60_000,
 		maxTokens: 6000,
 		skipTestFiles: true,
@@ -1088,6 +1091,18 @@ function isTestFile(relPath: string): boolean {
 	return /[._](test|spec)\.[a-z]+$/i.test(base) || base.includes("_test.");
 }
 
+/**
+ * "auto" slicing: directory-slice when the repo is large enough that a
+ * single whole-repo slice would overflow the lens's char cap, otherwise a
+ * single slice. The threshold is the lens's own cap — a repo whose matching
+ * files fit in one slice gains nothing from per-module splitting, and a
+ * small repo pays for it in extra requests.
+ */
+function resolveSliceMode(lens: LensDefinition, files: CollectedFile[], totalChars: number): "none" | "directory" {
+	if (lens.sliceBy !== "auto") return lens.sliceBy;
+	return totalChars > lens.maxChars ? "directory" : "none";
+}
+
 function collectLensFiles(allFiles: string[], lens: LensDefinition, info: RepoInfo): CollectedFile[] {
 	const globs = lens.globsFor(info);
 	if (globs.length === 0) return [];
@@ -1096,7 +1111,7 @@ function collectLensFiles(allFiles: string[], lens: LensDefinition, info: RepoIn
 		if (!isSlurpable(f)) continue;
 		if (lens.skipTestFiles && isTestFile(f)) continue;
 		if (!matchesAnyGlob(f, globs)) continue;
-		out.push({ relPath: f, moduleName: lens.sliceBy === "directory" ? topLevelModule(f) : info.name });
+		out.push({ relPath: f, moduleName: topLevelModule(f) });
 	}
 	return out;
 }
@@ -1160,7 +1175,27 @@ export async function gatherSlices(targetDir: string, lens: LensDefinition, info
 	}
 	const allFiles = await listRepoFiles(targetDir);
 	const files = collectLensFiles(allFiles, lens, info);
+	const totalChars = await sumFileSizes(targetDir, files);
+	const mode = resolveSliceMode(lens, files, totalChars);
+	if (mode === "none") {
+		// Whole-repo slice: one module named after the repo, so a small
+		// repo produces a single request instead of one per directory.
+		const single = files.map((f) => ({ ...f, moduleName: info.name }));
+		return slurpFileList(targetDir, single, lens.maxChars);
+	}
 	return slurpFileList(targetDir, files, lens.maxChars);
+}
+
+async function sumFileSizes(targetDir: string, files: CollectedFile[]): Promise<number> {
+	let total = 0;
+	for (const f of files) {
+		try {
+			total += (await stat(join(targetDir, f.relPath))).size;
+		} catch {
+			// Unreadable file — slurpFileList substitutes a placeholder.
+		}
+	}
+	return total;
 }
 
 // ---------- request building ----------

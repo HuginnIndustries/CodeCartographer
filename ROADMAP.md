@@ -44,7 +44,7 @@ file only moves when a tier completes.
 |---|---|---|
 | **Pi extension** — `/codecarto-broadside` command with lens picker and live progress | [#138](https://github.com/HuginnIndustries/CodeCartographer/issues/138) | Agreed order: MCP first (shipped), Pi second |
 | **Pipeline phase** — `broadside-scout` phase feeding later phases via `required_reads` | [#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139) | SKILL.md contract stays: leads, never evidence |
-| **Zero-config executive** — meta-pass picks lenses and slicing resolution from repo shape | [#140](https://github.com/HuginnIndustries/CodeCartographer/issues/140) | Decision recorded in `run-meta.json` for reproducibility |
+| **Zero-config executive** — meta-pass picks lenses and slicing resolution from repo shape | [#140](https://github.com/HuginnIndustries/CodeCartographer/issues/140) | **Shipped**: `auto` slicing collapses small repos to one slice, directory-splits large ones |
 
 ## Tier 3 — cost and coverage economics
 
