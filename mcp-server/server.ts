@@ -1002,6 +1002,7 @@ export async function handleBroadside(args: {
 	wait_seconds?: number;
 	include_synthesis?: boolean;
 	include_triage?: boolean;
+	retry_truncated?: boolean;
 	max_cost?: number;
 	force?: boolean;
 	include_benchmarks?: boolean;
@@ -1065,6 +1066,7 @@ export async function handleBroadside(args: {
 				waitMs,
 				includeSynthesis: args.include_synthesis !== false,
 				includeTriage: args.include_triage !== false,
+				retryTruncated: args.retry_truncated !== false,
 				onStatus: (lensId, status, counts) =>
 					lines.push(`  ${lensId}: ${status} (${counts.completed ?? 0}/${counts.total ?? "?"})`),
 			});
@@ -1085,6 +1087,7 @@ export async function handleBroadside(args: {
 		waitMs,
 		includeSynthesis: args.include_synthesis !== false,
 		includeTriage: args.include_triage !== false,
+		retryTruncated: args.retry_truncated !== false,
 	}).catch((error) => {
 		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
@@ -1094,6 +1097,7 @@ export async function handleBroadside(args: {
 		totalCost: collect.totalCost,
 		resultCount: collect.resultCount,
 		truncatedCount: collect.truncatedCount,
+		retriedCount: collect.retriedCount,
 		lensOutcomes: collect.lensOutcomes,
 		synthesis: collect.synthesis,
 		triage: collect.triage,
@@ -1429,6 +1433,11 @@ const TOOLS = [
 					type: "boolean",
 					description:
 						"Run the triage pass once all lens batches complete: turns the findings into a prioritized work order (impact × difficulty, P0-P3, effort estimates). Default true.",
+				},
+				retry_truncated: {
+					type: "boolean",
+					description:
+						"Re-submit lens results that came back truncated at the output token limit, once, with a doubled output cap. Default true.",
 				},
 				max_cost: {
 					type: "number",

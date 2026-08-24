@@ -562,6 +562,90 @@ test("modelsText renders pricing, caps, support, and benchmark columns", () => {
 	assert.match(text, /\(default\)/);
 });
 
+// ---------- truncated-slice resubmit (#133) ----------
+
+test("submit persists request bodies for truncated-slice recovery", async () => {
+	const dir = await makeFixture();
+	try {
+		const fetcher = async (url, init) =>
+			init.method === "POST" ? fakeResponse(202, { id: "batch-x", status: "validating" }) : fakeResponse(200, { id: "x", status: "in_progress" });
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const runDir = join(dir, ".codecarto", "broadside", result.outputDir.split("/").pop());
+		const requests = JSON.parse(await readFile(join(runDir, "requests.json"), "utf8"));
+		assert.ok(requests["architecture-root"], "architecture request must be persisted");
+		assert.equal(requests["architecture-root"].body.model, BROADSIDE_MODEL);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("collect re-submits truncated slices once with a doubled output cap", async () => {
+	const dir = await makeFixture();
+	try {
+		const truncated = '{"module": "server", "findings": [';
+		const recovered = JSON.stringify({ module: "server", findings: [], patterns_checked: [], files_scanned: 0 });
+		const retryPayloads = [];
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				const payload = JSON.parse(init.body);
+				const isRetry = retryPayloads.length > 0;
+				retryPayloads.push(payload);
+				return fakeResponse(202, { id: isRetry ? "batch-retry" : "batch-lens", status: "validating" });
+			}
+			if (String(url).includes("batch-lens")) {
+				return fakeResponse(200, {
+					id: "batch-lens",
+					status: "completed",
+					results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: truncated } }] } }, error: null }],
+					usage: { cost: 0.001 },
+				});
+			}
+			return fakeResponse(200, {
+				id: "batch-retry",
+				status: "completed",
+				results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: recovered } }] } }, error: null }],
+				usage: { cost: 0.002 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeSynthesis: false, includeTriage: false });
+
+		assert.equal(collect.truncatedCount, 0, "recovered slice must clear the truncation count");
+		assert.equal(collect.retriedCount, 1, "one slice recovered by resubmission");
+		assert.equal(retryPayloads.length, 2, "one original submit + one retry");
+		assert.equal(retryPayloads[1].requests[0].body.max_tokens, retryPayloads[0].requests[0].body.max_tokens * 2, "retry must double the output cap");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("collect leaves truncated slices alone when retry_truncated is false", async () => {
+	const dir = await makeFixture();
+	try {
+		const truncated = '{"module": "server", "findings": [';
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				return fakeResponse(202, { id: "batch-lens", status: "validating" });
+			}
+			return fakeResponse(200, {
+				id: "batch-lens",
+				status: "completed",
+				results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: truncated } }] } }, error: null }],
+				usage: { cost: 0.001 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeSynthesis: false, includeTriage: false, retryTruncated: false });
+
+		assert.equal(collect.truncatedCount, 1, "truncation must remain reported");
+		assert.equal(collect.retriedCount, 0, "no resubmission when retry_truncated is false");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 // ---------- batch client with a fake fetcher ----------
 
 function fakeResponse(status, body) {
