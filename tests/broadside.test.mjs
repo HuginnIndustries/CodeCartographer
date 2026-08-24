@@ -29,6 +29,7 @@ const {
 	loadBroadsideState,
 	listLenses,
 	modelsText,
+	pollBatchesConcurrently,
 	renderFindingsMarkdown,
 	resolveModelPricing,
 	runBroadsideCollect,
@@ -581,6 +582,221 @@ test("modelsText renders pricing, caps, support, and benchmark columns", () => {
 	assert.match(text, /64k/);
 	assert.match(text, /62\.4/);
 	assert.match(text, /\(default\)/);
+});
+
+// ---------- truncated-slice resubmit (#133) ----------
+
+test("submit persists request bodies for truncated-slice recovery", async () => {
+	const dir = await makeFixture();
+	try {
+		const fetcher = async (url, init) =>
+			init.method === "POST" ? fakeResponse(202, { id: "batch-x", status: "validating" }) : fakeResponse(200, { id: "x", status: "in_progress" });
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const runDir = join(dir, ".codecarto", "broadside", result.outputDir.split("/").pop());
+		const requests = JSON.parse(await readFile(join(runDir, "requests.json"), "utf8"));
+		assert.ok(requests["architecture-root"], "architecture request must be persisted");
+		assert.equal(requests["architecture-root"].body.model, BROADSIDE_MODEL);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("collect re-submits truncated slices once with a doubled output cap", async () => {
+	const dir = await makeFixture();
+	try {
+		const truncated = '{"module": "server", "findings": [';
+		const recovered = JSON.stringify({ module: "server", findings: [], patterns_checked: [], files_scanned: 0 });
+		const retryPayloads = [];
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				const payload = JSON.parse(init.body);
+				const isRetry = retryPayloads.length > 0;
+				retryPayloads.push(payload);
+				return fakeResponse(202, { id: isRetry ? "batch-retry" : "batch-lens", status: "validating" });
+			}
+			if (String(url).includes("batch-lens")) {
+				return fakeResponse(200, {
+					id: "batch-lens",
+					status: "completed",
+					results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: truncated } }] } }, error: null }],
+					usage: { cost: 0.001 },
+				});
+			}
+			return fakeResponse(200, {
+				id: "batch-retry",
+				status: "completed",
+				results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: recovered } }] } }, error: null }],
+				usage: { cost: 0.002 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeSynthesis: false, includeTriage: false });
+
+		assert.equal(collect.truncatedCount, 0, "recovered slice must clear the truncation count");
+		assert.equal(collect.retriedCount, 1, "one slice recovered by resubmission");
+		assert.equal(retryPayloads.length, 2, "one original submit + one retry");
+		assert.equal(retryPayloads[1].requests[0].body.max_tokens, retryPayloads[0].requests[0].body.max_tokens * 2, "retry must double the output cap");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("collect leaves truncated slices alone when retry_truncated is false", async () => {
+	const dir = await makeFixture();
+	try {
+		const truncated = '{"module": "server", "findings": [';
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				return fakeResponse(202, { id: "batch-lens", status: "validating" });
+			}
+			return fakeResponse(200, {
+				id: "batch-lens",
+				status: "completed",
+				results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: truncated } }] } }, error: null }],
+				usage: { cost: 0.001 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeSynthesis: false, includeTriage: false, retryTruncated: false });
+
+		assert.equal(collect.truncatedCount, 1, "truncation must remain reported");
+		assert.equal(collect.retriedCount, 0, "no resubmission when retry_truncated is false");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+// ---------- per-language prompts (#137) ----------
+
+test("defect lens prompt speaks the detected language, not Go", () => {
+	const python = getLens("defect").systemPrompt({ language: "python" });
+	assert.match(python, /bare except/);
+	assert.ok(!python.includes("goroutines"), "Go idioms must not leak into Python prompts");
+
+	const go = getLens("defect").systemPrompt({ language: "go" });
+	assert.match(go, /goroutines without ctx/);
+
+	const rust = getLens("defect").systemPrompt({ language: "rust" });
+	assert.match(rust, /Unwrap\/expect panics/);
+
+	const ts = getLens("defect").systemPrompt({ language: "typescript" });
+	assert.match(ts, /non-null assertions/);
+
+	const js = getLens("defect").systemPrompt({ language: "javascript" });
+	assert.match(js, /unhandled promise rejections/, "javascript rides the TS profile");
+
+	const unknown = getLens("defect").systemPrompt({ language: "whitespace-esque" });
+	assert.match(unknown, /unchecked casts/, "unknown languages get the neutral default profile");
+});
+
+test("conventions lens prompt names language-appropriate categories and idioms", () => {
+	const rust = getLens("conventions").systemPrompt({ language: "rust" });
+	assert.match(rust, /crates and modules/);
+
+	const python = getLens("conventions").systemPrompt({ language: "python" });
+	assert.match(python, /dunder method usage/);
+
+	const go = getLens("conventions").systemPrompt({ language: "go" });
+	assert.match(go, /error wrapping with %w/);
+	assert.ok(!go.includes("dunder"), "python idiom hints must not leak into Go prompts");
+});
+
+// ---------- concurrent polling (#136) ----------
+
+test("pollBatchesConcurrently polls all batches in parallel against one deadline", async () => {
+	// Peak-concurrency tracking is deterministic: if polling were sequential,
+	// the fast batch would hold the loop and peak concurrent GETs would stay
+	// at 1. Under the fix, the fast batch polls while the slow one is still
+	// mid-polling.
+	let inFlightGets = 0;
+	let peak = 0;
+	const fetcher = async (url) => {
+		inFlightGets += 1;
+		peak = Math.max(peak, inFlightGets);
+		try {
+			await new Promise((r) => setTimeout(r, 15)); // overlap window
+			if (String(url).includes("batch-a")) {
+				return fakeResponse(200, { id: "batch-a", status: "completed", results: [], usage: { cost: 0.001 } });
+			}
+			return fakeResponse(200, { id: "batch-b", status: "completed", results: [], usage: { cost: 0.002 } });
+		} finally {
+			inFlightGets -= 1;
+		}
+	};
+
+	const results = await pollBatchesConcurrently(
+		[
+			{ lensId: "defect", batchId: "batch-a" },
+			{ lensId: "security", batchId: "batch-b" },
+		],
+		"sk-fake",
+		{ fetcher, pollIntervalMs: 20, deadlineMs: 5000 },
+	);
+	assert.equal(results.size, 2);
+	assert.equal(results.get("batch-a").status, "completed");
+	assert.equal(results.get("batch-b").status, "completed");
+	assert.ok(peak >= 2, `peak concurrent GETs was ${peak} — polling is sequential`);
+});
+
+test("collect polls multiple in-flight lenses concurrently", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-conc-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await writeFile(join(dir, "main.go"), "package main\n");
+		await mkdir(join(dir, "server"));
+		await writeFile(join(dir, "server", "routes.go"), "package server\n");
+
+		let inFlightGets = 0;
+		let peak = 0;
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				return fakeResponse(202, { id: "batch-x", status: "validating" });
+			}
+			inFlightGets += 1;
+			peak = Math.max(peak, inFlightGets);
+			try {
+				await new Promise((r) => setTimeout(r, 15));
+				const batchId = String(url).split("/").pop();
+				return fakeResponse(200, {
+					id: batchId,
+					status: "completed",
+					results: [
+						{
+							custom_id: `${batchId}-1`,
+							response: {
+								status_code: 200,
+								body: { choices: [{ message: { content: JSON.stringify({ module: "x", findings: [], patterns_checked: [], files_scanned: 0 }) } }] },
+							},
+							error: null,
+						},
+					],
+					usage: { cost: 0.001 },
+				});
+			} finally {
+				inFlightGets -= 1;
+			}
+		};
+
+		// Two submissions → two lens batches; rewrite state so both are
+		// in flight under distinct ids, then collect must poll both together.
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture", "security"], fetcher });
+		assert.equal(Object.keys(result.batches).length, 2);
+		const broadsideDir = join(dir, ".codecarto", "broadside");
+		const state = await loadBroadsideState(broadsideDir);
+		state.runs[0].batches.architecture.batchId = "batch-a";
+		state.runs[0].batches.architecture.status = "validating";
+		state.runs[0].batches.security.batchId = "batch-b";
+		state.runs[0].batches.security.status = "validating";
+		await saveBroadsideState(broadsideDir, state);
+
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeSynthesis: false, includeTriage: false });
+		assert.equal(collect.resultCount, 2);
+		assert.ok(peak >= 2, `peak concurrent GETs was ${peak} — collect is polling lenses sequentially`);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 // ---------- batch client with a fake fetcher ----------

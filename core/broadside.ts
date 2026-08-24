@@ -199,6 +199,8 @@ export type BroadsideRun = {
 	totalCost?: number;
 	pricing?: ModelPricing;
 	maxCost?: number;
+	/** The model's completion ceiling, recorded so collect can cap retries. */
+	outputCap?: number;
 };
 
 export type BroadsideStateFile = {
@@ -241,6 +243,8 @@ export type BroadsideCollectResult = {
 	/** Results whose JSON did not parse even after fence stripping —
 	 * the signature of an output cut off at max_tokens. */
 	truncatedCount: number;
+	/** Truncated slices recovered by the automatic re-submit pass (#133). */
+	retriedCount: number;
 	lensOutcomes: Partial<
 		Record<BroadsideLensId, { status: string; cost?: number; resultCount?: number; truncated?: number }>
 	>;
@@ -592,6 +596,131 @@ const SCHEMAS: Record<string, JsonSchemaDef> = {
 
 // ---------- lens definitions ----------
 
+// Lenses share their JSON schemas across languages, but prompts must speak
+// the language's idioms: "goroutines without ctx" is noise to a Python
+// scanner. Profiles supply per-language defect patterns and convention
+// vocabulary; unknown languages get the neutral default.
+type LanguageProfile = {
+	defectPatterns: string[];
+	conventionCategories: Array<{ key: string; label: string }>;
+	idiomHints: string[];
+};
+
+const TS_PROFILE: LanguageProfile = {
+	defectPatterns: [
+		"Null/undefined dereference risks (unchecked optional access)",
+		"Error handling gaps (unhandled promise rejections, swallowed catches)",
+		"Resource leaks (unclosed handles, missing cleanup, dangling timers/listeners)",
+		"Race conditions (shared mutable state, async interleavings without guards)",
+		"Integer/precision assumptions in arithmetic",
+		"Unsafe type assumptions (as-casts, any leaks, non-null assertions)",
+		"Panic-prone code (out-of-bounds access, runtime TypeError paths)",
+		"Timezone/locale assumptions",
+	],
+	conventionCategories: [
+		{ key: "packages", label: "modules and imports" },
+		{ key: "types", label: "interfaces and type aliases" },
+		{ key: "functions", label: "functions (camelCase), components (PascalCase)" },
+		{ key: "variables", label: "variables and constants (camelCase)" },
+		{ key: "files", label: "file naming (kebab vs camel) and folder organization" },
+		{ key: "tests", label: "test files (*.test.ts, describe/it patterns)" },
+	],
+	idiomHints: ["strict null checks usage", "async/await vs promise chains", "dependency injection patterns"],
+};
+
+const LANGUAGE_PROFILES: Record<string, LanguageProfile> = {
+	go: {
+		defectPatterns: [
+			"Nil pointer dereference risks (unchecked returns, missing nil guards)",
+			"Error handling gaps (ignored errors, deferred errors unchecked)",
+			"Resource leaks (unclosed files, connections, goroutines without ctx)",
+			"Race conditions (shared state without sync, channel misuse)",
+			"Integer overflow/underflow in arithmetic or bounds",
+			"Unsafe type assertions without ok check",
+			"Panic-prone code (slice out of bounds, map access without ok)",
+			"Timezone/locale assumptions",
+		],
+		conventionCategories: [
+			{ key: "packages", label: "packages" },
+			{ key: "types", label: "types and interfaces" },
+			{ key: "functions", label: "functions and methods" },
+			{ key: "variables", label: "variables and fields" },
+			{ key: "files", label: "file and directory organization" },
+			{ key: "tests", label: "test files and table-driven tests" },
+		],
+		idiomHints: ["error wrapping with %w", "zero-value construction"],
+	},
+	python: {
+		defectPatterns: [
+			"None dereference risks (unchecked optional returns, AttributeError paths)",
+			"Exception handling gaps (bare except, swallowed exceptions, broad catch-all)",
+			"Resource leaks (unclosed files, sockets, connections, context managers)",
+			"Race conditions (shared mutable state, threading without locks, async pitfalls)",
+			"Integer/float precision assumptions in arithmetic",
+			"Unsafe type assumptions (unpacking mismatches, isinstance without fallback)",
+			"Panic-prone code (IndexError/KeyError paths, unbounded slicing)",
+			"Timezone/locale assumptions (naive datetimes)",
+		],
+		conventionCategories: [
+			{ key: "packages", label: "modules and packages" },
+			{ key: "types", label: "classes and type hints" },
+			{ key: "functions", label: "functions and methods (snake_case vs camelCase)" },
+			{ key: "variables", label: "variables and constants" },
+			{ key: "files", label: "file and module organization" },
+			{ key: "tests", label: "test files (pytest fixtures, naming)" },
+		],
+		idiomHints: ["dunder method usage", "context manager idioms", "dataclass/pydantic models"],
+	},
+	rust: {
+		defectPatterns: [
+			"Unwrap/expect panics on fallible paths",
+			"Error handling gaps (swallowed Results, lossy conversions)",
+			"Resource leaks (unclosed handles, drop order assumptions)",
+			"Data races and Send/Sync violations (unsafe blocks, interior mutability misuse)",
+			"Integer overflow/underflow (arithmetic, casting)",
+			"Unsafe type assumptions (transmute/casts without invariants)",
+			"Panic-prone code (indexing, slicing, unreachable! in library paths)",
+			"Timezone/locale assumptions",
+		],
+		conventionCategories: [
+			{ key: "packages", label: "crates and modules" },
+			{ key: "types", label: "structs, enums, and traits" },
+			{ key: "functions", label: "functions and methods (snake_case)" },
+			{ key: "variables", label: "variables and constants (SCREAMING_SNAKE)" },
+			{ key: "files", label: "module file organization" },
+			{ key: "tests", label: "test modules and #[cfg(test)] patterns" },
+		],
+		idiomHints: ["Result/Option handling with ?", "builder patterns", "trait-based extension"],
+	},
+	typescript: TS_PROFILE,
+	javascript: TS_PROFILE,
+	default: {
+		defectPatterns: [
+			"Null/undefined dereference risks (unchecked optional access)",
+			"Error handling gaps (ignored or swallowed errors)",
+			"Resource leaks (unclosed files, connections, handles)",
+			"Race conditions (shared mutable state without synchronization)",
+			"Integer overflow/underflow in arithmetic or bounds",
+			"Unsafe type assumptions and unchecked casts",
+			"Panic-prone code (out-of-bounds access, missing keys)",
+			"Timezone/locale assumptions",
+		],
+		conventionCategories: [
+			{ key: "packages", label: "modules, packages, or namespaces" },
+			{ key: "types", label: "types, classes, and interfaces" },
+			{ key: "functions", label: "functions and methods" },
+			{ key: "variables", label: "variables and constants" },
+			{ key: "files", label: "file and directory organization" },
+			{ key: "tests", label: "test files and test organization" },
+		],
+		idiomHints: [],
+	},
+};
+
+function languageProfile(language: string): LanguageProfile {
+	return LANGUAGE_PROFILES[language] ?? LANGUAGE_PROFILES.default;
+}
+
 type LensDefinition = {
 	id: BroadsideLensId;
 	name: string;
@@ -713,21 +842,20 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 		maxChars: 60_000,
 		maxTokens: 6000,
 		globsFor: (info) => [info.sourceGlob],
-		systemPrompt: (info) =>
-			`You are a senior code reviewer performing an automated defect scan on ${info.language} ` +
-			"source files. Look for these specific patterns:\n" +
-			"  1. Nil/null pointer dereference risks (unchecked returns, missing guards)\n" +
-			"  2. Error handling gaps (ignored errors, deferred errors unchecked)\n" +
-			"  3. Resource leaks (unclosed files, connections, goroutines without ctx)\n" +
-			"  4. Race conditions (shared state without sync, channel misuse)\n" +
-			"  5. Integer overflow/underflow in arithmetic or bounds\n" +
-			"  6. Unsafe type assertions without ok check\n" +
-			"  7. Panic-prone code (slice out of bounds, map access without ok)\n" +
-			"  8. Timezone/locale assumptions\n\n" +
-			"Return a JSON object following the defect_scan_report schema. " +
-			"Cite file:line for every finding. List which patterns you checked. " +
-			"If the code looks clean for a pattern, say so rather than staying silent. " +
-			"Prefer precision over volume — 3 solid findings beat 15 vague ones.",
+		systemPrompt: (info) => {
+			const profile = languageProfile(info.language);
+			const patterns = profile.defectPatterns.map((p, i) => `  ${i + 1}. ${p}`).join("\n");
+			return (
+				`You are a senior code reviewer performing an automated defect scan on ${info.language} ` +
+				"source files. Look for these specific patterns:\n" +
+				patterns +
+				"\n\n" +
+				"Return a JSON object following the defect_scan_report schema. " +
+				"Cite file:line for every finding. List which patterns you checked. " +
+				"If the code looks clean for a pattern, say so rather than staying silent. " +
+				"Prefer precision over volume — 3 solid findings beat 15 vague ones."
+			);
+		},
 		userPrompt: (info, source, moduleName) =>
 			`Scan this ${info.language} module for mechanical defects.\n\n` +
 			`Module: ${moduleName}\n\n` +
@@ -744,15 +872,24 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 		maxChars: 60_000,
 		maxTokens: 6000,
 		globsFor: (info) => [info.sourceGlob],
-		systemPrompt: () =>
-			"You are a code style analyst extracting conventions from source files. " +
-			"Catalog: naming conventions per category (packages, types, functions, variables, " +
-			"source files, test files), the dominant error-handling pattern, logging approach, " +
-			"test organization patterns, file/package organization rules, and recurring idioms. " +
-			"Also flag inconsistencies — places where the same convention is violated. " +
-			"If you find well-established conventions worth formalizing, list them as " +
-			"promotable_conventions with a title, rule, and evidence from the code. " +
-			"Return a JSON object following the conventions_report schema.",
+		systemPrompt: (info) => {
+			const profile = languageProfile(info.language);
+			const categories = profile.conventionCategories.map((c) => `${c.key} (${c.label})`).join(", ");
+			const idiomHint =
+				profile.idiomHints.length > 0
+					? ` Keep an eye out for ${info.language} idioms such as ${profile.idiomHints.join(", ")}.`
+					: "";
+			return (
+				`You are a code style analyst extracting conventions from ${info.language} source files. ` +
+				"Catalog naming conventions per category — " + categories + " — plus the dominant " +
+				"error-handling pattern, logging approach, test organization patterns, file/package " +
+				"organization rules, and recurring idioms." + idiomHint +
+				" Also flag inconsistencies — places where the same convention is violated. " +
+				"If you find well-established conventions worth formalizing, list them as " +
+				"promotable_conventions with a title, rule, and evidence from the code. " +
+				"Return a JSON object following the conventions_report schema."
+			);
+		},
 		userPrompt: (info, source, moduleName) =>
 			"Extract coding conventions from this module.\n\n" +
 			`Module: ${moduleName}\n\n` +
@@ -933,7 +1070,13 @@ function detectLanguage(fileCounts: Record<string, number>, manifestPath: string
 			if (manifestPath === candidate) return lang;
 		}
 	}
-	const counts: Record<string, number> = { go: fileCounts[".go"] ?? 0, python: fileCounts[".py"] ?? 0, rust: fileCounts[".rs"] ?? 0, typescript: (fileCounts[".ts"] ?? 0) + (fileCounts[".tsx"] ?? 0) };
+	const counts: Record<string, number> = {
+		go: fileCounts[".go"] ?? 0,
+		python: fileCounts[".py"] ?? 0,
+		rust: fileCounts[".rs"] ?? 0,
+		typescript: (fileCounts[".ts"] ?? 0) + (fileCounts[".tsx"] ?? 0),
+		javascript: fileCounts[".js"] ?? 0,
+	};
 	const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
 	return best && best[1] > 0 ? best[0] : "unknown";
 }
@@ -1575,9 +1718,11 @@ export async function pollBatchUntilTerminal(
 		deadlineMs?: number;
 		onStatus?: (status: string, counts: Record<string, unknown>) => void;
 		fetcher?: FetchLike;
+		pollIntervalMs?: number;
 	} = {},
 ): Promise<Record<string, unknown>> {
 	const deadline = Date.now() + (opts.deadlineMs ?? BROADSIDE_DEFAULT_POLL_BUDGET_MS);
+	const intervalMs = opts.pollIntervalMs ?? BROADSIDE_POLL_INTERVAL_MS;
 	const fetcher = opts.fetcher ?? (fetch as FetchLike);
 	for (;;) {
 		let batch: Record<string, unknown>;
@@ -1585,7 +1730,7 @@ export async function pollBatchUntilTerminal(
 			batch = await fetchBatch(batchId, apiKey, fetcher);
 		} catch {
 			if (Date.now() >= deadline) return { id: batchId, status: "timeout" };
-			await sleep(BROADSIDE_POLL_INTERVAL_MS);
+			await sleep(intervalMs);
 			continue;
 		}
 		const httpStatus = Number(batch.http_status ?? 200);
@@ -1597,8 +1742,41 @@ export async function pollBatchUntilTerminal(
 		opts.onStatus?.(status, counts);
 		if (["completed", "failed", "expired", "cancelled", "auth-failed"].includes(status)) return batch;
 		if (Date.now() >= deadline) return { id: batchId, status: "timeout" };
-		await sleep(BROADSIDE_POLL_INTERVAL_MS);
+		await sleep(intervalMs);
 	}
+}
+
+/**
+ * Poll several batch ids in parallel against one shared deadline. Collect
+ * previously polled one lens at a time, so a slow first lens serialized the
+ * wall clock for lenses that had already finished server-side (#136). The
+ * onStatus callback identifies the lens so progress output stays readable
+ * even while the polls interleave.
+ */
+export async function pollBatchesConcurrently(
+	entries: Array<{ lensId: BroadsideLensId; batchId: string }>,
+	apiKey: string,
+	opts: {
+		deadlineMs?: number;
+		fetcher?: FetchLike;
+		pollIntervalMs?: number;
+		onStatus?: (lensId: string, status: string, counts: Record<string, unknown>) => void;
+	} = {},
+): Promise<Map<string, Record<string, unknown>>> {
+	const results = new Map<string, Record<string, unknown>>();
+	const deadlineMs = opts.deadlineMs ?? BROADSIDE_DEFAULT_POLL_BUDGET_MS;
+	await Promise.all(
+		entries.map(async ({ lensId, batchId }) => {
+			const batch = await pollBatchUntilTerminal(batchId, apiKey, {
+				deadlineMs,
+				fetcher: opts.fetcher,
+				pollIntervalMs: opts.pollIntervalMs,
+				onStatus: (status, counts) => opts.onStatus?.(lensId, status, counts),
+			});
+			results.set(batchId, batch);
+		}),
+	);
+	return results;
 }
 
 // ---------- run orchestration ----------
@@ -1694,16 +1872,19 @@ export async function runBroadsideSubmit(
 		triage: { status: "pending" },
 		pricing,
 		maxCost: limit > 0 ? limit : undefined,
+		outputCap,
 	};
 	state.runs.push(run);
 	await saveBroadsideState(broadsideDir, state);
 
+	const requestsByCustomId: Record<string, BatchRequest> = {};
 	const submissions: Promise<void>[] = [];
 	for (const lensId of lensIds) {
 		const lens = getLens(lensId);
 		const slices = slicesByLens.get(lensId) ?? [];
 		const maxTokens = outputCap ? Math.min(lens.maxTokens, outputCap) : lens.maxTokens;
 		const requests = slices.map((s, i) => buildBatchRequest(lens, info, s, i, slices.length, model, maxTokens));
+		for (const request of requests) requestsByCustomId[request.custom_id] = request;
 		const estimate = estimateCost(lens, slices, pricing, maxTokens);
 
 		const entry: BroadsideBatchEntry = {
@@ -1741,6 +1922,14 @@ export async function runBroadsideSubmit(
 	}
 	await Promise.allSettled(submissions);
 	await saveBroadsideState(broadsideDir, state);
+
+	// Persist the exact request bodies so collect can re-submit a truncated
+	// slice (bumped output cap) without re-walking the repo (#133). The run
+	// dir is created here rather than waiting for collect so a crash between
+	// submit and collect still leaves the retry input on disk.
+	const runDir = join(broadsideDir, runId);
+	await mkdir(runDir, { recursive: true });
+	await writeFile(join(runDir, "requests.json"), `${JSON.stringify(requestsByCustomId, null, "\t")}\n`, "utf8");
 
 	return {
 		runId,
@@ -1835,6 +2024,17 @@ export async function saveLensResults(
 		});
 	}
 	return out;
+}
+
+async function loadStoredRequests(runDir: string): Promise<Record<string, BatchRequest>> {
+	const path = join(runDir, "requests.json");
+	if (!(await pathExists(path))) return {};
+	try {
+		const parsed = JSON.parse(await readFile(path, "utf8")) as Record<string, BatchRequest>;
+		return parsed && typeof parsed === "object" ? parsed : {};
+	} catch {
+		return {};
+	}
 }
 
 // ---------- post-lens passes: synthesis + triage ----------
@@ -1936,6 +2136,8 @@ export async function runBroadsideCollect(
 		waitMs?: number;
 		includeSynthesis?: boolean;
 		includeTriage?: boolean;
+		/** Re-submit truncated slices once with a doubled output cap (#133). */
+		retryTruncated?: boolean;
 		onStatus?: (lensId: string, status: string, counts: Record<string, unknown>) => void;
 		fetcher?: FetchLike;
 	} = {},
@@ -1958,6 +2160,10 @@ export async function runBroadsideCollect(
 
 	const allLensResults: StoredLensResult[] = [];
 
+	// Terminal entries are settled already; everything else polls in parallel
+	// against one shared deadline (#136), then results save in lens order so
+	// output layout stays deterministic.
+	const inFlight: Array<{ lensId: BroadsideLensId; batchId: string }> = [];
 	for (const lensId of run.lenses) {
 		const entry = run.batches[lensId];
 		if (!entry || !entry.batchId) {
@@ -1970,12 +2176,19 @@ export async function runBroadsideCollect(
 			lensOutcomes[lensId] = { status: entry.status, cost: entry.cost, resultCount: entry.resultCount };
 			continue;
 		}
+		inFlight.push({ lensId, batchId: entry.batchId });
+	}
 
-		const batch = await pollBatchUntilTerminal(entry.batchId, apiKey, {
-			deadlineMs: Math.max(0, deadline - Date.now()),
-			onStatus: (status, counts) => opts.onStatus?.(lensId, status, counts),
-			fetcher: opts.fetcher,
-		});
+	const polled = await pollBatchesConcurrently(inFlight, apiKey, {
+		deadlineMs: Math.max(0, deadline - Date.now()),
+		fetcher: opts.fetcher,
+		onStatus: opts.onStatus,
+	});
+
+	for (const { lensId } of inFlight) {
+		const entry = run.batches[lensId];
+		if (!entry) continue;
+		const batch = polled.get(entry.batchId) ?? { id: entry.batchId, status: "timeout" };
 
 		const status = String(batch.status ?? "unknown");
 		entry.status = status;
@@ -2000,6 +2213,61 @@ export async function runBroadsideCollect(
 		} else if (batch.error) {
 			entry.error = batch.error;
 			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount };
+		}
+		await saveBroadsideState(broadsideDir, state);
+	}
+
+	// #133: re-submit truncated slices once with a bumped output cap. Batch
+	// requests are pure, so re-running is always safe; the aim is to recover
+	// coverage the first pass lost to a max_tokens cutoff, not to loop forever.
+	let retriedCount = 0;
+	if (opts.retryTruncated !== false && truncatedCount > 0) {
+		const requestsByCustomId = await loadStoredRequests(runDir);
+		for (const stored of allLensResults) {
+			if (!stored.truncated) continue;
+			const original = requestsByCustomId[stored.customId];
+			if (!original) continue;
+			const previousMax = original.body.max_tokens ?? getLens(stored.lensId).maxTokens;
+			const bumpedMax = run.outputCap ? Math.min(previousMax * 2, run.outputCap) : previousMax * 2;
+			if (bumpedMax <= previousMax) continue; // already at the ceiling
+
+			const bumped: BatchRequest = {
+				...original,
+				body: { ...original.body, max_tokens: bumpedMax },
+			};
+			try {
+				const { batchId, error } = await submitBatch([bumped], apiKey, opts.fetcher, run.model);
+				if (error) continue;
+				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
+					deadlineMs: BROADSIDE_DEFAULT_POLL_BUDGET_MS,
+					onStatus: (status, counts) => opts.onStatus?.(`${stored.lensId}:retry`, status, counts),
+					fetcher: opts.fetcher,
+				});
+				if (batch.status !== "completed") continue;
+				const results = Array.isArray(batch.results) ? (batch.results as Array<Record<string, unknown>>) : [];
+				const content = results.length > 0 ? extractContent(results[0]) : null;
+				if (content === null || parseLensJson(content) === null) continue; // still no good
+
+				const usage = (batch.usage ?? {}) as Record<string, unknown>;
+				totalCost += typeof usage.cost === "number" ? usage.cost : 0;
+
+				const parsed = parseLensJson(content);
+				await writeFile(join(runDir, `${sanitizeId(stored.customId)}.json`), `${JSON.stringify(parsed, null, "\t")}\n`, "utf8");
+				await writeFile(join(runDir, `${sanitizeId(stored.customId)}.md`), renderFindingsMarkdown(content), "utf8");
+
+				stored.content = content;
+				stored.truncated = false;
+				retriedCount += 1;
+			} catch {
+				// A retry that fails to submit/poll leaves the original
+				// truncated result in place — nothing is lost.
+			}
+		}
+		truncatedCount = allLensResults.filter((s) => s.truncated).length;
+		for (const [lensId, outcome] of Object.entries(lensOutcomes)) {
+			if (outcome.truncated !== undefined) {
+				outcome.truncated = allLensResults.filter((s) => s.lensId === lensId && s.truncated).length;
+			}
 		}
 		await saveBroadsideState(broadsideDir, state);
 	}
@@ -2124,6 +2392,7 @@ export async function runBroadsideCollect(
 				total_cost: totalCost,
 				result_count: resultCount,
 				truncated_count: truncatedCount,
+				retried_count: retriedCount,
 				synthesis: run.synthesis,
 				triage: run.triage,
 				lenses: run.lenses,
@@ -2143,6 +2412,7 @@ export async function runBroadsideCollect(
 		totalCost,
 		resultCount,
 		truncatedCount,
+		retriedCount,
 		lensOutcomes,
 		synthesis: run.synthesis,
 		triage: run.triage,
@@ -2305,9 +2575,12 @@ export function collectResultText(result: BroadsideCollectResult): string {
 				truncation,
 		);
 	}
+	if (result.retriedCount > 0) {
+		lines.push(`  ↻ ${result.retriedCount} truncated result(s) recovered by re-submission with a doubled output cap.`);
+	}
 	if (result.truncatedCount > 0) {
 		lines.push(
-			`  ⚠ ${result.truncatedCount} result(s) truncated at the output limit — their modules are unscouted, not clean.`,
+			`  ⚠ ${result.truncatedCount} result(s) still truncated after retry — their modules are unscouted, not clean.`,
 		);
 	}
 	if (result.synthesis.status === "completed") {
