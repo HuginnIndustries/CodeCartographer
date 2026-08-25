@@ -1006,6 +1006,7 @@ export async function handleBroadside(args: {
 	max_cost?: number;
 	force?: boolean;
 	include_benchmarks?: boolean;
+	incremental?: boolean;
 }) {
 	const cwd = await validateCwd(args.cwd);
 	const action = args.action ?? "submit";
@@ -1055,6 +1056,7 @@ export async function handleBroadside(args: {
 			model: config.model,
 			maxCost,
 			force: args.force === true,
+			incremental: args.incremental === true,
 		}).catch((error) => {
 			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
@@ -1447,6 +1449,11 @@ const TOOLS = [
 				force: {
 					type: "boolean",
 					description: "Submit even when the cost estimate exceeds max_cost (default false).",
+				},
+				incremental: {
+					type: "boolean",
+					description:
+						"Diff against the previous run's git HEAD and scan only the modules whose files changed (falls back to a full scan on a dirty tree or when no prior run exists). Default false.",
 				},
 				include_benchmarks: {
 					type: "boolean",

@@ -799,6 +799,96 @@ test("collect polls multiple in-flight lenses concurrently", async () => {
 	}
 });
 
+// ---------- incremental re-scouting (#142) ----------
+
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+const execFileAsync = promisify(execFile);
+
+async function git(dir, ...args) {
+	await execFileAsync("git", ["-C", dir, ...args], { maxBuffer: 16 * 1024 * 1024 });
+}
+
+async function makeGitRepo() {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-git-"));
+	await git(dir, "init", "-q");
+	await git(dir, "config", "user.email", "test@example.com");
+	await git(dir, "config", "user.name", "Test");
+	await mkdir(join(dir, "server"));
+	await mkdir(join(dir, "model"));
+	await writeFile(join(dir, "go.mod"), "module x\n");
+	await writeFile(join(dir, "main.go"), "package main\n");
+	for (let i = 0; i < 40; i++) {
+		await writeFile(join(dir, "server", `s${i}.go`), "package server\n" + `// ${"x".repeat(2000)}\n`);
+		await writeFile(join(dir, "model", `m${i}.go`), "package model\n" + `// ${"y".repeat(2000)}\n`);
+	}
+	await git(dir, "add", "-A");
+	await git(dir, "commit", "-q", "-m", "initial");
+	return dir;
+}
+
+function submittedCustomIds(payloads) {
+	return payloads.flatMap((p) => p.requests.map((r) => r.custom_id));
+}
+
+test("incremental submit scans only modules whose files changed", async () => {
+	const dir = await makeGitRepo();
+	try {
+		const payloads = [];
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				payloads.push(JSON.parse(init.body));
+				return fakeResponse(202, { id: `batch-${payloads.length}`, status: "validating" });
+			}
+			return fakeResponse(200, { id: "x", status: "in_progress" });
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["defect"], fetcher });
+		const firstIds = submittedCustomIds(payloads);
+		assert.ok(firstIds.some((id) => id.startsWith("defect-server")), "baseline must scan server");
+		assert.ok(firstIds.some((id) => id.startsWith("defect-model")), "baseline must scan model");
+
+		// Change one server file, commit, then re-scout incrementally.
+		await writeFile(join(dir, "server", "s0.go"), "package server\n// changed\n");
+		await git(dir, "add", "-A");
+		await git(dir, "commit", "-q", "-m", "change server");
+
+		payloads.length = 0;
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["defect"], fetcher, incremental: true });
+		const secondIds = submittedCustomIds(payloads);
+		assert.ok(secondIds.some((id) => id.startsWith("defect-server")), "changed module must be re-scanned");
+		assert.ok(!secondIds.some((id) => id.startsWith("defect-model")), "unchanged module must be skipped");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("incremental submit falls back to a full scan when the tree is dirty", async () => {
+	const dir = await makeGitRepo();
+	try {
+		const payloads = [];
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				payloads.push(JSON.parse(init.body));
+				return fakeResponse(202, { id: `batch-${payloads.length}`, status: "validating" });
+			}
+			return fakeResponse(200, { id: "x", status: "in_progress" });
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["defect"], fetcher });
+		// Uncommitted change → the diff is unreliable, so scan everything.
+		await writeFile(join(dir, "model", "m0.go"), "package model\n// dirty\n");
+
+		payloads.length = 0;
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["defect"], fetcher, incremental: true });
+		const ids = submittedCustomIds(payloads);
+		assert.ok(ids.some((id) => id.startsWith("defect-server")), "dirty tree must still scan server");
+		assert.ok(ids.some((id) => id.startsWith("defect-model")), "dirty tree must still scan model");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 // ---------- batch client with a fake fetcher ----------
 
 function fakeResponse(status, body) {
