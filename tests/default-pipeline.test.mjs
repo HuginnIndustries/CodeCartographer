@@ -61,7 +61,7 @@ test("every PIPELINE_ALIASES target resolves to a real file", async () => {
 
 test("Pi extension registers a command for every CodeCartographer operation", async () => {
 	// The set of operations the framework exposes; both wrappers must surface them.
-	const expected = ["init", "open", "vision", "switch-pipeline", "status", "next", "phase", "validate", "complete", "skill", "publish", "library-init", "config", "usage", "dashboard"];
+	const expected = ["init", "open", "vision", "switch-pipeline", "status", "next", "phase", "validate", "complete", "skill", "publish", "library-init", "config", "usage", "dashboard", "broadside"];
 	const indexSrc = await readFile(join(REPO_ROOT, "extensions", "codecarto", "index.ts"), "utf8");
 	const missing = expected.filter((op) => !indexSrc.includes(`pi.registerCommand("codecarto-${op}"`));
 	assert.deepEqual(
@@ -69,4 +69,15 @@ test("Pi extension registers a command for every CodeCartographer operation", as
 		[],
 		`Pi extension is missing command registration for: ${missing.join(", ")}`,
 	);
+});
+
+test("the README slash-command table names every command the extension registers", async () => {
+	// Pi is the recommended surface, so its command table is the first place a
+	// user looks. A command that ships unlisted there effectively did not ship.
+	const indexSrc = await readFile(join(REPO_ROOT, "extensions", "codecarto", "index.ts"), "utf8");
+	const registered = [...indexSrc.matchAll(/pi\.registerCommand\("(codecarto-[\w-]+)"/g)].map((m) => m[1]);
+	assert.ok(registered.length > 0, "expected the extension to register commands");
+	const readme = await readFile(join(REPO_ROOT, "README.md"), "utf8");
+	const undocumented = registered.filter((name) => !readme.includes(`/${name}`));
+	assert.deepEqual(undocumented, [], `README does not document: ${undocumented.join(", ")}`);
 });

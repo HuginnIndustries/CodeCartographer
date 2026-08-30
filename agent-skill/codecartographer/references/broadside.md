@@ -43,6 +43,8 @@ codecarto_broadside {cwd, action: "status"}                    # what is in flig
 codecarto_broadside {cwd, action: "collect"}                   # poll, save, synthesize, triage
 ```
 
+(The Pi extension exposes the same four actions as `/codecarto-broadside <action> [lenses…]`.)
+
 Submit and collect are separate on purpose: batch jobs routinely take tens of
 minutes, and nothing is lost by returning between them. Pass `wait_seconds` to
 poll inline when you would rather block. Collect is resumable — call it again
@@ -62,7 +64,10 @@ lands in the run's `run-meta.json`.
 
 **Never pass `force: true` on the user's behalf without telling them what the
 estimate was.** The guardrail exists because the expensive end of the batch
-model catalog runs past $80 per million output tokens.
+model catalog runs past $80 per million output tokens. On MCP the refusal is
+the only protection there is — the server cannot ask, which is exactly why
+`force` must be the user's decision rather than your retry. (Pi has a human to
+ask, so it shows the breakdown and prompts instead of refusing.)
 
 Two more economies worth knowing:
 

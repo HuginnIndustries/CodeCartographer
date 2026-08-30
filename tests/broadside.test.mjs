@@ -515,6 +515,66 @@ test("submit refuses over-budget runs and creates no run entry; force bypasses",
 	}
 });
 
+test("a confirm hook decides the run, and declining submits nothing", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-confirm-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await mkdir(join(dir, "big"), { recursive: true });
+		for (let i = 0; i < 40; i++) {
+			await writeFile(join(dir, "big", `file${i}.go`), "package big\n" + `// ${"y".repeat(2000)}\n`);
+		}
+		let posted = 0;
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				posted += 1;
+				return fakeResponse(202, { id: "batch-ok", status: "validating" });
+			}
+			return fakeResponse(200, { id: "x", status: "in_progress" });
+		};
+		const stateDir = join(dir, ".codecarto", "broadside");
+
+		// Declining is not an error condition to paper over: nothing is spent,
+		// nothing is recorded, and the caller can tell it apart from a failure.
+		const seen = [];
+		await assert.rejects(
+			() => runBroadsideSubmit(dir, "sk-fake", {
+				lenses: ["defect"],
+				fetcher,
+				confirm: (estimate) => { seen.push(estimate); return false; },
+			}),
+			(error) => {
+				assert.equal(error.name, "BroadsideCancelledError");
+				assert.match(error.message, /Nothing was submitted/);
+				return true;
+			},
+		);
+		assert.equal(posted, 0, "a declined run must not submit a batch");
+		assert.equal((await loadBroadsideState(stateDir)).runs.length, 0, "a declined run must not be recorded");
+
+		assert.equal(seen.length, 1, "the hook is called once, before submission");
+		assert.equal(seen[0].lenses.length, 1);
+		assert.equal(seen[0].lenses[0].lensId, "defect");
+		assert.ok(seen[0].totalCost > 0, "the estimate must carry a price");
+		assert.ok(seen[0].lenses[0].slices > 0, "the estimate must say how much work was sliced");
+
+		// An interactive approval is the force flag: it carries the run past a
+		// max_cost the non-interactive path would refuse.
+		const approved = [];
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["defect"],
+			fetcher,
+			maxCost: 0.0001,
+			confirm: (estimate) => { approved.push(estimate); return true; },
+		});
+		assert.equal(approved[0].exceedsLimit, true, "the hook must be told it is over budget");
+		assert.equal(approved[0].maxCost, 0.0001);
+		assert.equal(result.batches.defect.status, "validating");
+		assert.equal((await loadBroadsideState(stateDir)).runs.length, 1);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 test("submit passes the configured model into batch payloads", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "broadside-model-"));
 	try {

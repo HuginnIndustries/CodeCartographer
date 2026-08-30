@@ -51,7 +51,7 @@ When adding a feature, the question to ask is "does this work on all three surfa
 - `core/orchestrator-config.ts` — loads `.codecarto/workflow/config.yaml` (the `orchestrator.llm_steer_next_phase` flag lives here).
 - `core/library.ts` — versioned library discovery, publication, reads, listing, reindexing, and optional git commits shared by Pi and MCP.
 - `core/synthesis.ts` — vision/library/proposal preflight and exact confirmed-version resolution for the four-phase synthesis workflow.
-- `core/broadside.ts` — Broad-Side batch reconnaissance: lens registry and prompts, repo slicing, OpenRouter Batch API submit/poll/collect, model catalog and cost pre-flight, synthesis and triage post-passes, and `.codecarto/broadside/` state. Executable-surface only (MCP today); the template carries just the reading guide.
+- `core/broadside.ts` — Broad-Side batch reconnaissance: lens registry and prompts, repo slicing, OpenRouter Batch API submit/poll/collect, model catalog and cost pre-flight, synthesis and triage post-passes, and `.codecarto/broadside/` state. Executable surfaces only (Pi via `/codecarto-broadside`, MCP via `codecarto_broadside`); the template carries just the reading guide.
 
 ### Pipeline shape
 

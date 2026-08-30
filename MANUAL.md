@@ -57,14 +57,19 @@ The LLM reads your source code directly from the repository root. No symlinking 
 
 On a repository too large to skim, a **Broad-Side** batch reconnaissance run is worth firing before you choose a pipeline. It sends six analysis lenses at the code as cheap asynchronous batch jobs and produces an executive report plus a P0-P3 work order, which turns the pipeline choice below into an informed one instead of a guess.
 
-Broad-Side needs the MCP server and an OpenRouter API key:
+Broad-Side needs Pi or the MCP server, plus an OpenRouter API key:
 
 ```
-codecarto_broadside {cwd: "/path/to/repo", action: "submit"}
+/codecarto-broadside submit           # Pi: prices the run and asks before spending
+/codecarto-broadside collect
+```
+
+```
+codecarto_broadside {cwd: "/path/to/repo", action: "submit"}   # MCP
 codecarto_broadside {cwd: "/path/to/repo", action: "collect"}
 ```
 
-Results land in `.codecarto/broadside/<run>/`; read `synthesis.md` and `triage.md` first. Submit prices the run before it fires and refuses anything over `max_cost`, so there is no silent spend.
+Results land in `.codecarto/broadside/<run>/`; read `synthesis.md` and `triage.md` first. Submit prices the run before it fires: Pi shows the breakdown and asks, MCP refuses anything over `max_cost` until you pass `force`. Either way there is no silent spend.
 
 **These findings are leads, not evidence.** Each lens is one shot with no cross-file traversal and no runtime verification. Every finding is a `file:line` pointer for the real analysis to confirm — never cite a Broad-Side report as a source in a phase artifact. See [README.md](README.md#broad-side-batch-reconnaissance) and `.codecarto/broadside/SKILL.md`.
 

@@ -27,6 +27,9 @@ file only moves when a tier completes.
   and clamps lens `max_tokens` to the provider's completion ceiling.
 - Triage post-pass on collect: findings scored by impact × difficulty into
   a P0–P3 work order with effort estimates, saved as triage.json/md.
+- Pi surface: `/codecarto-broadside [submit|collect|status|models] [lenses…]`
+  with a spend confirmation (`confirm` hook on `runBroadsideSubmit`), so Pi asks
+  where MCP must refuse.
 - Reading guide reachable as `codecarto_skill {name: "broadside"}` on both
   executable surfaces, exempt from the post-pipeline completion gate; agent
   doctrine as the `broadside` topic of `codecarto_guide`; README / MANUAL /
@@ -49,7 +52,7 @@ file only moves when a tier completes.
 
 | Item | Issue | Notes |
 |---|---|---|
-| **Pi extension** — `/codecarto-broadside` command with lens picker and live progress | [#138](https://github.com/HuginnIndustries/CodeCartographer/issues/138) | Agreed order: MCP first (shipped), Pi second |
+| **Pi extension** — `/codecarto-broadside` command with lens picker and live progress | [#138](https://github.com/HuginnIndustries/CodeCartographer/issues/138) | **Shipped**: four actions with tab-completed lens picker, live per-lens progress widget, and an interactive spend confirmation in place of MCP's refuse-unless-`force` |
 | **Pipeline phase** — `broadside-scout` phase feeding later phases via `required_reads` | [#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139) | SKILL.md contract stays: leads, never evidence |
 | **Zero-config executive** — meta-pass picks lenses and slicing resolution from repo shape | [#140](https://github.com/HuginnIndustries/CodeCartographer/issues/140) | **Shipped**: `auto` slicing collapses small repos to one slice, directory-splits large ones |
 
