@@ -176,13 +176,16 @@ function resolveBroadsideKey(configuredKey: string): string | null {
 /** The spend decision, rendered for a human about to approve it. */
 function describeBroadsideEstimate(estimate: BroadsideEstimate): string {
 	const lines = [
-		`Model: ${estimate.model} (pricing: ${estimate.pricing.source})`,
+		`Model: ${estimate.model}${estimate.mixedModels ? " (some lenses overridden — see below)" : ""} (pricing: ${estimate.pricing.source})`,
 		`Rates: $${estimate.pricing.inputPerM.toFixed(4)}/M in · $${estimate.pricing.outputPerM.toFixed(4)}/M out`,
 		"",
 		"Per lens:",
-		...estimate.lenses.map(
-			({ name, slices, cost }) => `  ${name}: ${slices} slice${slices === 1 ? "" : "s"} — ~$${cost.toFixed(4)}`,
-		),
+		...estimate.lenses.map(({ name, slices, cost, model }) => {
+			// Naming the model only when it differs keeps the common case quiet
+			// and makes a mixed-model run impossible to approve without noticing.
+			const override = estimate.mixedModels && model !== estimate.model ? ` on ${model}` : "";
+			return `  ${name}: ${slices} slice${slices === 1 ? "" : "s"} — ~$${cost.toFixed(4)}${override}`;
+		}),
 		"",
 		`Estimated total: ~$${estimate.totalCost.toFixed(4)} ` +
 			`(~${Math.round(estimate.inputTokens / 1000)}k in, ~${Math.round(estimate.outputTokens / 1000)}k out)`,
