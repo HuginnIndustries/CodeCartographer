@@ -99,6 +99,7 @@ Seven pipeline variants are available. Check the `pipeline` field in `workflow/s
 | Variant | File | Phases | When to use |
 |---|---|---|---|
 | Full with deep audit (default) | `workflow/pipeline-full-with-deep-audit.yaml` | architecture → defect-scan-mechanical → contracts → protocols → defect-scan-semantic → porting → reimplementation-spec | Complete analysis with defect scan split into an early mechanical pass and a deep semantic pass; reimplementation designs around defects with full context |
+| Scout first | `workflow/pipeline-scout-first.yaml` | broadside-scout → architecture → defect-scan-mechanical → contracts → protocols → defect-scan-semantic → porting → reimplementation-spec | The deep-audit run behind a Broad-Side routing brief: the scout phase distills an existing batch reconnaissance run into leads addressed to later phases, each of which must confirm, dismiss, or carry them forward. Leads are never evidence |
 | Full with audit | `workflow/pipeline-full-with-audit.yaml` | architecture → defect-scan → contracts → protocols → porting → reimplementation-spec | Single early defect scan; cheaper than the deep variant when you do not need contracts/protocols-grounded defect findings |
 | Full | `workflow/pipeline.yaml` | architecture → contracts → protocols → porting → reimplementation-spec | Porting bundle without defect scan |
 | Defect scan | `workflow/pipeline-defect-scan.yaml` | architecture → defect-scan | Maintenance audit to surface latent problems |
@@ -304,6 +305,7 @@ your-repo/
         SKILL.md
     workflow/
       pipeline-full-with-deep-audit.yaml  # 7-phase pipeline with split defect scan (default).
+      pipeline-scout-first.yaml   # 8-phase: deep audit behind a broadside-scout routing brief.
       pipeline-full-with-audit.yaml       # 6-phase pipeline with single early defect scan.
       pipeline.yaml                       # 5-phase (no defect scan).
       pipeline-defect-scan.yaml           # 2-phase (architecture + defect scan).

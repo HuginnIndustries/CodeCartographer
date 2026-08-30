@@ -239,6 +239,7 @@ The default is a 7-phase run that splits the defect scan into a mechanical early
 | Variant | Phases | Use when |
 |---|---|---|
 | **Full with deep audit** (default) | 7 | Complete analysis with split defect scan; reimplementation grounded in contracts/protocols-aware defect findings |
+| **Scout first** | 8 | The deep-audit run preceded by a `broadside-scout` phase that distills an existing [Broad-Side](#broad-side-batch-reconnaissance) run into a routing brief every later phase reads |
 | **Full with audit** | 6 | Single early defect scan; cheaper than the deep variant when defects are mostly mechanical |
 | **Full** | 5 | Porting or reimplementation without any defect scan |
 | **Defect scan** | 2 | Maintenance audit to surface latent problems |
@@ -253,6 +254,7 @@ Switch the active pipeline with `/codecarto-switch-pipeline <variant>` (Pi) or `
 | Variant | Pipeline file |
 |---|---|
 | Full with deep audit (**default**) | `workflow/pipeline-full-with-deep-audit.yaml` |
+| Scout first | `workflow/pipeline-scout-first.yaml` |
 | Full with audit | `workflow/pipeline-full-with-audit.yaml` |
 | Full | `workflow/pipeline.yaml` |
 | Defect scan | `workflow/pipeline-defect-scan.yaml` |
@@ -385,7 +387,11 @@ Repository defaults live in `.codecarto/broadside/config.yaml` (`model`, `api_ke
 
 On the Pi extension the same run is `/codecarto-broadside [submit|collect|status|models] [lenses…]`, with tab-completion for actions and lens names and live per-lens progress while batches poll. The two surfaces differ in one deliberate place: MCP cannot ask a human, so it refuses a run over `max_cost` until you pass `force`; Pi shows the per-lens breakdown and asks, and your approval *is* the force flag. Neither surface takes an API key as a command argument — a key typed into a slash command lands in the session transcript.
 
-Broad-Side needs runtime code, so it is an executable-surface feature: Pi and MCP have it, the pure drop-in template does not (it carries only the reading guide). The `broadside-scout` pipeline phase ([#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139)) is still on the roadmap — nothing in a pipeline YAML consumes scout output yet; you read it and decide. See [ROADMAP.md](ROADMAP.md).
+Broad-Side needs runtime code, so firing a run is an executable-surface feature: Pi and MCP have it, the pure drop-in template does not (it carries only the reading guide).
+
+**Feeding a run into the pipeline** is the `scout-first` variant. Its first phase, `broadside-scout`, distills a completed run into `findings/broadside-scout/scout-brief.md` — a short list of leads, each routed to a specific later phase with the source pointer that phase should start from. Six later phases read the brief, and each must account for the leads addressed to it at validation: confirmed against the source, dismissed with a reason, or carried forward. None may be reported as a finding on the brief's authority. The scout phase itself never submits a batch and never spends; with no run on disk it writes an explicitly empty brief and the pipeline proceeds unchanged.
+
+The indirection is deliberate. Run directories are timestamped and gitignored, so no pipeline YAML could name one as a `required_reads` path; the brief is the stable, reviewable artifact that a phase contract can point at — and distilling into it is where the "which of these is worth anyone's attention" judgment happens.
 
 ---
 

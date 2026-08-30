@@ -55,7 +55,7 @@ When adding a feature, the question to ask is "does this work on all three surfa
 
 ### Pipeline shape
 
-Pipelines are YAML DAGs in `.codecarto/workflow/pipeline*.yaml`. Each `PipelinePhase` declares `depends_on`, `primary_output`, `required_reads`, `completion_criteria`, etc. The active variant is the `pipeline:` field in `status.yaml`; six analysis variants plus the forward-synthesis pipeline ship today, and the default is `pipeline-full-with-deep-audit.yaml`. Phases form a DAG (contracts and protocols run in parallel after architecture), not a linear chain — `getNextEligiblePhase` walks `phase_order` and picks the first non-`complete` phase whose deps are all `complete`.
+Pipelines are YAML DAGs in `.codecarto/workflow/pipeline*.yaml`. Each `PipelinePhase` declares `depends_on`, `primary_output`, `required_reads`, `completion_criteria`, etc. The active variant is the `pipeline:` field in `status.yaml`; seven analysis variants plus the forward-synthesis pipeline ship today, and the default is `pipeline-full-with-deep-audit.yaml`. Phases form a DAG (contracts and protocols run in parallel after architecture), not a linear chain — `getNextEligiblePhase` walks `phase_order` and picks the first non-`complete` phase whose deps are all `complete`.
 
 ### Invariant tests are the load-bearing guardrail
 

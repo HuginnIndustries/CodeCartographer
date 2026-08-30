@@ -1,0 +1,271 @@
+workflow_name: codebase-reverse-engineering-scout-first
+workflow_version: 1
+workflow_goal: The full deep-audit reverse-engineering run, preceded by a Broad-Side scout phase that distills an existing batch reconnaissance run into a routing brief every later phase reads. Identical to pipeline-full-with-deep-audit.yaml apart from that first phase and the brief each phase must account for.
+source_location: ../
+validation_protocol: workflow/VALIDATE.md
+phase_order:
+  - broadside-scout
+  - architecture
+  - defect-scan-mechanical
+  - contracts
+  - protocols
+  - defect-scan-semantic
+  - porting
+  - reimplementation-spec
+phases:
+  - id: broadside-scout
+    purpose: Distill a completed Broad-Side batch reconnaissance run into a short routing brief that tells each later phase where to look first. Reads only what a prior Broad-Side run already wrote; it never submits a batch and never spends.
+    skill_path: findings/broadside-scout/SKILL.md
+    output_template: templates/broadside-scout-brief.md
+    depends_on: []
+    primary_output: findings/broadside-scout/scout-brief.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+    completion_criteria:
+      - Every forwarded lead names a target phase in this pipeline and a source pointer the target phase can start from.
+      - Every lead is marked as an unverified scouting signal; none is stated as a fact or cited as evidence.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots, so unscouted scope is distinguishable from clean scope.
+      - Leads dropped rather than forwarded are recorded with a reason.
+      - Convention candidates are routed to the orchestrator's CONVENTIONS.md review, not to a phase.
+      - When no completed Broad-Side run exists, the brief says so explicitly, forwards no leads, and does not block the pipeline.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
+  - id: architecture
+    purpose: Build the layer map, dependency direction, public surfaces, and high-level system structure.
+    skill_path: findings/architecture/SKILL.md
+    output_template: templates/architecture-map.md
+    depends_on:
+      - broadside-scout
+    primary_output: findings/architecture/architecture-map.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/build-and-deploy/build-and-deploy.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/broadside-scout/scout-brief.md
+    completion_criteria:
+      - Every Broad-Side lead the scout brief routed to this phase is confirmed against the source, dismissed with a reason, or carried forward; none is reported as a finding on the brief's authority alone.
+      - The system intent is documented.
+      - The layer map and dependency direction are documented.
+      - Public surfaces are identified.
+      - Runtime lifecycle, concurrency model, and porting priorities are summarized.
+      - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
+  - id: defect-scan-mechanical
+    purpose: Early, context-light defect pass covering logic, error handling, and configuration hazards. Runs before contracts so mechanical bugs are surfaced for the contracts and porting phases to reference.
+    skill_path: findings/defect-scan-mechanical/SKILL.md
+    output_template: templates/mechanical-defects.md
+    depends_on:
+      - broadside-scout
+      - architecture
+    primary_output: findings/defect-scan-mechanical/mechanical-defects.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/broadside-scout/scout-brief.md
+      - findings/architecture/architecture-map.md
+    completion_criteria:
+      - Every Broad-Side lead the scout brief routed to this phase is confirmed against the source, dismissed with a reason, or carried forward; none is reported as a finding on the brief's authority alone.
+      - At least two of the three mechanical passes (1, 2, 6) produced findings or documented "no defects found."
+      - Each finding has location, severity, evidence level, and recommended action.
+      - Findings are organized by pass and sorted by severity.
+      - Summary tables are complete and counts match the detailed findings.
+      - Items spotted that are actually semantic in nature are routed onward via a carry_forward entry in the phase handoff targeting defect-scan-semantic.
+      - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
+  - id: contracts
+    purpose: Recover user-visible behavior, defaults, side effects, error behavior, and black-box acceptance checks.
+    skill_path: findings/contracts/SKILL.md
+    output_template: templates/behavioral-contracts.md
+    depends_on:
+      - broadside-scout
+      - architecture
+    primary_output: findings/contracts/behavioral-contracts.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/broadside-scout/scout-brief.md
+      - findings/architecture/architecture-map.md
+      - findings/defect-scan-mechanical/mechanical-defects.md
+    completion_criteria:
+      - Every Broad-Side lead the scout brief routed to this phase is confirmed against the source, dismissed with a reason, or carried forward; none is reported as a finding on the brief's authority alone.
+      - User-facing surfaces are split by surface type.
+      - Feature contracts record trigger, defaults, outputs, side effects, persisted state, error behavior, and recovery behavior.
+      - Security and authorization model is documented (if applicable).
+      - Contract ownership is mapped back to a layer or package.
+      - A black-box acceptance list is included.
+      - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
+  - id: protocols
+    purpose: Capture event catalogs, state machines, persistence formats, and compatibility hazards.
+    skill_path: findings/protocols/SKILL.md
+    output_template: templates/protocols-and-state.md
+    depends_on:
+      - broadside-scout
+      - architecture
+    primary_output: findings/protocols/protocols-and-state.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/broadside-scout/scout-brief.md
+      - findings/architecture/architecture-map.md
+      - findings/defect-scan-mechanical/mechanical-defects.md
+    completion_criteria:
+      - Every Broad-Side lead the scout brief routed to this phase is confirmed against the source, dismissed with a reason, or carried forward; none is reported as a finding on the brief's authority alone.
+      - An event catalog is documented.
+      - A state machine is documented.
+      - Persistent schema notes are documented.
+      - Compatibility hazards are documented.
+      - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
+  - id: defect-scan-semantic
+    purpose: Deep, context-rich defect pass covering concurrency, security, and API contract violations. Runs after protocols so contracts/protocols context is available, and before porting so the porting phase can synthesize all defects with full understanding of the system.
+    skill_path: findings/defect-scan-semantic/SKILL.md
+    output_template: templates/semantic-defects.md
+    depends_on:
+      - broadside-scout
+      - architecture
+      - contracts
+      - protocols
+      - defect-scan-mechanical
+    primary_output: findings/defect-scan-semantic/semantic-defects.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/broadside-scout/scout-brief.md
+      - findings/architecture/architecture-map.md
+      - findings/contracts/behavioral-contracts.md
+      - findings/protocols/protocols-and-state.md
+      - findings/defect-scan-mechanical/mechanical-defects.md
+    completion_criteria:
+      - Every Broad-Side lead the scout brief routed to this phase is confirmed against the source, dismissed with a reason, or carried forward; none is reported as a finding on the brief's authority alone.
+      - All three semantic passes (3, 4, 5) produced findings or documented "no defects found."
+      - Each finding has location, severity, evidence level, and recommended action.
+      - Pass 5 findings cite the contract or protocol reference they violate.
+      - Findings are organized by pass and sorted by severity; summary tables match the detailed findings.
+      - Any carry_forward entries that targeted defect-scan-semantic have been resolved or explicitly re-routed.
+      - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
+  - id: porting
+    purpose: Synthesize architecture, contracts, protocols, and both defect passes into a reverse-engineering bundle oriented toward porting. Fill the Defect Synthesis section by consolidating mechanical-defects.md and semantic-defects.md into a single porting-oriented view.
+    skill_path: findings/porting/SKILL.md
+    output_template: templates/reverse-engineering-bundle.md
+    depends_on:
+      - broadside-scout
+      - architecture
+      - contracts
+      - protocols
+      - defect-scan-mechanical
+      - defect-scan-semantic
+    primary_output: findings/porting/reverse-engineering-bundle.md
+    secondary_outputs:
+      - path: findings/public-surfaces/public-surfaces.md
+        mode: append
+      - path: findings/runtime-lifecycle/runtime-lifecycle.md
+        mode: append
+      - path: findings/state-and-storage/state-and-storage.md
+        mode: append
+      - path: findings/build-and-deploy/build-and-deploy.md
+        mode: append
+      - path: findings/config-model/config-model.md
+        mode: append
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/broadside-scout/scout-brief.md
+      - findings/architecture/architecture-map.md
+      - findings/contracts/behavioral-contracts.md
+      - findings/protocols/protocols-and-state.md
+      - findings/defect-scan-mechanical/mechanical-defects.md
+      - findings/defect-scan-semantic/semantic-defects.md
+    completion_criteria:
+      - Every Broad-Side lead the scout brief routed to this phase is confirmed against the source, dismissed with a reason, or carried forward; none is reported as a finding on the brief's authority alone.
+      - The system summary, layer map, contract table, protocol notes, and porting findings are synthesized.
+      - Portability hazards and open questions are separated from facts.
+      - Feature importance is sorted for porting.
+      - Defect Synthesis consolidates mechanical-defects.md and semantic-defects.md with porting recommendations (fix before porting / port differently / leave behind).
+      - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+      - The Source Index makes the bundle a self-contained compression boundary and identifies targeted deep-read triggers.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.
+  - id: reimplementation-spec
+    purpose: Produce the final language-agnostic reimplementation plan and acceptance spec. The Strategic Alignment Hook in GUIDE.md decides between the default and opinionated template variants.
+    skill_path: findings/reimplementation-spec/SKILL.md
+    output_template: templates/reimplementation-spec.md
+    depends_on:
+      - porting
+    primary_output: findings/reimplementation-spec/reimplementation-spec.md
+    secondary_outputs: []
+    required_reads:
+      - GUIDE.md
+      - workflow/status.yaml
+      - findings/porting/reverse-engineering-bundle.md
+    completion_criteria:
+      - Concept-level modules are defined.
+      - Required behaviors are stated.
+      - Protocol and persisted state expectations are stated.
+      - Acceptance scenarios and known unknowns are included.
+      - Defects identified in either scan are explicitly designed-around or noted as "left behind", with the choice cited.
+      - Findings are marked with evidence levels.
+      - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+      - Lower-level findings are deep-read only when the porting bundle identifies a gap, conflict, missing acceptance detail, or defect rationale.
+    handoff_requirements:
+      - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
+      - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.
+      - Provide closeout_summary and optional closeout_content in the handoff; completion writes the closeout and THREAD_LOG.md entry.

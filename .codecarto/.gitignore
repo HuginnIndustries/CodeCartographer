@@ -5,6 +5,7 @@ findings/contracts/behavioral-contracts.md
 findings/protocols/protocols-and-state.md
 findings/porting/reverse-engineering-bundle.md
 findings/reimplementation-spec/reimplementation-spec.md
+findings/broadside-scout/scout-brief.md
 
 # Secondary / optional outputs
 findings/public-surfaces/public-surfaces.md
