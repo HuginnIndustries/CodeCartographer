@@ -49,6 +49,7 @@
     "prepublishOnly": "npm run build",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/*.test.mjs",
     "smoke": "node scripts/smoke-mcp.mjs",
+    "smoke:broadside": "node scripts/smoke-broadside.mjs",
     "demo:synthesis": "npm run build && node scripts/create-synthesis-demo.mjs"
   },
   "dependencies": {

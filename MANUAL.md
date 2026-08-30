@@ -53,6 +53,24 @@ your-repo/
 The LLM reads your source code directly from the repository root. No symlinking or copying required.
 
 
+## Optional: Scout the Repository First
+
+On a repository too large to skim, a **Broad-Side** batch reconnaissance run is worth firing before you choose a pipeline. It sends six analysis lenses at the code as cheap asynchronous batch jobs and produces an executive report plus a P0-P3 work order, which turns the pipeline choice below into an informed one instead of a guess.
+
+Broad-Side needs the MCP server and an OpenRouter API key:
+
+```
+codecarto_broadside {cwd: "/path/to/repo", action: "submit"}
+codecarto_broadside {cwd: "/path/to/repo", action: "collect"}
+```
+
+Results land in `.codecarto/broadside/<run>/`; read `synthesis.md` and `triage.md` first. Submit prices the run before it fires and refuses anything over `max_cost`, so there is no silent spend.
+
+**These findings are leads, not evidence.** Each lens is one shot with no cross-file traversal and no runtime verification. Every finding is a `file:line` pointer for the real analysis to confirm — never cite a Broad-Side report as a source in a phase artifact. See [README.md](README.md#broad-side-batch-reconnaissance) and `.codecarto/broadside/SKILL.md`.
+
+Skip this entirely on a repository you can read directly; a sweep that costs more than the reading it saves is waste.
+
+
 ## Step 2: Choose a Pipeline
 
 The default is `workflow/pipeline-full-with-deep-audit.yaml` — the full 7-phase pipeline with split defect scan. If that's what you want, skip to Step 3.

@@ -52,3 +52,35 @@
 # pricing:
 #   input_per_m: 0.1875
 #   output_per_m: 0.9375
+# ---------------------------------------------------------------------------
+# Run defaults. Each key below mirrors a codecarto_broadside parameter of the
+# same name and sets this repository's default for it; an explicit parameter on
+# the call always wins. Set them here when a repo's scouting policy is stable,
+# so it does not have to be restated on every submit and collect.
+
+# Scan only the modules whose files changed since the previous run's git HEAD.
+# Falls back to a full scan on a dirty tree or when no prior run exists.
+#
+# incremental: false
+
+# Re-submit lens results that came back truncated at the output token limit,
+# once, with a doubled output cap. Truncation is always reported either way.
+#
+# retry_truncated: true
+
+# Run the cross-lens synthesis pass (synthesis.md, the executive report) once
+# every lens batch completes.
+#
+# include_synthesis: true
+
+# Run the triage pass (triage.md, the P0-P3 work order) once every lens batch
+# completes.
+#
+# include_triage: true
+
+# Default poll budget in seconds. 0 returns as soon as the batches are
+# submitted or the recorded state is read; a positive value polls that long
+# before returning with whatever is done. Batch jobs routinely take tens of
+# minutes, so a submit-then-collect-later rhythm is normal.
+#
+# wait_seconds: 0

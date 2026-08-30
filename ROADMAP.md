@@ -27,7 +27,14 @@ file only moves when a tier completes.
   and clamps lens `max_tokens` to the provider's completion ceiling.
 - Triage post-pass on collect: findings scored by impact × difficulty into
   a P0–P3 work order with effort estimates, saved as triage.json/md.
-- Tests: 35 unit tests (fake-fetcher based), opt-in live smoke script.
+- Reading guide reachable as `codecarto_skill {name: "broadside"}` on both
+  executable surfaces, exempt from the post-pipeline completion gate; agent
+  doctrine as the `broadside` topic of `codecarto_guide`; README / MANUAL /
+  MCP quickstart coverage.
+- Repository defaults in `config.yaml` for every per-call run knob
+  (`incremental`, `retry_truncated`, `include_synthesis`, `include_triage`,
+  `wait_seconds`); an explicit parameter always wins.
+- Tests: fake-fetcher unit suite, opt-in live smoke script (`npm run smoke:broadside`).
 
 ## Tier 1 — make Broad-Side better at what it does
 

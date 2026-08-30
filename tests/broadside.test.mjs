@@ -311,6 +311,90 @@ test("config falls back to defaults and honors overrides", async () => {
 	}
 });
 
+test("config carries repo defaults for every per-call run knob", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-run-defaults-"));
+	try {
+		const defaults = await loadBroadsideConfig(dir);
+		assert.equal(defaults.incremental, false);
+		assert.equal(defaults.retryTruncated, true, "truncation repair is on unless a repo turns it off");
+		assert.equal(defaults.includeSynthesis, true);
+		assert.equal(defaults.includeTriage, true);
+		assert.equal(defaults.waitSeconds, 0, "0 means submit and collect later");
+
+		await writeFile(
+			join(dir, "config.yaml"),
+			[
+				"incremental: true",
+				"retry_truncated: false",
+				"include_synthesis: false",
+				"include_triage: false",
+				"wait_seconds: 600",
+				"",
+			].join("\n"),
+		);
+		const set = await loadBroadsideConfig(dir);
+		assert.equal(set.incremental, true);
+		assert.equal(set.retryTruncated, false);
+		assert.equal(set.includeSynthesis, false);
+		assert.equal(set.includeTriage, false);
+		assert.equal(set.waitSeconds, 600);
+
+		// config.yaml is hand-edited: a typo must not cost a user their batches.
+		await writeFile(join(dir, "config.yaml"), "incremental: yes-please\nwait_seconds: soon\n");
+		const malformed = await loadBroadsideConfig(dir);
+		assert.equal(malformed.incremental, false, "a non-boolean flag falls back to the shipped default");
+		assert.equal(malformed.waitSeconds, 0, "a non-numeric poll budget falls back to the shipped default");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("every documented config key is one loadBroadsideConfig actually reads", async () => {
+	// The commented-out keys in the shipped config.yaml are the only
+	// documentation a user gets. A key documented but not parsed reads as a
+	// working setting that silently does nothing.
+	const shipped = await readFile(join(REPO_ROOT, ".codecarto", "broadside", "config.yaml"), "utf8");
+	const documented = [...shipped.matchAll(/^#\s{0,3}([a-z_]+):/gm)].map((match) => match[1]);
+	const parsed = new Set([
+		"model",
+		"api_key",
+		"default_lenses",
+		"max_cost",
+		"pricing",
+		"input_per_m",
+		"output_per_m",
+		"incremental",
+		"retry_truncated",
+		"include_synthesis",
+		"include_triage",
+		"wait_seconds",
+	]);
+	const undocumented = [...parsed].filter((key) => !documented.includes(key));
+	assert.deepEqual(undocumented, [], `config.yaml does not document: ${undocumented.join(", ")}`);
+	for (const key of documented) {
+		assert.ok(parsed.has(key), `config.yaml documents ${key}, which loadBroadsideConfig does not read`);
+	}
+});
+
+test("the Broad-Side reading guide is readable from a repo with no workspace", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-skill-"));
+	try {
+		// No .codecarto/ at all: the packaged copy answers.
+		const packaged = await core.readBroadsideSkill(dir);
+		assert.match(packaged.content, /# Broad-Side/);
+		assert.ok(packaged.path.includes(join("broadside", "SKILL.md")));
+
+		// A workspace copy wins, so a user's edits to their own scaffold are served.
+		await mkdir(join(dir, ".codecarto", "broadside"), { recursive: true });
+		await writeFile(join(dir, ".codecarto", "broadside", "SKILL.md"), "# Local guide\n");
+		const local = await core.readBroadsideSkill(dir);
+		assert.equal(local.content, "# Local guide\n");
+		assert.equal(local.path, join(dir, ".codecarto", "broadside", "SKILL.md"));
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 // ---------- pricing resolution & expense limits ----------
 
 function modelsCatalog(body) {

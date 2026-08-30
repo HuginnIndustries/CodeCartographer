@@ -27,8 +27,10 @@
 // (openrouter:web_search etc.), this invariant becomes load-bearing and the
 // resubmit path must gate on whether any tool executed.
 //
-// Deliberately not in .codecarto/ template prose: Broad-Side requires runtime
-// code, so it lives on the executable surfaces (MCP today, Pi on the roadmap).
+// Broad-Side requires runtime code, so the feature itself lives on the
+// executable surfaces (MCP today, Pi on the roadmap). What the template does
+// carry is the reading guide for its output — `.codecarto/broadside/SKILL.md`,
+// served by codecarto_skill under the name `broadside` (see readBroadsideSkill).
 
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
@@ -36,6 +38,7 @@ import { promisify } from "node:util";
 import { dirname, join } from "node:path";
 import { pathExists, sleep } from "./utils.ts";
 import { loadYamlFile } from "./yaml.ts";
+import { packagedWorkspaceDir } from "./workspace.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,6 +47,8 @@ const execFileAsync = promisify(execFile);
 export const BROADSIDE_MODEL = "google/gemini-3.7-flash:batch";
 export const BROADSIDE_BATCH_URL = "https://openrouter.ai/api/beta/batches";
 export const BROADSIDE_DIR = "broadside"; // relative to .codecarto/
+/** Name Broad-Side answers to on the skill surfaces. Not a post-pipeline skill — see readBroadsideSkill. */
+export const BROADSIDE_SKILL_NAME = "broadside";
 export const BROADSIDE_STATE_FILE = "state.json";
 export const BROADSIDE_CONFIG_FILE = "config.yaml";
 export const BROADSIDE_STATE_SCHEMA_VERSION = 1;
@@ -224,6 +229,18 @@ export type BroadsideConfig = {
 	maxCost: number;
 	/** Manual pricing overrides (USD per million). Live lookup is preferred. */
 	pricing: { inputPerM: number; outputPerM: number } | null;
+	/**
+	 * Repo defaults for the per-call run knobs. Each mirrors a tool parameter
+	 * of the same name; an explicit parameter always wins. They live here so a
+	 * repository can fix its own scouting policy once instead of restating it
+	 * on every submit and collect.
+	 */
+	incremental: boolean;
+	retryTruncated: boolean;
+	includeSynthesis: boolean;
+	includeTriage: boolean;
+	/** Default poll budget in seconds; 0 means "return immediately". */
+	waitSeconds: number;
 };
 
 export type BroadsideSubmitResult = {
@@ -1441,6 +1458,33 @@ export function broadsideDirFor(cwd: string): string {
 	return join(cwd, ".codecarto", BROADSIDE_DIR);
 }
 
+/**
+ * Read the Broad-Side reading guide.
+ *
+ * It is deliberately not a post-pipeline skill under `.codecarto/skills/`: a
+ * scout run is read *before* or *during* the interactive pipeline, and the
+ * post-pipeline machinery gates on a completed run and wraps its prompt in
+ * post-pipeline framing that would be false here. It is also readable on a
+ * repository that has scout state and no workspace at all, which is why this
+ * falls back to the packaged copy.
+ *
+ * @param cwd - Absolute path to the target repository.
+ * @returns the skill text and the path it came from.
+ * @throws when neither the workspace copy nor the packaged copy exists.
+ */
+export async function readBroadsideSkill(cwd: string): Promise<{ path: string; content: string }> {
+	const candidates = [
+		join(broadsideDirFor(cwd), "SKILL.md"),
+		join(packagedWorkspaceDir, BROADSIDE_DIR, "SKILL.md"),
+	];
+	for (const path of candidates) {
+		if (await pathExists(path)) return { path, content: await readFile(path, "utf8") };
+	}
+	throw new Error(
+		`Broad-Side skill not found at ${candidates.join(" or ")}. Reinstall codecartographer-pi.`,
+	);
+}
+
 export function defaultBroadsideState(): BroadsideStateFile {
 	return { schema_version: BROADSIDE_STATE_SCHEMA_VERSION, runs: [] };
 }
@@ -1478,6 +1522,11 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 	const rawPricing = (raw.pricing ?? {}) as Record<string, unknown>;
 	const inputOverride = typeof rawPricing.input_per_m === "number" ? rawPricing.input_per_m : undefined;
 	const outputOverride = typeof rawPricing.output_per_m === "number" ? rawPricing.output_per_m : undefined;
+	// A malformed value falls back to the shipped default rather than failing
+	// the run: config.yaml is hand-edited, and a typo in a poll budget must not
+	// cost a user their batches.
+	const flag = (key: string, fallback: boolean): boolean =>
+		typeof raw[key] === "boolean" ? (raw[key] as boolean) : fallback;
 	return {
 		model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : BROADSIDE_MODEL,
 		apiKey: typeof raw.api_key === "string" ? raw.api_key.trim() : "",
@@ -1487,6 +1536,11 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 			inputOverride !== undefined && outputOverride !== undefined
 				? { inputPerM: inputOverride, outputPerM: outputOverride }
 				: null,
+		incremental: flag("incremental", false),
+		retryTruncated: flag("retry_truncated", true),
+		includeSynthesis: flag("include_synthesis", true),
+		includeTriage: flag("include_triage", true),
+		waitSeconds: typeof raw.wait_seconds === "number" && raw.wait_seconds > 0 ? raw.wait_seconds : 0,
 	};
 }
 

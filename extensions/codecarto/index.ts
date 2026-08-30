@@ -29,6 +29,7 @@ import {
 	getWorkspaceState,
 	isWithinPath,
 	isWithinPathResolved,
+	BROADSIDE_SKILL_NAME,
 	listSkillNames,
 	loadCodecartoConfig,
 	loadUsage,
@@ -37,6 +38,7 @@ import {
 	packagedWorkspaceDir,
 	pathExists,
 	PACKAGE_VERSION,
+	readBroadsideSkill,
 	PhasePreflightError,
 	type PhasePreflightResult,
 	PIPELINE_ALIASES,
@@ -680,6 +682,30 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
+			// Broad-Side is a reading guide for batch reconnaissance output, not a
+			// post-pipeline skill: it is read before or during the pipeline and works
+			// on a repository with scout state and no workspace. Same exemption the
+			// MCP surface makes in handleSkill.
+			if (skillName === BROADSIDE_SKILL_NAME) {
+				const skill = await readBroadsideSkill(ctx.cwd).catch(() => null);
+				if (!skill) {
+					ctx.ui.notify("Broad-Side reading guide not found. Reinstall codecartographer-pi.", "error");
+					return;
+				}
+				const message = [
+					"Read the Broad-Side reading guide below and apply it to the batch reconnaissance results in .codecarto/broadside/.",
+					"",
+					skill.content,
+				].join("\n");
+				if (ctx.isIdle()) {
+					pi.sendUserMessage(message);
+				} else {
+					pi.sendUserMessage(message, { deliverAs: "followUp" });
+				}
+				ctx.ui.notify("Queued the Broad-Side reading guide", "info");
+				return;
+			}
+
 			const state = await ensureWorkspaceState(ctx);
 			if (!state) return;
 
@@ -696,7 +722,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (!(await pathExists(skillFile))) {
 				const available = await listSkillNames(state.workspaceDir);
 				const hint = available.length > 0 ? ` (available: ${available.join(", ")})` : " (no skills installed)";
-				ctx.ui.notify(`Unknown skill: ${skillName}${hint}`, "error");
+				ctx.ui.notify(
+					`Unknown skill: ${skillName}${hint}. The Broad-Side reading guide is served as \`${BROADSIDE_SKILL_NAME}\` and is not pipeline-gated.`,
+					"error",
+				);
 				return;
 			}
 
