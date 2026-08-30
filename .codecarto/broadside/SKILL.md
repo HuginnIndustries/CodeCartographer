@@ -81,6 +81,17 @@ Collect runs two cross-lens post-passes by default: **synthesis** (the
 executive report) and **triage** (the prioritized work order). Pass
 `include_synthesis: false` or `include_triage: false` on collect to skip one.
 
+Every run knob — `incremental`, `retry_truncated`, `include_synthesis`,
+`include_triage`, `wait_seconds` — also has a repository default under the same
+name in this directory's `config.yaml`, alongside `model`, `api_key`,
+`default_lenses`, `max_cost`, and the `pricing` overrides. An explicit
+parameter on the call always wins over the file.
+
+This file is also served directly: `codecarto_skill {cwd, name: "broadside"}`
+returns it. Unlike the post-pipeline skills under `.codecarto/skills/`, it is
+not gated on a completed pipeline — a scout run is meant to be read before the
+pipeline starts and while it runs.
+
 It works on any git repository — no initialized workspace required — and needs
 an OpenRouter API key via the `api_key` parameter, the `OPENROUTER_API_KEY`
 environment variable, or `api_key` in this directory's `config.yaml`.

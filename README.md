@@ -363,6 +363,29 @@ Each workflow tool accepts an absolute `cwd` for the target repository. `codecar
 
 ---
 
+## Broad-Side (batch reconnaissance)
+
+Broad-Side is the cheap sweep you run *before* the expensive interactive run. It fires six analysis lenses — architecture, API surface, security, mechanical defect scan, convention extraction, porting — at a repository as single-turn prompts over the [OpenRouter Batch API](https://openrouter.ai/docs), then cross-references them into one executive report (`synthesis.md`) and a prioritized P0–P3 work order (`triage.md`).
+
+**Broad-Side findings are unverified scouting leads, not evidence.** Each lens is one shot: no cross-file traversal, no runtime verification, no builds, no tests. Every finding is a `file:line` pointer that the interactive pipeline — or you — must confirm before it is a fact. That division of labor is the point: a sub-dollar unattended sweep that tells the expensive run where to look. Nothing downstream may cite a Broad-Side report as a source.
+
+It runs on any git repository — no initialized workspace required — and needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY` environment variable, or `api_key` in `.codecarto/broadside/config.yaml`).
+
+```
+codecarto_broadside {cwd, action: "models"}                   # compare batch models and pricing
+codecarto_broadside {cwd, action: "submit", lenses: [...]}    # fire the batches, priced first
+codecarto_broadside {cwd, action: "status"}                   # what is in flight
+codecarto_broadside {cwd, action: "collect"}                  # poll, save, synthesize, triage
+```
+
+Submit and collect are separate because batch jobs routinely take tens of minutes; collect is resumable and picks up whatever is still in flight. Submit prices the run from the collected file sizes against the model's live per-token pricing (cached 24h) and refuses when the estimate exceeds `max_cost` unless `force: true` is passed — a pre-flight estimate, not a runtime stop. Actual spend lands in each run's `run-meta.json`.
+
+Repository defaults live in `.codecarto/broadside/config.yaml` (`model`, `api_key`, `default_lenses`, `max_cost`, `pricing` overrides, `incremental`, `retry_truncated`, `include_synthesis`, `include_triage`, `wait_seconds`); an explicit tool parameter always wins. `codecarto_skill {cwd, name: "broadside"}` returns the reading guide for a completed run, and unlike post-pipeline skills it is not gated on a finished pipeline.
+
+Broad-Side is an executable-surface feature and today ships on the **MCP server only** — the Pi command ([#138](https://github.com/HuginnIndustries/CodeCartographer/issues/138)) and the `broadside-scout` pipeline phase ([#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139)) are on the roadmap. See [ROADMAP.md](ROADMAP.md) for what has shipped and what is next.
+
+---
+
 ## Compatible environments
 
 | Environment | Recommended surface |
@@ -507,6 +530,7 @@ If you're testing a new model, start with `pipeline-architecture-only.yaml` on a
   scratch/                   # Disposable notes plus checkpoints and structured phase handoffs.
   templates/                 # Output structure templates.
   workflow/                  # Pipeline definitions, status, validation, config.
+  broadside/                 # Broad-Side batch reconnaissance: config, state, run results.
   closeouts/                 # Per-session closeout files.
   THREAD_LOG.md              # Cross-session summary log.
   dashboard.html             # Generated; gitignored.

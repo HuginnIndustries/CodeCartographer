@@ -153,6 +153,17 @@ Pass `pipeline: "<variant>"` to `codecarto_init` to choose. See the [pipeline va
 
 Every finding is tagged: `observed fact`, `strong inference`, `portability hazard`, or `open question`.
 
+## Optional: scout first with Broad-Side
+
+On a repository too large to skim, `codecarto_broadside` fires six analysis lenses at it as cheap asynchronous batch jobs over the OpenRouter Batch API and produces an executive report plus a prioritized work order — a map of where the expensive interactive run should spend its attention.
+
+```
+codecarto_broadside {cwd: "/abs/path/to/repo", action: "submit"}
+codecarto_broadside {cwd: "/abs/path/to/repo", action: "collect"}
+```
+
+It needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY`, or `.codecarto/broadside/config.yaml`) and works on any git repository, with or without a workspace. Submit prices the run first and refuses anything over `max_cost`. Its findings are **unverified leads, not evidence** — see the [Broad-Side section](../README.md#broad-side-batch-reconnaissance) in the README.
+
 ## No agent? Use the drop-in template
 
 If your tool doesn't speak MCP, copy the template directly:

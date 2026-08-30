@@ -38,6 +38,7 @@ codecarto_status  →  codecarto_init (first time only)
              status reports "complete"
 ```
 
+0. **`codecarto_broadside`** — optional, and only worth it on a repository too large to read directly. A cheap batch reconnaissance sweep that produces unverified leads telling the pipeline where to look, before you commit to a pipeline choice. Costs real money and is priced before it fires — `references/broadside.md`.
 1. **`codecarto_status`** — always start here. It reports the active pipeline, progress, next action, and any scaffold-staleness warning. Every tool takes an absolute `cwd` pointing at the target repository.
 2. **`codecarto_init`** — only when no `.codecarto/` exists. Choose the pipeline deliberately (see `references/pipeline-selection.md`). Never pass `force: true` without the user's explicit approval; it moves an existing workspace, findings and all, to a backup directory.
 3. **`codecarto_next`** — returns the prompt for the next eligible phase. It returns *text*; it does not execute anything. Use `codecarto_phase` only to force a specific phase out of order, and only when the user asked for that.
@@ -46,7 +47,7 @@ codecarto_status  →  codecarto_init (first time only)
 6. **`codecarto_validate`** — parses the validation block you appended to the primary output. Returns `PASS`, `PASS WITH GAPS`, `FAIL`, or `MISSING`.
 7. **`codecarto_complete`** — marks the phase done, applies your handoff to canonical state, and writes the closeout and `THREAD_LOG.md` entry. It refuses anything worse than `PASS WITH GAPS`.
 
-When `codecarto_status` reports all phases complete, post-pipeline skills become available via `codecarto_list_skills` and `codecarto_skill`.
+When `codecarto_status` reports all phases complete, post-pipeline skills become available via `codecarto_list_skills` and `codecarto_skill`. One name that tool answers to is exempt from that gate: `codecarto_skill {name: "broadside"}` returns the reading guide for a batch reconnaissance run, which is meant to be read *before* the pipeline and during it.
 
 ## The handoff contract
 
@@ -133,6 +134,7 @@ If the goal is to rebuild or refactor rather than to understand, two phases carr
 
 Running the pipeline:
 
+- `references/broadside.md` — batch reconnaissance: when to scout, cost guardrails, and why its findings are leads rather than evidence
 - `references/orchestration.md` — the orchestrator's duties, inline vs delegated execution, and the session-by-session fallback's real costs
 - `references/pipeline-selection.md` — choosing a variant, and switching without losing work
 - `references/executors.md` — the executor contract, adapters, and model selection

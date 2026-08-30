@@ -9,6 +9,7 @@ npm ci                  # install (lockfile-strict)
 npm run build           # tsc compile to dist/ (required before publish; CI runs this)
 npm test                # node --experimental-strip-types --test tests/*.test.mjs
 npm run smoke           # end-to-end MCP smoke test against the published npm package
+npm run smoke:broadside # opt-in live Broad-Side run (spends real money; needs OPENROUTER_API_KEY + a target repo)
 
 # Run a single test file:
 node --experimental-strip-types --disable-warning=ExperimentalWarning --test tests/pipeline-invariants.test.mjs
@@ -25,7 +26,7 @@ CodeCartographer is one framework shipped through **three delivery surfaces** th
 
 1. **`.codecarto/`** — the drop-in template (Markdown + YAML, no executable code). This is both the source of truth committed in this repo *and* the directory that gets copied into a user's target repo on `codecarto-init`. `core/workspace.ts` exposes it as `packagedWorkspaceDir`, resolved at runtime by walking up from `core/` to find the nearest `package.json`.
 2. **`extensions/codecarto/`** — Pi extension. Registers `/codecarto-*` slash commands, runs phases as isolated `AgentSession` sub-agents (`auto-runner.ts`), renders the live widget (`agent-widget.ts`), and writes the HTML dashboard (`dashboard-writer.ts`). The `tool_call` hook in `index.ts` blocks `bash` outright and confines `edit`/`write` to `.codecarto/` plus the configured library path.
-3. **`mcp-server/`** — MCP server exposing ten workflow and library operations as JSON-RPC tools over stdio. Never spawns sub-agents; returns prompt text for the host to dispatch.
+3. **`mcp-server/`** — MCP server exposing the workflow, library, and Broad-Side operations as JSON-RPC tools over stdio. Never spawns sub-agents; returns prompt text for the host to dispatch.
 
 Both wrappers import everything they share from `core/index.ts` (barrel re-export). **If you add a primitive used by both surfaces, it goes in `core/` and must be re-exported through `index.ts`.** Wrapper-specific logic (UI, sub-agent lifecycle, MCP plumbing) stays in the wrapper.
 
@@ -50,6 +51,7 @@ When adding a feature, the question to ask is "does this work on all three surfa
 - `core/orchestrator-config.ts` — loads `.codecarto/workflow/config.yaml` (the `orchestrator.llm_steer_next_phase` flag lives here).
 - `core/library.ts` — versioned library discovery, publication, reads, listing, reindexing, and optional git commits shared by Pi and MCP.
 - `core/synthesis.ts` — vision/library/proposal preflight and exact confirmed-version resolution for the four-phase synthesis workflow.
+- `core/broadside.ts` — Broad-Side batch reconnaissance: lens registry and prompts, repo slicing, OpenRouter Batch API submit/poll/collect, model catalog and cost pre-flight, synthesis and triage post-passes, and `.codecarto/broadside/` state. Executable-surface only (MCP today); the template carries just the reading guide.
 
 ### Pipeline shape
 
