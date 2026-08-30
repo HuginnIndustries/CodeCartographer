@@ -59,7 +59,16 @@ not replace any phase; it tells phases where to look.
 
 ## Running Broad-Side
 
-Broad-Side is an executable-surface feature (MCP today):
+Broad-Side is an executable-surface feature. On the Pi extension:
+
+```
+/codecarto-broadside submit [lenses…]   # prices the run, asks, then fires
+/codecarto-broadside collect            # poll, save, synthesize
+/codecarto-broadside status             # show recorded runs
+/codecarto-broadside models             # compare batch models
+```
+
+On the MCP server:
 
 ```
 codecarto_broadside {cwd, action: "submit", lenses: [...]}   # fire the batches

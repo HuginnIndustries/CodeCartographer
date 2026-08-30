@@ -28,7 +28,7 @@
 // resubmit path must gate on whether any tool executed.
 //
 // Broad-Side requires runtime code, so the feature itself lives on the
-// executable surfaces (MCP today, Pi on the roadmap). What the template does
+// executable surfaces (Pi and MCP), not the pure template. What the template does
 // carry is the reading guide for its output — `.codecarto/broadside/SKILL.md`,
 // served by codecarto_skill under the name `broadside` (see readBroadsideSkill).
 
@@ -242,6 +242,37 @@ export type BroadsideConfig = {
 	/** Default poll budget in seconds; 0 means "return immediately". */
 	waitSeconds: number;
 };
+
+/**
+ * The pre-flight facts a caller needs to decide whether a run is worth its
+ * price: what each lens would cost, at what rates, against which limit. Handed
+ * to {@link BroadsideSubmitOptions.confirm} before anything is submitted.
+ */
+export type BroadsideEstimate = {
+	model: string;
+	pricing: ModelPricing;
+	lenses: Array<{ lensId: BroadsideLensId; name: string; slices: number; maxTokens: number; cost: number }>;
+	totalCost: number;
+	inputTokens: number;
+	outputTokens: number;
+	/** Run expense limit in USD; 0 means no limit. */
+	maxCost: number;
+	/** True when totalCost is over a non-zero maxCost. */
+	exceedsLimit: boolean;
+	/** Set when incremental scouting found a baseline to diff against. */
+	baseHead: string | null;
+	sourceDirty: boolean;
+	/** The provider's completion ceiling, when the catalog advertises one. */
+	outputCap?: number;
+};
+
+/** Thrown when a confirm hook declines a run. Nothing was submitted. */
+export class BroadsideCancelledError extends Error {
+	constructor(message = "Broad-Side submission cancelled. Nothing was submitted.") {
+		super(message);
+		this.name = "BroadsideCancelledError";
+	}
+}
 
 export type BroadsideSubmitResult = {
 	runId: string;
@@ -1897,6 +1928,16 @@ export async function runBroadsideSubmit(
 		force?: boolean;
 		/** Diff against the previous run's HEAD and scan only changed modules (#142). */
 		incremental?: boolean;
+		/**
+		 * Called with the pre-flight estimate after slicing and before any state
+		 * write or submission. Returning false throws {@link BroadsideCancelledError}
+		 * and nothing is submitted; returning true proceeds even past maxCost,
+		 * because an interactive approval of a priced run *is* the force flag.
+		 *
+		 * A surface that cannot ask a human (MCP) omits this and keeps the
+		 * refuse-unless-force behavior.
+		 */
+		confirm?: (estimate: BroadsideEstimate) => boolean | Promise<boolean>;
 	} = {},
 ): Promise<BroadsideSubmitResult> {
 	const info = await collectRepoInfo(cwd);
@@ -1975,7 +2016,30 @@ export async function runBroadsideSubmit(
 		perLensEstimate.push({ lens, cost: estimate.cost, maxTokens });
 	}
 
-	if (limit > 0 && !opts.force && estimatedTotalCost > limit) {
+	const exceedsLimit = limit > 0 && estimatedTotalCost > limit;
+
+	if (opts.confirm) {
+		const approved = await opts.confirm({
+			model,
+			pricing,
+			lenses: perLensEstimate.map(({ lens, cost, maxTokens }) => ({
+				lensId: lens.id,
+				name: lens.name,
+				slices: (slicesByLens.get(lens.id) ?? []).length,
+				maxTokens,
+				cost,
+			})),
+			totalCost: estimatedTotalCost,
+			inputTokens: estimatedInputTokens,
+			outputTokens: estimatedOutputTokens,
+			maxCost: limit,
+			exceedsLimit,
+			baseHead,
+			sourceDirty,
+			...(outputCap !== undefined && { outputCap }),
+		});
+		if (!approved) throw new BroadsideCancelledError();
+	} else if (exceedsLimit && !opts.force) {
 		const breakdown = perLensEstimate
 			.map(({ lens, cost }) => `  ${lens.name}: ~$${cost.toFixed(4)}`)
 			.join("\n");

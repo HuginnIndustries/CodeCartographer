@@ -318,7 +318,8 @@ Beyond the slash commands, the Pi extension layers on:
 | `/codecarto-phase <id>` | Force a specific phase, even out of pipeline order |
 | `/codecarto-validate [phase]` | Validate a phase output against completion criteria |
 | `/codecarto-complete [phase]` | Validate and atomically apply the phase handoff, canonical status, closeout, and log entry |
-| `/codecarto-skill <name>` | Run a post-pipeline skill once all phases are complete |
+| `/codecarto-skill <name>` | Run a post-pipeline skill once all phases are complete (or `broadside` any time, for the scout reading guide) |
+| `/codecarto-broadside [action] [lenses…]` | Batch reconnaissance (Broad-Side). Actions: `submit`, `collect`, `status`, `models`. Prices the run and asks before spending; works with or without a workspace |
 | `/codecarto-publish` | Publish the reimplementation spec to the configured library after reviewing an explicit confirmation preview |
 | `/codecarto-library-init <path> [--namespace <name>]` | Create a library directory with marker and write the config — fixes the first-publish dead end |
 | `/codecarto-config` | Show the effective merged configuration (global + workspace) and library marker status |
@@ -357,7 +358,7 @@ Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/spec
 | `codecarto_publish` | MCP-only library publish |
 | `codecarto_library_list` | MCP-only library listing |
 | `codecarto_library_reindex` | MCP-only library reindex |
-| `codecarto_broadside` | MCP-only batch reconnaissance (Broad-Side) |
+| `codecarto_broadside` | `/codecarto-broadside` |
 
 Each workflow tool accepts an absolute `cwd` for the target repository. `codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation). The library tools accept an explicit absolute `library_path` or resolve `library.path` from `.codecarto/workflow/config.yaml` / `~/.codecarto/config.yaml`. The library schema is experimental and may break before v2.
 
@@ -382,7 +383,9 @@ Submit and collect are separate because batch jobs routinely take tens of minute
 
 Repository defaults live in `.codecarto/broadside/config.yaml` (`model`, `api_key`, `default_lenses`, `max_cost`, `pricing` overrides, `incremental`, `retry_truncated`, `include_synthesis`, `include_triage`, `wait_seconds`); an explicit tool parameter always wins. `codecarto_skill {cwd, name: "broadside"}` returns the reading guide for a completed run, and unlike post-pipeline skills it is not gated on a finished pipeline.
 
-Broad-Side is an executable-surface feature and today ships on the **MCP server only** — the Pi command ([#138](https://github.com/HuginnIndustries/CodeCartographer/issues/138)) and the `broadside-scout` pipeline phase ([#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139)) are on the roadmap. See [ROADMAP.md](ROADMAP.md) for what has shipped and what is next.
+On the Pi extension the same run is `/codecarto-broadside [submit|collect|status|models] [lenses…]`, with tab-completion for actions and lens names and live per-lens progress while batches poll. The two surfaces differ in one deliberate place: MCP cannot ask a human, so it refuses a run over `max_cost` until you pass `force`; Pi shows the per-lens breakdown and asks, and your approval *is* the force flag. Neither surface takes an API key as a command argument — a key typed into a slash command lands in the session transcript.
+
+Broad-Side needs runtime code, so it is an executable-surface feature: Pi and MCP have it, the pure drop-in template does not (it carries only the reading guide). The `broadside-scout` pipeline phase ([#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139)) is still on the roadmap — nothing in a pipeline YAML consumes scout output yet; you read it and decide. See [ROADMAP.md](ROADMAP.md).
 
 ---
 

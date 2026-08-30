@@ -8,6 +8,7 @@ import { disposeAgentsWidget } from "./agent-widget.ts";
 import { parseDashboardFlags } from "./dashboard-flags.ts";
 import { narrateDashboard } from "./dashboard-narrator.ts";
 import { writeDashboard } from "./dashboard-writer.ts";
+import { parseBroadsideFlags, KNOWN_BROADSIDE_TOKENS } from "./broadside-flags.ts";
 import { parseNextFlags } from "./next-flags.ts";
 import { phaseCompactionExtension } from "./phase-compaction.ts";
 
@@ -29,8 +30,22 @@ import {
 	getWorkspaceState,
 	isWithinPath,
 	isWithinPathResolved,
+	BROADSIDE_LENS_IDS,
 	BROADSIDE_SKILL_NAME,
+	BroadsideCancelledError,
+	type BroadsideEstimate,
+	broadsideDirFor,
+	collectResultText,
+	estimateSubmitText,
+	getLens,
+	listBatchModels,
 	listSkillNames,
+	loadBroadsideConfig,
+	modelsText,
+	runBroadsideCollect,
+	runBroadsideStatus,
+	runBroadsideSubmit,
+	statusText,
 	loadCodecartoConfig,
 	loadUsage,
 	loadYamlFile,
@@ -59,6 +74,9 @@ import { initLibrary } from "../../core/library.ts";
 import { resolveUserConfigPath, USER_CONFIG_DIR } from "../../core/orchestrator-config.ts";
 
 const STATUS_WIDGET_ID = "codecarto-widget";
+// Broad-Side gets its own widget id: a scout run is legal on a repository with
+// no workspace, where the phase widget has nothing to render.
+const BROADSIDE_WIDGET_ID = "codecarto-broadside";
 const STATUS_LINE_ID = "codecarto-status";
 const SAFE_TOOL_NAMES = ["read", "grep", "find", "ls", "edit", "write"];
 
@@ -143,6 +161,46 @@ function setUiState(ctx: ExtensionContext | ExtensionCommandContext, state: Work
 	const currentPhase = getNextEligiblePhase(state)?.id ?? state.status.current_phase ?? "complete";
 	ctx.ui.setStatus(STATUS_LINE_ID, `${theme.fg("accent", "CC")} ${theme.fg("dim", currentPhase)}`);
 	ctx.ui.setWidget(STATUS_WIDGET_ID, buildStatusLines(state, extraLines));
+}
+
+/**
+ * Resolve the OpenRouter key for a Broad-Side run. Deliberately no slash-command
+ * parameter: a key typed as a command argument lands in the session transcript.
+ */
+function resolveBroadsideKey(configuredKey: string): string | null {
+	const fromEnv = process.env.OPENROUTER_API_KEY?.trim();
+	if (fromEnv) return fromEnv;
+	return configuredKey.trim() || null;
+}
+
+/** The spend decision, rendered for a human about to approve it. */
+function describeBroadsideEstimate(estimate: BroadsideEstimate): string {
+	const lines = [
+		`Model: ${estimate.model} (pricing: ${estimate.pricing.source})`,
+		`Rates: $${estimate.pricing.inputPerM.toFixed(4)}/M in · $${estimate.pricing.outputPerM.toFixed(4)}/M out`,
+		"",
+		"Per lens:",
+		...estimate.lenses.map(
+			({ name, slices, cost }) => `  ${name}: ${slices} slice${slices === 1 ? "" : "s"} — ~$${cost.toFixed(4)}`,
+		),
+		"",
+		`Estimated total: ~$${estimate.totalCost.toFixed(4)} ` +
+			`(~${Math.round(estimate.inputTokens / 1000)}k in, ~${Math.round(estimate.outputTokens / 1000)}k out)`,
+	];
+	if (estimate.maxCost > 0) {
+		lines.push(
+			estimate.exceedsLimit
+				? `This EXCEEDS the configured max_cost of $${estimate.maxCost.toFixed(2)}. Approving here overrides it for this run.`
+				: `Within the configured max_cost of $${estimate.maxCost.toFixed(2)}.`,
+		);
+	}
+	if (estimate.baseHead) {
+		lines.push(`Incremental: only modules changed since ${estimate.baseHead.slice(0, 8)} are included.`);
+	} else if (estimate.sourceDirty) {
+		lines.push("Incremental was requested but the tree is dirty — this is a full scan.");
+	}
+	lines.push("", "The estimate is a pre-flight prediction from file sizes; OpenRouter bills actual usage.");
+	return lines.join("\n");
 }
 
 export default function codeCartographerExtension(pi: ExtensionAPI) {
@@ -739,6 +797,185 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			lastFeedbackLines = [`Queued post-pipeline skill: ${skillName}`];
 			setUiState(ctx, state, lastFeedbackLines);
 			ctx.ui.notify(`Queued CodeCartographer skill: ${skillName}`, "info");
+		},
+	});
+
+	pi.registerCommand("codecarto-broadside", {
+		description: "Batch reconnaissance (Broad-Side): /codecarto-broadside [submit|collect|status|models] [lenses…] [flags]",
+		getArgumentCompletions: (prefix) => {
+			const items = KNOWN_BROADSIDE_TOKENS
+				.filter((value) => value.startsWith(prefix))
+				.map((value) => ({ value, label: value }));
+			return items.length > 0 ? items : null;
+		},
+		handler: async (args, ctx) => {
+			const flags = parseBroadsideFlags(args);
+			if (flags.unknown.length > 0) {
+				ctx.ui.notify(
+					`Unknown /codecarto-broadside argument: ${flags.unknown.join(" ")}. ` +
+						`Actions: submit, collect, status, models. Lenses: ${BROADSIDE_LENS_IDS.join(", ")}.`,
+					"error",
+				);
+				return;
+			}
+			if (flags.error) {
+				ctx.ui.notify(flags.error, "error");
+				return;
+			}
+
+			// Broad-Side runs on any git repository, with or without a workspace —
+			// so this command never goes through ensureWorkspaceState.
+			const broadsideDir = broadsideDirFor(ctx.cwd);
+			const config = await loadBroadsideConfig(broadsideDir);
+
+			const finish = (lines: string[], notice: string, level: "info" | "warning" = "info"): void => {
+				lastFeedbackLines = lines;
+				if (codecartoModeActive) {
+					// A workspace session already has a widget; fold the result into it.
+					if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
+					void refreshWorkspaceUi(ctx, lines);
+				} else if (ctx.hasUI) {
+					// Scout-only repository: the Broad-Side widget is the only place
+					// the result can live, so it holds it instead of being cleared.
+					ctx.ui.setWidget(BROADSIDE_WIDGET_ID, ["Broad-Side", ...lines]);
+				}
+				ctx.ui.notify(notice, level);
+			};
+
+			if (flags.action === "status") {
+				const { state } = await runBroadsideStatus(ctx.cwd);
+				const runs = state.runs.length;
+				finish(
+					statusText(state).split("\n"),
+					runs > 0 ? `Broad-Side: ${runs} recorded run${runs === 1 ? "" : "s"}` : "Broad-Side: no runs recorded yet",
+				);
+				return;
+			}
+
+			const apiKey = resolveBroadsideKey(config.apiKey);
+			if (!apiKey) {
+				ctx.ui.notify(
+					"No OpenRouter API key. Set OPENROUTER_API_KEY in the environment, or add api_key to " +
+						".codecarto/broadside/config.yaml. (A slash command takes no key: it would land in the transcript.)",
+					"error",
+				);
+				return;
+			}
+
+			if (flags.action === "models") {
+				ctx.ui.notify("Fetching the OpenRouter batch-model catalog…", "info");
+				try {
+					const { entries, benchmarks } = await listBatchModels(broadsideDir, config, apiKey, {
+						includeBenchmarks: flags.benchmarks,
+					});
+					finish(
+						modelsText(entries, { benchmarks, defaultModel: config.model }).split("\n"),
+						`Broad-Side: ${entries.length} batch model${entries.length === 1 ? "" : "s"} listed`,
+					);
+				} catch (error) {
+					ctx.ui.notify(`Model catalog lookup failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+				}
+				return;
+			}
+
+			// Live per-lens progress. Poll callbacks fire often, so they render
+			// into a widget rather than a notification stream.
+			const progress = new Map<string, string>();
+			const renderProgress = (heading: string): void => {
+				if (!ctx.hasUI) return;
+				ctx.ui.setWidget(BROADSIDE_WIDGET_ID, [
+					"Broad-Side",
+					heading,
+					...[...progress.entries()].map(([lensId, line]) => `  ${lensId}: ${line}`),
+				]);
+			};
+			const onStatus = (lensId: string, status: string, counts: Record<string, unknown>): void => {
+				progress.set(lensId, `${status} (${counts.completed ?? 0}/${counts.total ?? "?"})`);
+				renderProgress("Polling batches…");
+			};
+
+			const waitSeconds = flags.waitSeconds ?? config.waitSeconds;
+			const waitMs = waitSeconds > 0 ? waitSeconds * 1000 : undefined;
+			const includeSynthesis = flags.includeSynthesis ?? config.includeSynthesis;
+			const includeTriage = flags.includeTriage ?? config.includeTriage;
+			const retryTruncated = flags.retryTruncated ?? config.retryTruncated;
+
+			if (flags.action === "submit") {
+				const lenses = flags.lenses.length > 0 ? flags.lenses : config.defaultLenses;
+				renderProgress("Slicing the repository and pricing the run…");
+				let submit;
+				try {
+					submit = await runBroadsideSubmit(ctx.cwd, apiKey, {
+						lenses,
+						model: config.model,
+						maxCost: flags.maxCost ?? config.maxCost,
+						incremental: flags.incremental || config.incremental,
+						// Pi can ask, so it asks instead of refusing over max_cost the
+						// way MCP has to. An approval here IS the force flag.
+						confirm: (estimate) =>
+							ctx.ui.confirm(
+								`Broad-Side will spend about $${estimate.totalCost.toFixed(4)}`,
+								describeBroadsideEstimate(estimate),
+							),
+					});
+				} catch (error) {
+					if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
+					if (error instanceof BroadsideCancelledError) {
+						ctx.ui.notify("Broad-Side cancelled. Nothing was submitted.", "info");
+						return;
+					}
+					ctx.ui.notify(`Broad-Side submit failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+					return;
+				}
+
+				const lines = estimateSubmitText(submit, lenses.map(getLens)).split("\n");
+				if (!waitMs) {
+					lines.push("", "Batches are in flight. Run /codecarto-broadside collect when they finish.");
+					finish(lines, `Broad-Side submitted: run ${submit.runId} (~$${submit.estimatedTotalCost.toFixed(4)})`);
+					return;
+				}
+
+				ctx.ui.notify(`Broad-Side submitted run ${submit.runId}; polling for up to ${waitSeconds}s…`, "info");
+				try {
+					const collect = await runBroadsideCollect(ctx.cwd, apiKey, {
+						waitMs,
+						includeSynthesis,
+						includeTriage,
+						retryTruncated,
+						onStatus,
+					});
+					finish([...lines, "", ...collectResultText(collect).split("\n")], `Broad-Side ${collect.status}: run ${collect.runId}`);
+				} catch (error) {
+					if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
+					// The batches are submitted and paid for either way — say so, so
+					// nobody re-submits a run that is already in flight.
+					ctx.ui.notify(
+						`Broad-Side submitted run ${submit.runId}, but collect failed: ` +
+							`${error instanceof Error ? error.message : String(error)}. Retry with /codecarto-broadside collect.`,
+						"error",
+					);
+				}
+				return;
+			}
+
+			// action === "collect"
+			renderProgress("Polling batches…");
+			try {
+				const collect = await runBroadsideCollect(ctx.cwd, apiKey, {
+					waitMs,
+					includeSynthesis,
+					includeTriage,
+					retryTruncated,
+					onStatus,
+				});
+				const lines = collectResultText(collect).split("\n");
+				const done = collect.status === "completed";
+				if (!done) lines.push("", "Still in flight. Run /codecarto-broadside collect again to resume.");
+				finish(lines, `Broad-Side ${collect.status}: ${collect.resultCount} result${collect.resultCount === 1 ? "" : "s"} saved`, done ? "info" : "warning");
+			} catch (error) {
+				if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
+				ctx.ui.notify(`Broad-Side collect failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+			}
 		},
 	});
 
