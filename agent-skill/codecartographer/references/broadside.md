@@ -74,9 +74,14 @@ Two more economies worth knowing:
 - `incremental: true` diffs against the previous run's git HEAD and scans only
   the modules whose files changed, falling back to a full scan on a dirty tree.
 - Every knob above has a repository default in `.codecarto/broadside/config.yaml`
-  (`model`, `default_lenses`, `max_cost`, `incremental`, `retry_truncated`,
-  `include_synthesis`, `include_triage`, `wait_seconds`). An explicit parameter
-  on the call always wins.
+  (`model`, `default_lenses`, `max_cost`, `lens_models`, `incremental`,
+  `retry_truncated`, `include_synthesis`, `include_triage`, `wait_seconds`). An
+  explicit parameter on the call always wins.
+- `lens_models` runs individual lenses on their own model. Spending more on the
+  security and defect lenses while the cheap default carries architecture and
+  conventions is usually a better trade than raising the model for everything.
+  Overrides are priced and capability-checked individually, and the estimate
+  breaks cost out per lens.
 
 ## Reading a run
 

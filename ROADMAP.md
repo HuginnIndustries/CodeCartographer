@@ -27,6 +27,9 @@ file only moves when a tier completes.
   and clamps lens `max_tokens` to the provider's completion ceiling.
 - Triage post-pass on collect: findings scored by impact × difficulty into
   a P0–P3 work order with effort estimates, saved as triage.json/md.
+- Per-lens model overrides (`lens_models`): each lens can run on its own batch
+  model, pre-flighted and priced independently, recorded in `run-meta.json`, and
+  honored by the truncation retry.
 - `scout-first` pipeline variant: a `broadside-scout` phase distills a completed
   run into `findings/broadside-scout/scout-brief.md`; architecture, both defect
   scans, contracts, protocols, and porting read it and account for their leads at
@@ -64,7 +67,7 @@ file only moves when a tier completes.
 
 | Item | Issue | Notes |
 |---|---|---|
-| **Multi-model** — DeepSeek/Anthropic batch endpoints behind the lens registry | [#141](https://github.com/HuginnIndustries/CodeCartographer/issues/141) | Partially shipped: catalog lookup, `models` action, pricing + capability pre-flight. Remaining: per-model prompt tweaks and a stronger default for semantic lenses |
+| **Multi-model** — DeepSeek/Anthropic batch endpoints behind the lens registry | [#141](https://github.com/HuginnIndustries/CodeCartographer/issues/141) | **Mechanism shipped**: catalog lookup, `models` action, pricing + capability pre-flight, and per-lens model overrides (`lens_models`) priced, clamped, and retried per lens. **Deliberately not shipped**: a stronger default for the semantic lenses. Which model earns its price is a comparative-evaluation question on real repositories, and picking one for every user spends their money on our guess. Per-model prompt tweaks stay open pending that same evidence |
 | **Incremental re-scouting** — diff against previous run's HEAD, rescan changed modules only | [#142](https://github.com/HuginnIndustries/CodeCartographer/issues/142) | **Shipped**: `incremental: true` diffs against the prior run's HEAD; dirty tree falls back to full scan |
 | **CodeCartoShow pipeline stage** — BATCH-SCOUT between SELECT and the interactive run | [CodeCartoShow#1](https://github.com/HuginnIndustries/CodeCartoShow/issues/1) | `scripts/batch-analyze.py` proved it; evidence rules apply unchanged |
 

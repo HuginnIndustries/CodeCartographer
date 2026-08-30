@@ -90,6 +90,15 @@ Collect runs two cross-lens post-passes by default: **synthesis** (the
 executive report) and **triage** (the prioritized work order). Pass
 `include_synthesis: false` or `include_triage: false` on collect to skip one.
 
+Lenses do not all have to run on the same model. `lens_models` in `config.yaml`
+routes individual lenses to their own batch model — the usual reason being that
+a stronger model changes security and defect findings more than it changes an
+architecture map. Each override is priced, capability-checked, and clamped like
+the default, the submit estimate breaks cost out per lens, and `run-meta.json`
+records which lens ran on what. No stronger default is shipped: which model is
+worth the money depends on the repository and the budget, so compare with the
+`models` action and decide.
+
 Every run knob — `incremental`, `retry_truncated`, `include_synthesis`,
 `include_triage`, `wait_seconds` — also has a repository default under the same
 name in this directory's `config.yaml`, alongside `model`, `api_key`,
