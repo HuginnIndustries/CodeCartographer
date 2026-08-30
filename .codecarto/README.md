@@ -31,6 +31,7 @@ The default is the 7-phase **full-with-deep-audit** pipeline, which splits the d
 
 ```yaml
 pipeline: workflow/pipeline-full-with-deep-audit.yaml  # 7-phase with split defect scan (default; depth-first)
+pipeline: workflow/pipeline-scout-first.yaml           # 8-phase: the deep-audit run behind a broadside-scout brief (Pi/MCP only)
 pipeline: workflow/pipeline-full-with-audit.yaml       # 6-phase with single early defect scan — adjust phases to use one defect-scan
 pipeline: workflow/pipeline.yaml                       # 5-phase without defect scan — remove defect-scan phases
 pipeline: workflow/pipeline-defect-scan.yaml           # 2-phase defect audit — remove contracts through reimplementation-spec
@@ -38,5 +39,7 @@ pipeline: workflow/pipeline-lite.yaml                  # 3-phase understanding �
 pipeline: workflow/pipeline-architecture-only.yaml     # 1-phase quick overview — keep only architecture
 pipeline: workflow/pipeline-synthesis.yaml             # 4-phase forward synthesis — vision + confirmed library specs → project plan (Pi/MCP only)
 ```
+
+The scout-first pipeline is the deep-audit run with one phase in front of it: `broadside-scout` distills a completed Broad-Side batch reconnaissance run into `findings/broadside-scout/scout-brief.md`, and the six phases after it read that brief and must account for the leads routed to them. Firing the reconnaissance run itself needs Pi or MCP; the scout phase only reads what a run already wrote, so with no run on disk it produces an explicitly empty brief and the pipeline proceeds.
 
 The synthesis pipeline is different from the analysis variants: it requires Pi or MCP, a configured non-empty CodeCartographer library, and a completed `inputs/vision.md`. It pauses after proposing candidate specs and will not merge or finalize until the user changes at least one proposal checkbox from `[ ]` to `[x]`.

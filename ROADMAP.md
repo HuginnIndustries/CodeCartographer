@@ -27,6 +27,10 @@ file only moves when a tier completes.
   and clamps lens `max_tokens` to the provider's completion ceiling.
 - Triage post-pass on collect: findings scored by impact × difficulty into
   a P0–P3 work order with effort estimates, saved as triage.json/md.
+- `scout-first` pipeline variant: a `broadside-scout` phase distills a completed
+  run into `findings/broadside-scout/scout-brief.md`; architecture, both defect
+  scans, contracts, protocols, and porting read it and account for their leads at
+  validation. The phase never submits and never spends.
 - Pi surface: `/codecarto-broadside [submit|collect|status|models] [lenses…]`
   with a spend confirmation (`confirm` hook on `runBroadsideSubmit`), so Pi asks
   where MCP must refuse.
@@ -53,7 +57,7 @@ file only moves when a tier completes.
 | Item | Issue | Notes |
 |---|---|---|
 | **Pi extension** — `/codecarto-broadside` command with lens picker and live progress | [#138](https://github.com/HuginnIndustries/CodeCartographer/issues/138) | **Shipped**: four actions with tab-completed lens picker, live per-lens progress widget, and an interactive spend confirmation in place of MCP's refuse-unless-`force` |
-| **Pipeline phase** — `broadside-scout` phase feeding later phases via `required_reads` | [#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139) | SKILL.md contract stays: leads, never evidence |
+| **Pipeline phase** — `broadside-scout` phase feeding later phases via `required_reads` | [#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139) | **Shipped**: `pipeline-scout-first.yaml`. The phase distills a run into a stable brief (run dirs are timestamped, so no YAML could name one), six phases read it, and each must confirm, dismiss, or carry forward every lead routed to it. Leads, never evidence — enforced at validation |
 | **Zero-config executive** — meta-pass picks lenses and slicing resolution from repo shape | [#140](https://github.com/HuginnIndustries/CodeCartographer/issues/140) | **Shipped**: `auto` slicing collapses small repos to one slice, directory-splits large ones |
 
 ## Tier 3 — cost and coverage economics

@@ -73,6 +73,8 @@ Results land in `.codecarto/broadside/<run>/`; read `synthesis.md` and `triage.m
 
 **These findings are leads, not evidence.** Each lens is one shot with no cross-file traversal and no runtime verification. Every finding is a `file:line` pointer for the real analysis to confirm — never cite a Broad-Side report as a source in a phase artifact. See [README.md](README.md#broad-side-batch-reconnaissance) and `.codecarto/broadside/SKILL.md`.
 
+To have the pipeline itself consume the results, choose the `scout-first` variant in Step 2. Its first phase distills the run into `findings/broadside-scout/scout-brief.md`, and the six phases after it must account for the leads routed to them — confirm against the source, dismiss with a reason, or carry forward. Without that variant the results are still yours to read; nothing in the pipeline points at them.
+
 Skip this entirely on a repository you can read directly; a sweep that costs more than the reading it saves is waste.
 
 
@@ -87,6 +89,9 @@ To use a different pipeline, you have two options:
 - **Drop-in template:** Open `.codecarto/workflow/status.yaml` and change the `pipeline` field.
 
 Here's how to decide:
+
+**"I ran Broad-Side and want the phases to use it."**
+Use `workflow/pipeline-scout-first.yaml` (8 phases). The deep-audit run with a `broadside-scout` phase in front that turns the reconnaissance run into a routing brief every later phase reads. With no run on disk the brief is empty and the pipeline behaves exactly like the deep-audit variant.
 
 **"I want the full analysis with defect triage."** (default)
 Keep `workflow/pipeline-full-with-audit.yaml` (6 phases). Produces architecture, defect report, behavioral contracts, protocol notes, a porting synthesis, and a reimplementation spec. The defect findings feed into the porting phase so you can decide what to fix, port differently, or leave behind.

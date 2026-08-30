@@ -10,6 +10,7 @@ Pass an alias to `codecarto_init` as `pipeline`. The default is `full-with-deep-
 | `full` | architecture → contracts → protocols → porting → reimplementation-spec | porting or rewriting, no defect audit |
 | `full-with-audit` | adds a single defect-scan after architecture | porting, with defects surfaced once |
 | `full-with-deep-audit` *(default)* | splits the scan: mechanical after architecture, semantic after protocols | porting or rewriting where correctness matters |
+| `scout-first` | `full-with-deep-audit` behind a `broadside-scout` brief | a repository large enough that a Broad-Side sweep already ran and should steer the phases |
 | `synthesis` | vision-capture → goal-synthesis-propose → spec-merge → goal-synthesis-finalize | forward synthesis of a *new* product, not reverse-engineering |
 
 ## Deep audit versus plain audit
@@ -22,6 +23,19 @@ Pass an alias to `codecarto_init` as `pipeline`. The default is `full-with-deep-
 The mechanical pass routes anything it cannot settle locally to the semantic pass. If the user expects "seven phases," they mean this variant.
 
 Choose `full-with-audit` when one combined pass is enough and you want fewer phases. Choose `full-with-deep-audit` when the output will drive a rewrite, since a semantic pass without protocols context will miss the findings that most change a port.
+
+## Scout-first needs a scout run
+
+`scout-first` is `full-with-deep-audit` with one phase in front: `broadside-scout`
+distills a completed Broad-Side batch reconnaissance run into a routing brief,
+and the six phases after it read that brief and must account for the leads
+addressed to them — confirmed, dismissed with a reason, or carried forward.
+See `references/broadside.md` for the sweep itself.
+
+The scout phase never submits a batch and never spends; it reads only what a
+prior run wrote. Choosing this variant without having run Broad-Side gets you an
+explicitly empty brief and, from there on, exactly `full-with-deep-audit`. So
+fire the sweep first, or choose the plain deep-audit variant.
 
 ## Synthesis is a different workspace
 
