@@ -26,10 +26,12 @@ Triage every delta into one of four buckets:
 |---|---|---|
 | **APPLY** | Delta is a real correction or required addition; the spec is wrong without it. | Edit the spec body. Add a `[revised per <source> §<delta-id>]` marker at the changed section. Record in DELTAS-APPLIED.md. |
 | **CLARIFY** | Delta proposes wording change; the spec's *meaning* is correct but the language is ambiguous. | Edit the spec wording (not the rule). Record in DELTAS-APPLIED.md as a clarification. |
-| **DEFER** | Delta is a real improvement but not load-bearing for the next implementation step. | Add to BACKLOG.md with rationale and a back-reference. Do NOT edit the spec. |
+| **DEFER** | Delta is a real improvement but not load-bearing for the next implementation step. | Add to `BACKLOG.md` with rationale and a back-reference (`templates/backlog-project.md` gives the entry shape). Do NOT edit the spec. |
 | **REJECT** | Delta is wrong on close reading (premise was incorrect, scope was misread, the rule it proposes already exists, etc.). | Document in DELTAS-APPLIED.md with a one-line rationale. Do NOT edit the spec. |
 
 The previous wisdom: any delta you can't decisively bucket should default to DEFER. The cost of a missed correction is one re-application pass; the cost of a bad correction is shipped.
+
+**DEFER goes to `BACKLOG.md`, not `DECISIONS.md`, and gets no `D` number.** `DECISIONS.md` is for what the project decided to *do*; `BACKLOG.md` is for what it decided to *defer*. A refinement you make while applying a delta — the applied text going beyond the literal proposal — is a decision: record it in the audit file's Decisions Beyond Triage section, and lift it into `DECISIONS.md` only if it is cross-cutting. An existing `D` entry for a proposed delta has its disposition updated in place (`APPLIED 2026-05-03 round-3`); it is never superseded by a new entry when applied.
 
 ## Citation convention
 

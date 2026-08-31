@@ -31,6 +31,7 @@ import {
 	BROADSIDE_LENS_IDS,
 	type BroadsideLensId,
 	canonicalPath,
+	copyPackagedWorkspace,
 	collectResultText,
 	completeValidatedPhase,
 	computePerPhaseTotals,
@@ -197,11 +198,11 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 
 	if (!(await pathExists(targetWorkspaceDir))) {
 		await mkdir(cwd, { recursive: true });
-		await cp(packagedWorkspaceDir, targetWorkspaceDir, { recursive: true });
+		await copyPackagedWorkspace(targetWorkspaceDir);
 	} else if (broadsideOnly) {
 		// Merge the template into the scout-only .codecarto/, preserving the
 		// broadside state and results already on disk.
-		await cp(packagedWorkspaceDir, targetWorkspaceDir, { recursive: true });
+		await copyPackagedWorkspace(targetWorkspaceDir);
 	}
 
 	const statusPath = join(targetWorkspaceDir, "workflow", "status.yaml");

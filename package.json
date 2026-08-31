@@ -35,6 +35,11 @@
   },
   "files": [
     ".codecarto/**/*",
+    "!.codecarto/BACKLOG.md",
+    "!.codecarto/THREAD_LOG.md",
+    "!.codecarto/CONVENTIONS.md",
+    "!.codecarto/DECISIONS.md",
+    "!.codecarto/closeouts/**",
     "agent-skill/**/*",
     "dist/**/*",
     "assets/logo.svg",
