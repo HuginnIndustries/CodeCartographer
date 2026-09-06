@@ -16,6 +16,7 @@ import {
 	buildSkillPrompt,
 	buildValidationSummary,
 	canonicalPath,
+	copyPackagedWorkspace,
 	computePerPhaseTotals,
 	computeTotals,
 	createEmptyStatus,
@@ -333,7 +334,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			if (!(await pathExists(targetWorkspaceDir))) {
 				await mkdir(ctx.cwd, { recursive: true });
-				await cp(sourceWorkspaceDir, targetWorkspaceDir, { recursive: true });
+				await copyPackagedWorkspace(targetWorkspaceDir);
 			}
 
 			const rawStatusPath = join(targetWorkspaceDir, "workflow", "status.yaml");

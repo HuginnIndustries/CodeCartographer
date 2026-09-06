@@ -84,10 +84,16 @@ Some files in this workspace are **read-only instructions** and must not be modi
 | Closeouts (framework-owned) | `closeouts/<date>-<phase-or-module>.md`, `THREAD_LOG.md` | Completion writes or updates one canonical closeout and one idempotent index entry. |
 | Conventions (orchestrator-maintained) | `CONVENTIONS.md` | Cross-cutting patterns promoted to project-wide invariants. Phase executors propose; the orchestrator promotes at the phase boundary — in inline runs, the same chat changing hats. |
 | Decisions (orchestrator-maintained, append-only) | `DECISIONS.md` | Numbered log of decisions that diverge from spec, prompt, or obvious-default. Completion appends each handoff's `decisions` under `## Completion log`; the orchestrator may re-file entries into categories. |
-| Backlog (read-write) | `BACKLOG.md` | Deferred items with rationale. |
+| Backlog (orchestrator-maintained) | `BACKLOG.md` | Work this project decided to **defer**, with the reasoning, the preconditions for revisiting, and the smallest viable form. Seeded from `templates/backlog-project.md` at init. |
 | Scratch (read-write) | `scratch/*` | Working notes; `scratch/checkpoints/<phase>.md` is the durable in-phase continuation checkpoint until the phase validates; `scratch/spikes/<spike-id>/<scenario>.md` holds spike reports (`templates/spike-report.md`); `scratch/amendments/<slug>.yaml` holds post-pipeline amendments (`templates/amendment.yaml`). |
 
 If you are uncertain whether a file should be modified, treat it as read-only.
+
+### Two things named "backlog", and neither is the other
+
+- **`BACKLOG.md` in this workspace** is *this project's* deferrals: work the project chose not to do yet. `DECISIONS.md` records what the project decided to **do**; `BACKLOG.md` records what it decided to **defer**. Deferrals get no `D` number. When a deferred item is later picked up, remove its entry here and record the decision in `DECISIONS.md`.
+- **`status.yaml`'s `post_pipeline` list** is framework-owned lifecycle state, not this file. Items there are retired by `codecarto_amend`, never by hand.
+- **CodeCartographer's own backlog** — deferred improvements to the *framework* — lives in the CodeCartographer repository, not in your workspace. If a phase prompt misled you or a validation criterion did not fit, that is feedback to the framework; it does not belong in this file.
 
 ## Pipeline Selection
 

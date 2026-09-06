@@ -151,7 +151,17 @@ Landed as `codecarto_amend` over `scratch/amendments/<slug>.yaml` (see `template
 
 ---
 
-## B16. Project-level BACKLOG.md template + GUIDE.md project-vs-framework-level clarification
+## B16. Project-level BACKLOG.md template + GUIDE.md project-vs-framework-level clarification — SHIPPED
+
+Landed with the fix for the larger bug it was a symptom of: init copied this repository's
+`.codecarto/` wholesale, so every new workspace inherited *this* backlog, thread log, and a
+closeout from a CodeCartographer self-analysis session. `templates/backlog-project.md` now
+ships with the entry shape B16 specified (rationale, raised-by, preconditions, smallest
+viable form), init seeds `BACKLOG.md` and `THREAD_LOG.md` from templates alongside
+CONVENTIONS/DECISIONS, and GUIDE.md carries the project-vs-framework distinction under
+Trust Boundaries. Original entry below.
+
+
 
 **Raised by:** `Spec-delta-3 application - 2026-05-03.txt` (1 agent — first-run-of-SKILL friction)
 
@@ -164,7 +174,15 @@ Landed as `codecarto_amend` over `scratch/amendments/<slug>.yaml` (see `template
 
 ---
 
-## B17. SKILL clarification — DECISIONS.md vs BACKLOG.md semantics for DEFER
+## B17. SKILL clarification — DECISIONS.md vs BACKLOG.md semantics for DEFER — SHIPPED
+
+Landed as specified: the spec-delta-application SKILL's triage section now states that DEFER
+goes to BACKLOG.md with no D number, that a refinement made while applying is a decision
+recorded in the audit file's Decisions Beyond Triage section (lifted to DECISIONS.md only if
+cross-cutting), and that an existing D entry's disposition is updated in place rather than
+superseded. Original entry below.
+
+
 
 **Raised by:** `Spec-delta-3 application - 2026-05-03.txt` (1 agent — first-run-of-SKILL semantic ambiguity)
 

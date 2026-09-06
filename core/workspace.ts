@@ -4,7 +4,7 @@
 // atomic status-update primitive used by /codecarto-complete.
 
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, copyFile, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, cp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock, applyHandoff, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
@@ -112,7 +112,58 @@ export async function getWorkspaceState(cwd: string): Promise<WorkspaceState | n
 export const ORCHESTRATOR_FILES = [
 	{ file: "CONVENTIONS.md", template: "conventions-template.md" },
 	{ file: "DECISIONS.md", template: "decisions-template.md" },
+	{ file: "BACKLOG.md", template: "backlog-project.md" },
+	{ file: "THREAD_LOG.md", template: "thread-log.md" },
 ] as const;
+
+/**
+ * Project state that must never travel from the packaged template into a new
+ * workspace.
+ *
+ * This repository's `.codecarto/` is two things at once: the template that gets
+ * copied into a user's repo, and CodeCartographer's own live workspace. The
+ * second role writes real project state into it — a backlog of framework
+ * deferrals, a thread log, closeouts of sessions where CodeCartographer
+ * analyzed itself. Copying the tree wholesale handed every new workspace ~40 KB
+ * of another project's history as its own, and the damage was not only clutter:
+ * GUIDE.md keys first-time-project setup on `closeouts/` being empty, so a
+ * shipped closeout told every new session it was not the first to touch the
+ * project, suppressing the orchestrator role that issues #97/#98 made the
+ * default.
+ *
+ * The four top-level files are seeded fresh from templates instead
+ * ({@link ORCHESTRATOR_FILES}); `closeouts/` is created empty.
+ */
+const INIT_EXCLUDED_TOP_LEVEL = new Set(["BACKLOG.md", "THREAD_LOG.md", "CONVENTIONS.md", "DECISIONS.md"]);
+const INIT_EXCLUDED_DIR_CONTENTS = new Set(["closeouts"]);
+
+/**
+ * Copy the packaged template into a target workspace, skipping this
+ * repository's own project state. Directories are still created, so a fresh
+ * workspace has an empty `closeouts/` rather than no `closeouts/`.
+ *
+ * @param targetWorkspaceDir - Absolute path to the `.codecarto/` to create or merge into.
+ */
+export async function copyPackagedWorkspace(targetWorkspaceDir: string): Promise<void> {
+	await cp(packagedWorkspaceDir, targetWorkspaceDir, {
+		recursive: true,
+		filter: (source) => {
+			const relativePath = relative(packagedWorkspaceDir, source);
+			if (!relativePath) return true; // the workspace root itself
+			const segments = relativePath.split(/[\\/]/);
+			if (segments.length === 1) return !INIT_EXCLUDED_TOP_LEVEL.has(segments[0]);
+			// Keep the directory, drop what this repository wrote inside it.
+			return !INIT_EXCLUDED_DIR_CONTENTS.has(segments[0]);
+		},
+	});
+	// The published tarball carries no empty directories, so an excluded-contents
+	// directory may not exist to be copied at all. Create them either way: a
+	// workspace whose closeouts/ is missing rather than empty reads differently
+	// to anything that lists it.
+	for (const name of INIT_EXCLUDED_DIR_CONTENTS) {
+		await mkdir(join(targetWorkspaceDir, name), { recursive: true });
+	}
+}
 
 /**
  * Seed the orchestrator-maintained files from the workspace's templates

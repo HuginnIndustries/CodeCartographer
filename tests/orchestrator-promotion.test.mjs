@@ -70,7 +70,11 @@ test("setup: init seeds the orchestrator files", async () => {
 	CODECARTO = join(WORKSPACE, ".codecarto");
 	assert.ok(await pathExists(join(CODECARTO, "CONVENTIONS.md")), "init must seed CONVENTIONS.md");
 	assert.ok(await pathExists(join(CODECARTO, "DECISIONS.md")), "init must seed DECISIONS.md");
-	assert.deepEqual(result.structuredContent.seededOrchestratorFiles, ["CONVENTIONS.md", "DECISIONS.md"]);
+	assert.deepEqual(
+		result.structuredContent.seededOrchestratorFiles,
+		["CONVENTIONS.md", "DECISIONS.md", "BACKLOG.md", "THREAD_LOG.md"],
+		"all four orchestrator files are seeded from templates, not copied from the framework's own workspace",
+	);
 	const conventions = await readFile(join(CODECARTO, "CONVENTIONS.md"), "utf8");
 	assert.match(conventions, /^# Conventions/, "seeded file carries the template body");
 });
