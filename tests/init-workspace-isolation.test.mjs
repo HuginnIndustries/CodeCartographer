@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -89,8 +89,47 @@ test("the framework's own workspace state is not published to npm", async () => 
 		);
 	}
 	assert.ok(pkg.files.includes("!.codecarto/closeouts/**"), "package.json must exclude this repository's closeouts");
+	assert.ok(
+		pkg.files.includes("!.codecarto/broadside/**"),
+		"package.json must exclude this repository's Broad-Side scan state",
+	);
+	for (const kept of [".codecarto/broadside/SKILL.md", ".codecarto/broadside/config.yaml"]) {
+		assert.ok(pkg.files.includes(kept), `${kept} is template, not state — it must ride back in after the negation`);
+	}
 
 	// The stray one-off changelog belongs to the framework's history, not the template.
 	const stray = (await readdir(CODECARTO)).filter((name) => /^CHANGELOG/.test(name));
 	assert.deepEqual(stray, [], `framework history left in the template: ${stray.join(", ")}`);
+});
+
+test("a fresh workspace inherits no Broad-Side scan state", async () => {
+	// The repository's own broadside/ holds gitignored machine-local state
+	// (state.json, timestamped run directories) next to the two template files.
+	// Build a synthetic template carrying such state — mutating the live
+	// packaged workspace here would race the other test files copying it —
+	// and prove the filter keeps only the template pair.
+	const source = await mkdtemp(join(tmpdir(), "cc-broadside-src-"));
+	const target = await mkdtemp(join(tmpdir(), "cc-broadside-dst-"));
+	try {
+		const broadsideDir = join(source, "broadside");
+		const runDir = join(broadsideDir, "2026-08-23T05-52-23-986Z");
+		await mkdir(runDir, { recursive: true });
+		await writeFile(join(broadsideDir, "SKILL.md"), "# reading guide\n");
+		await writeFile(join(broadsideDir, "config.yaml"), "# defaults\n");
+		await writeFile(join(broadsideDir, "state.json"), '{"schema_version":1,"runs":[{"id":"x"}]}\n');
+		await writeFile(join(runDir, "run-meta.json"), "{}\n");
+		await writeFile(join(source, "GUIDE.md"), "guide\n");
+
+		const ws = join(target, ".codecarto");
+		await core.copyPackagedWorkspace(ws, source);
+		const copied = (await readdir(join(ws, "broadside"))).sort();
+		assert.deepEqual(
+			copied,
+			["SKILL.md", "config.yaml"],
+			`broadside/ must carry only its template files, got: ${copied.join(", ")}`,
+		);
+	} finally {
+		await rm(source, { recursive: true, force: true });
+		await rm(target, { recursive: true, force: true });
+	}
 });

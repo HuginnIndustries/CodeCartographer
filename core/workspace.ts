@@ -136,6 +136,13 @@ export const ORCHESTRATOR_FILES = [
  */
 const INIT_EXCLUDED_TOP_LEVEL = new Set(["BACKLOG.md", "THREAD_LOG.md", "CONVENTIONS.md", "DECISIONS.md"]);
 const INIT_EXCLUDED_DIR_CONTENTS = new Set(["closeouts"]);
+// broadside/ is machine-local scan state (state.json, timestamped run dirs)
+// except for its two template files — the same carve-out .codecarto/.gitignore
+// makes for this repository itself. Without this, init from a local checkout
+// with live scan state handed every new workspace another project's runs.
+// Literal rather than an import from broadside.ts, which imports this module.
+const BROADSIDE_DIR_NAME = "broadside";
+const INIT_BROADSIDE_TEMPLATE_FILES = new Set(["SKILL.md", "config.yaml"]);
 
 /**
  * Copy the packaged template into a target workspace, skipping this
@@ -143,15 +150,24 @@ const INIT_EXCLUDED_DIR_CONTENTS = new Set(["closeouts"]);
  * workspace has an empty `closeouts/` rather than no `closeouts/`.
  *
  * @param targetWorkspaceDir - Absolute path to the `.codecarto/` to create or merge into.
+ * @param sourceWorkspaceDir - The template to copy from. Defaults to the packaged
+ *   template; tests pass a synthetic directory so they can prove the state filter
+ *   without mutating the repository's own live workspace mid-suite.
  */
-export async function copyPackagedWorkspace(targetWorkspaceDir: string): Promise<void> {
-	await cp(packagedWorkspaceDir, targetWorkspaceDir, {
+export async function copyPackagedWorkspace(
+	targetWorkspaceDir: string,
+	sourceWorkspaceDir: string = packagedWorkspaceDir,
+): Promise<void> {
+	await cp(sourceWorkspaceDir, targetWorkspaceDir, {
 		recursive: true,
 		filter: (source) => {
-			const relativePath = relative(packagedWorkspaceDir, source);
+			const relativePath = relative(sourceWorkspaceDir, source);
 			if (!relativePath) return true; // the workspace root itself
 			const segments = relativePath.split(/[\\/]/);
 			if (segments.length === 1) return !INIT_EXCLUDED_TOP_LEVEL.has(segments[0]);
+			if (segments[0] === BROADSIDE_DIR_NAME) {
+				return segments.length === 2 && INIT_BROADSIDE_TEMPLATE_FILES.has(segments[1]);
+			}
 			// Keep the directory, drop what this repository wrote inside it.
 			return !INIT_EXCLUDED_DIR_CONTENTS.has(segments[0]);
 		},
