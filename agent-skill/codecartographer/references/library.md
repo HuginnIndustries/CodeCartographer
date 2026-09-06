@@ -25,7 +25,7 @@ The moment `reimplementation-spec` completes and validates is the publish moment
 codecarto_publish cwd:<workspace repo> source_repo:<repo URL or path> headline:"<one line>" spec_path:<abs path to reimplementation-spec.md>
 ```
 
-Set `publish_confirm` in config if you want an explicit confirmation gate before writes.
+Set `publish_confirm` in config if you want an explicit confirmation gate before writes. **Pi-only today:** the Pi extension asks for interactive confirmation before `/codecarto-publish` writes; the MCP `codecarto_publish` tool does not act on the key (an MCP host has no one to ask — [#162](https://github.com/HuginnIndustries/CodeCartographer/issues/162) tracks whether it should refuse-unless-forced instead), so on MCP treat it as advisory.
 
 ## What this is not
 

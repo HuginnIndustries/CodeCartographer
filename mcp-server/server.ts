@@ -1,5 +1,7 @@
-// CodeCartographer MCP server. Exposes the framework as seven JSON-RPC tools
-// equivalent to the seven /codecarto-* commands the Pi extension registers.
+// CodeCartographer MCP server. Exposes the framework's workflow, library, and
+// Broad-Side operations as JSON-RPC tools (the TOOLS array below is the
+// authoritative list; the README's tool table maps each tool to its Pi
+// equivalent or marks it MCP-only).
 // Both wrappers import their primitives from ../core/index.ts so phase prompts,
 // status normalization, validation, and atomic completion are byte-identical
 // across surfaces.
