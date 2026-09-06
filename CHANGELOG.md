@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-09-06
+
+The Broad-Side round. Batch reconnaissance grew from an MCP-only tool into a first-class capability on every executable surface: a Pi command with an interactive spend gate, a `scout-first` pipeline variant that routes leads into the interactive phases under an account-for-every-lead criterion, per-lens model overrides, incremental re-scouting, and repository defaults for every run knob — plus the paper trail (README, MANUAL, MCP quickstart, served guide topic, and a reachable reading guide) that the seven feature PRs had left behind. Ships with the workspace-init isolation fix and the publish source-repo collision guard.
+
 ### Added
 
 - **Broad-Side: per-lens model overrides** (#141). `lens_models` in `.codecarto/broadside/config.yaml` runs individual lenses on their own batch model, so a repository can spend more where it pays — a stronger model changes security and defect findings far more than it changes an architecture map — without raising the price of every lens. Each distinct model is resolved and pre-flighted independently: priced from the live catalog, refused without structured-output support, and clamped to its own completion ceiling. The submit estimate carries a model and its rates per lens (and a `mixedModels` flag), the Pi confirmation names the overridden model on each affected row so a mixed-model run cannot be approved without seeing which lens costs what, submission fires from the priced rows rather than recomputing, `run-meta.json` records `lens_models`, and collect's truncation retry re-submits on the lens's own model and ceiling instead of the run default. An override naming an unknown lens id is dropped rather than silently ignored. **No stronger default ships with this**: which model earns its price for the semantic lenses is a comparative-evaluation question on real repositories, and choosing one for every user would spend their money on our guess — compare with the `models` action and set `lens_models` yourself.

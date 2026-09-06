@@ -3,4 +3,4 @@
 # workspace's framework-owned files (GUIDE.md, templates/, workflow/ pipelines
 # and VALIDATE.md) predate the running release. Written at release time and
 # copied verbatim by init — never edit by hand.
-scaffold_version: 0.16.0
+scaffold_version: 0.17.0
