@@ -351,15 +351,26 @@ Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/spec
 | Tool | Pi equivalent |
 |---|---|
 | `codecarto_init` | `/codecarto-init` |
+| `codecarto_open` | `/codecarto-open` |
+| `codecarto_vision` | `/codecarto-vision` |
 | `codecarto_status` | `/codecarto-status` |
+| `codecarto_switch_pipeline` | `/codecarto-switch-pipeline` |
 | `codecarto_next` | `/codecarto-next` |
 | `codecarto_phase` | `/codecarto-phase` |
 | `codecarto_validate` | `/codecarto-validate` |
 | `codecarto_complete` | `/codecarto-complete` |
 | `codecarto_skill` | `/codecarto-skill` |
-| `codecarto_publish` | MCP-only library publish |
+| `codecarto_list_skills` | MCP-only ([#161](https://github.com/HuginnIndustries/CodeCartographer/issues/161)); Pi lists skills when `/codecarto-skill` runs with no argument |
+| `codecarto_publish` | `/codecarto-publish` |
+| `codecarto_library_init` | `/codecarto-library-init` |
 | `codecarto_library_list` | MCP-only library listing |
 | `codecarto_library_reindex` | MCP-only library reindex |
+| `codecarto_config` | `/codecarto-config` |
+| `codecarto_usage` | `/codecarto-usage` |
+| `codecarto_dashboard` | `/codecarto-dashboard` |
+| `codecarto_guide` | MCP-only ([#160](https://github.com/HuginnIndustries/CodeCartographer/issues/160)) |
+| `codecarto_amend` | MCP-only ([#157](https://github.com/HuginnIndustries/CodeCartographer/issues/157)) |
+| `codecarto_refresh_scaffold` | MCP-only ([#159](https://github.com/HuginnIndustries/CodeCartographer/issues/159)) |
 | `codecarto_broadside` | `/codecarto-broadside` |
 
 Each workflow tool accepts an absolute `cwd` for the target repository. `codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation). The library tools accept an explicit absolute `library_path` or resolve `library.path` from `.codecarto/workflow/config.yaml` / `~/.codecarto/config.yaml`. The library schema is experimental and may break before v2.

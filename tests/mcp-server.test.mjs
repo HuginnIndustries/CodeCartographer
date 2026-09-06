@@ -1,4 +1,4 @@
-// MCP server smoke tests. Drives the seven handler functions directly
+// MCP server smoke tests. Drives the core workflow handlers directly
 // (without spawning a stdio transport) against a fresh temp workspace
 // initialized via handleInit. Confirms that each tool returns the expected
 // content shape, that error cases throw McpError with the right code, and
