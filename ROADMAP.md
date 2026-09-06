@@ -51,7 +51,7 @@ file only moves when a tier completes.
 | Item | Issue | Notes |
 |---|---|---|
 | **Multi-model** — DeepSeek/Anthropic batch endpoints behind the lens registry | [#141](https://github.com/HuginnIndustries/CodeCartographer/issues/141) | Partially shipped: catalog lookup, `models` action, pricing + capability pre-flight. Remaining: per-model prompt tweaks and a stronger default for semantic lenses |
-| **Incremental re-scouting** — diff against previous run's HEAD, rescan changed modules only | [#142](https://github.com/HuginnIndustries/CodeCartographer/issues/142) | Makes recurring scans O(delta) |
+| **Incremental re-scouting** — diff against previous run's HEAD, rescan changed modules only | [#142](https://github.com/HuginnIndustries/CodeCartographer/issues/142) | **Shipped**: `incremental: true` diffs against the prior run's HEAD; dirty tree falls back to full scan |
 | **CodeCartoShow pipeline stage** — BATCH-SCOUT between SELECT and the interactive run | [CodeCartoShow#1](https://github.com/HuginnIndustries/CodeCartoShow/issues/1) | `scripts/batch-analyze.py` proved it; evidence rules apply unchanged |
 
 ## Tier 4 — open questions, not commitments

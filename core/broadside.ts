@@ -136,6 +136,8 @@ export type FileSlice = {
 	content: string;
 	fileCount: number;
 	chars: number;
+	/** Repo-relative paths of the files folded into this slice. */
+	files: string[];
 };
 
 export type BatchRequest = {
@@ -201,6 +203,12 @@ export type BroadsideRun = {
 	maxCost?: number;
 	/** The model's completion ceiling, recorded so collect can cap retries. */
 	outputCap?: number;
+	/** Git HEAD at submit time, for incremental re-scouting (#142). */
+	sourceHead?: string | null;
+	/** Whether the working tree was dirty at submit time. */
+	sourceDirty?: boolean;
+	/** When incremental, the previous run's HEAD this run diffs against. */
+	baseHead?: string | null;
 };
 
 export type BroadsideStateFile = {
@@ -1035,6 +1043,43 @@ async function listRepoFiles(targetDir: string): Promise<string[]> {
 	}
 }
 
+async function gitHead(targetDir: string): Promise<string | null> {
+	try {
+		const { stdout } = await execFileAsync("git", ["-C", targetDir, "rev-parse", "HEAD"], { maxBuffer: 1024 * 1024 });
+		return stdout.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+async function gitDirty(targetDir: string): Promise<boolean> {
+	try {
+		const { stdout } = await execFileAsync("git", ["-C", targetDir, "status", "--porcelain"], { maxBuffer: 1024 * 1024 });
+		return stdout.trim().length > 0;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Repo-relative paths changed since `baseHead` (or all files when there is
+ * no base). Returns null when the diff cannot be computed (non-git tree,
+ * missing base commit) so callers fall back to a full scan.
+ */
+async function changedFilesSince(targetDir: string, baseHead: string | null): Promise<Set<string> | null> {
+	if (!baseHead) return null;
+	try {
+		const { stdout } = await execFileAsync(
+			"git",
+			["-C", targetDir, "diff", "--name-only", baseHead, "HEAD"],
+			{ maxBuffer: 64 * 1024 * 1024 },
+		);
+		return new Set(stdout.split("\n").filter(Boolean));
+	} catch {
+		return null;
+	}
+}
+
 async function walkFiles(
 	rootDir: string,
 	dir: string,
@@ -1269,6 +1314,7 @@ async function slurpFileList(
 	let parts: string[] = [];
 	let running = 0;
 	let fileCount = 0;
+	let filePaths: string[] = [];
 
 	const flush = () => {
 		if (parts.length === 0) return;
@@ -1277,10 +1323,12 @@ async function slurpFileList(
 			content: parts.join("\n"),
 			fileCount,
 			chars: running,
+			files: filePaths,
 		});
 		parts = [];
 		running = 0;
 		fileCount = 0;
+		filePaths = [];
 	};
 
 	for (const file of files) {
@@ -1306,6 +1354,7 @@ async function slurpFileList(
 		parts.push(block);
 		running += block.length;
 		fileCount += 1;
+		filePaths.push(file.relPath);
 	}
 	flush();
 	return slices;
@@ -1314,7 +1363,7 @@ async function slurpFileList(
 export async function gatherSlices(targetDir: string, lens: LensDefinition, info: RepoInfo): Promise<FileSlice[]> {
 	if (lens.sliceBy === "none" && lens.globsFor(info).length === 0) {
 		// Repo-info lens (architecture): the prompt is built from info alone.
-		return [{ moduleName: "root", content: "", fileCount: 0, chars: 0 }];
+		return [{ moduleName: "root", content: "", fileCount: 0, chars: 0, files: [] }];
 	}
 	const allFiles = await listRepoFiles(targetDir);
 	const files = collectLensFiles(allFiles, lens, info);
@@ -1792,6 +1841,8 @@ export async function runBroadsideSubmit(
 		maxCost?: number;
 		/** Submit even when the estimate exceeds maxCost. */
 		force?: boolean;
+		/** Diff against the previous run's HEAD and scan only changed modules (#142). */
+		incremental?: boolean;
 	} = {},
 ): Promise<BroadsideSubmitResult> {
 	const info = await collectRepoInfo(cwd);
@@ -1829,6 +1880,24 @@ export async function runBroadsideSubmit(
 	// output than the model can produce fails the whole batch.
 	const outputCap = entry.maxCompletionTokens;
 
+	// Incremental re-scouting (#142): diff against the previous run's HEAD
+	// and scan only the modules whose files changed. Falls back to a full
+	// scan when there is no prior run, the tree is dirty, or the diff fails.
+	const sourceHead = await gitHead(cwd);
+	const sourceDirty = await gitDirty(cwd);
+	let baseHead: string | null = null;
+	let changed: Set<string> | null = null;
+	if (opts.incremental) {
+		const state = await loadBroadsideState(broadsideDir);
+		// The baseline is the most recent run that recorded a HEAD — a
+		// submit-only run (never collected) is still a valid committed base.
+		const previous = [...state.runs].reverse().find((r) => r.sourceHead);
+		if (previous?.sourceHead && !sourceDirty) {
+			baseHead = previous.sourceHead;
+			changed = await changedFilesSince(cwd, baseHead);
+		}
+	}
+
 	// Slice offline first so the estimate covers every request we would send.
 	const slicesByLens = new Map<BroadsideLensId, FileSlice[]>();
 	let estimatedInputTokens = 0;
@@ -1837,7 +1906,12 @@ export async function runBroadsideSubmit(
 	const perLensEstimate: Array<{ lens: LensDefinition; cost: number; maxTokens: number }> = [];
 	for (const lensId of lensIds) {
 		const lens = getLens(lensId);
-		const slices = await gatherSlices(cwd, lens, info);
+		let slices = await gatherSlices(cwd, lens, info);
+		if (changed) {
+			// Repo-info slices (empty files, e.g. architecture) always run;
+			// file-backed slices run only when one of their files changed.
+			slices = slices.filter((s) => s.files.length === 0 || s.files.some((f) => changed!.has(f)));
+		}
 		slicesByLens.set(lensId, slices);
 		const maxTokens = outputCap ? Math.min(lens.maxTokens, outputCap) : lens.maxTokens;
 		const estimate = estimateCost(lens, slices, pricing, maxTokens);
@@ -1873,6 +1947,9 @@ export async function runBroadsideSubmit(
 		pricing,
 		maxCost: limit > 0 ? limit : undefined,
 		outputCap,
+		sourceHead,
+		sourceDirty,
+		baseHead,
 	};
 	state.runs.push(run);
 	await saveBroadsideState(broadsideDir, state);
