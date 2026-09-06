@@ -27,8 +27,10 @@
 // (openrouter:web_search etc.), this invariant becomes load-bearing and the
 // resubmit path must gate on whether any tool executed.
 //
-// Deliberately not in .codecarto/ template prose: Broad-Side requires runtime
-// code, so it lives on the executable surfaces (MCP today, Pi on the roadmap).
+// Broad-Side requires runtime code, so the feature itself lives on the
+// executable surfaces (Pi and MCP), not the pure template. What the template does
+// carry is the reading guide for its output — `.codecarto/broadside/SKILL.md`,
+// served by codecarto_skill under the name `broadside` (see readBroadsideSkill).
 
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
@@ -36,6 +38,7 @@ import { promisify } from "node:util";
 import { dirname, join } from "node:path";
 import { pathExists, sleep } from "./utils.ts";
 import { loadYamlFile } from "./yaml.ts";
+import { packagedWorkspaceDir } from "./workspace.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,6 +47,8 @@ const execFileAsync = promisify(execFile);
 export const BROADSIDE_MODEL = "google/gemini-3.7-flash:batch";
 export const BROADSIDE_BATCH_URL = "https://openrouter.ai/api/beta/batches";
 export const BROADSIDE_DIR = "broadside"; // relative to .codecarto/
+/** Name Broad-Side answers to on the skill surfaces. Not a post-pipeline skill — see readBroadsideSkill. */
+export const BROADSIDE_SKILL_NAME = "broadside";
 export const BROADSIDE_STATE_FILE = "state.json";
 export const BROADSIDE_CONFIG_FILE = "config.yaml";
 export const BROADSIDE_STATE_SCHEMA_VERSION = 1;
@@ -162,6 +167,10 @@ export type BroadsideBatchEntry = {
 	cost?: number;
 	resultCount?: number;
 	error?: unknown;
+	/** Set when this lens used a model other than the run default. */
+	model?: string;
+	/** The completion ceiling of this lens's model; bounds the truncation retry. */
+	outputCap?: number;
 };
 
 export type BroadsideSynthesisEntry = {
@@ -224,7 +233,69 @@ export type BroadsideConfig = {
 	maxCost: number;
 	/** Manual pricing overrides (USD per million). Live lookup is preferred. */
 	pricing: { inputPerM: number; outputPerM: number } | null;
+	/**
+	 * Per-lens model overrides. A lens absent here uses `model`. This is how a
+	 * repository routes the semantic lenses (security, defect) to a stronger
+	 * batch model while the cheap default carries the rest — the whole point of
+	 * the cheap model is telling the expensive one where to look, and that
+	 * trade-off is not the same for every lens.
+	 */
+	lensModels: Partial<Record<BroadsideLensId, string>>;
+	/**
+	 * Repo defaults for the per-call run knobs. Each mirrors a tool parameter
+	 * of the same name; an explicit parameter always wins. They live here so a
+	 * repository can fix its own scouting policy once instead of restating it
+	 * on every submit and collect.
+	 */
+	incremental: boolean;
+	retryTruncated: boolean;
+	includeSynthesis: boolean;
+	includeTriage: boolean;
+	/** Default poll budget in seconds; 0 means "return immediately". */
+	waitSeconds: number;
 };
+
+/**
+ * The pre-flight facts a caller needs to decide whether a run is worth its
+ * price: what each lens would cost, at what rates, against which limit. Handed
+ * to {@link BroadsideSubmitOptions.confirm} before anything is submitted.
+ */
+export type BroadsideEstimate = {
+	model: string;
+	pricing: ModelPricing;
+	lenses: Array<{
+		lensId: BroadsideLensId;
+		name: string;
+		slices: number;
+		maxTokens: number;
+		cost: number;
+		/** The model this lens would use — `model` unless a per-lens override applies. */
+		model: string;
+		pricing: ModelPricing;
+	}>;
+	/** True when at least one lens uses a model other than the run default. */
+	mixedModels: boolean;
+	totalCost: number;
+	inputTokens: number;
+	outputTokens: number;
+	/** Run expense limit in USD; 0 means no limit. */
+	maxCost: number;
+	/** True when totalCost is over a non-zero maxCost. */
+	exceedsLimit: boolean;
+	/** Set when incremental scouting found a baseline to diff against. */
+	baseHead: string | null;
+	sourceDirty: boolean;
+	/** The provider's completion ceiling, when the catalog advertises one. */
+	outputCap?: number;
+};
+
+/** Thrown when a confirm hook declines a run. Nothing was submitted. */
+export class BroadsideCancelledError extends Error {
+	constructor(message = "Broad-Side submission cancelled. Nothing was submitted.") {
+		super(message);
+		this.name = "BroadsideCancelledError";
+	}
+}
 
 export type BroadsideSubmitResult = {
 	runId: string;
@@ -1441,6 +1512,33 @@ export function broadsideDirFor(cwd: string): string {
 	return join(cwd, ".codecarto", BROADSIDE_DIR);
 }
 
+/**
+ * Read the Broad-Side reading guide.
+ *
+ * It is deliberately not a post-pipeline skill under `.codecarto/skills/`: a
+ * scout run is read *before* or *during* the interactive pipeline, and the
+ * post-pipeline machinery gates on a completed run and wraps its prompt in
+ * post-pipeline framing that would be false here. It is also readable on a
+ * repository that has scout state and no workspace at all, which is why this
+ * falls back to the packaged copy.
+ *
+ * @param cwd - Absolute path to the target repository.
+ * @returns the skill text and the path it came from.
+ * @throws when neither the workspace copy nor the packaged copy exists.
+ */
+export async function readBroadsideSkill(cwd: string): Promise<{ path: string; content: string }> {
+	const candidates = [
+		join(broadsideDirFor(cwd), "SKILL.md"),
+		join(packagedWorkspaceDir, BROADSIDE_DIR, "SKILL.md"),
+	];
+	for (const path of candidates) {
+		if (await pathExists(path)) return { path, content: await readFile(path, "utf8") };
+	}
+	throw new Error(
+		`Broad-Side skill not found at ${candidates.join(" or ")}. Reinstall codecartographer-pi.`,
+	);
+}
+
 export function defaultBroadsideState(): BroadsideStateFile {
 	return { schema_version: BROADSIDE_STATE_SCHEMA_VERSION, runs: [] };
 }
@@ -1478,6 +1576,20 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 	const rawPricing = (raw.pricing ?? {}) as Record<string, unknown>;
 	const inputOverride = typeof rawPricing.input_per_m === "number" ? rawPricing.input_per_m : undefined;
 	const outputOverride = typeof rawPricing.output_per_m === "number" ? rawPricing.output_per_m : undefined;
+	// A malformed value falls back to the shipped default rather than failing
+	// the run: config.yaml is hand-edited, and a typo in a poll budget must not
+	// cost a user their batches.
+	const flag = (key: string, fallback: boolean): boolean =>
+		typeof raw[key] === "boolean" ? (raw[key] as boolean) : fallback;
+	// An override for an unknown lens id is dropped rather than carried: it can
+	// only be a typo, and a silently-ignored key that looks applied is worse
+	// than one that never appears.
+	const lensModels: Partial<Record<BroadsideLensId, string>> = {};
+	const rawLensModels = (raw.lens_models ?? {}) as Record<string, unknown>;
+	for (const lensId of BROADSIDE_LENS_IDS) {
+		const value = rawLensModels[lensId];
+		if (typeof value === "string" && value.trim()) lensModels[lensId] = value.trim();
+	}
 	return {
 		model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : BROADSIDE_MODEL,
 		apiKey: typeof raw.api_key === "string" ? raw.api_key.trim() : "",
@@ -1487,6 +1599,12 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 			inputOverride !== undefined && outputOverride !== undefined
 				? { inputPerM: inputOverride, outputPerM: outputOverride }
 				: null,
+		lensModels,
+		incremental: flag("incremental", false),
+		retryTruncated: flag("retry_truncated", true),
+		includeSynthesis: flag("include_synthesis", true),
+		includeTriage: flag("include_triage", true),
+		waitSeconds: typeof raw.wait_seconds === "number" && raw.wait_seconds > 0 ? raw.wait_seconds : 0,
 	};
 }
 
@@ -1843,6 +1961,16 @@ export async function runBroadsideSubmit(
 		force?: boolean;
 		/** Diff against the previous run's HEAD and scan only changed modules (#142). */
 		incremental?: boolean;
+		/**
+		 * Called with the pre-flight estimate after slicing and before any state
+		 * write or submission. Returning false throws {@link BroadsideCancelledError}
+		 * and nothing is submitted; returning true proceeds even past maxCost,
+		 * because an interactive approval of a priced run *is* the force flag.
+		 *
+		 * A surface that cannot ask a human (MCP) omits this and keeps the
+		 * refuse-unless-force behavior.
+		 */
+		confirm?: (estimate: BroadsideEstimate) => boolean | Promise<boolean>;
 	} = {},
 ): Promise<BroadsideSubmitResult> {
 	const info = await collectRepoInfo(cwd);
@@ -1850,35 +1978,45 @@ export async function runBroadsideSubmit(
 	const broadsideDir = broadsideDirFor(cwd);
 	const model = opts.model ?? BROADSIDE_MODEL;
 
-	// Resolve the model's catalog entry before anything is submitted: the
-	// guardrail must know real per-token rates, and every lens requires
-	// structured-output support that not all batch models offer.
+	// Resolve a catalog entry per distinct model before anything is submitted:
+	// the guardrail must know real per-token rates, and every lens requires
+	// structured-output support that not all batch models offer. Lenses may run
+	// on different models (config `lens_models`), so each one is pre-flighted.
 	const config = await loadBroadsideConfig(broadsideDir);
-	const catalog = await resolveCatalogEntry(broadsideDir, config, model, apiKey, opts.fetcher);
-	const pricing: ModelPricing = {
-		inputPerM: catalog.entry!.inputPerM,
-		outputPerM: catalog.entry!.outputPerM,
-		source: catalog.source,
-	};
-	const limit = opts.maxCost ?? config.maxCost;
-
-	const entry = catalog.entry!;
-	const supportsStructuredOutputs =
-		entry.supportedParameters.length === 0 ||
-		entry.supportedParameters.some((p) =>
-			["structured_outputs", "json_schema", "response_format", "structuredoutputs"].includes(p.toLowerCase()),
-		);
-	if (!supportsStructuredOutputs) {
-		throw new Error(
-			`Batch model "${model}" does not advertise structured-output support ` +
-			`(supported_parameters: ${entry.supportedParameters.join(", ") || "unknown"}), but every ` +
-			"Broad-Side lens requires json_schema response_format. Choose another batch model " +
-			"(codecarto_broadside action 'models') or pass a pricing override only if you know it works.",
-		);
+	const modelForLens = (lensId: BroadsideLensId): string => config.lensModels[lensId] ?? model;
+	const resolved = new Map<
+		string,
+		{ pricing: ModelPricing; outputCap?: number; entry: CatalogEntry; supportsStructuredOutputs: boolean }
+	>();
+	for (const candidate of new Set([model, ...lensIds.map(modelForLens)])) {
+		const catalog = await resolveCatalogEntry(broadsideDir, config, candidate, apiKey, opts.fetcher);
+		const entry = catalog.entry!;
+		const supportsStructuredOutputs =
+			entry.supportedParameters.length === 0 ||
+			entry.supportedParameters.some((p) =>
+				["structured_outputs", "json_schema", "response_format", "structuredoutputs"].includes(p.toLowerCase()),
+			);
+		if (!supportsStructuredOutputs) {
+			throw new Error(
+				`Batch model "${candidate}" does not advertise structured-output support ` +
+				`(supported_parameters: ${entry.supportedParameters.join(", ") || "unknown"}), but every ` +
+				"Broad-Side lens requires json_schema response_format. Choose another batch model " +
+				"(codecarto_broadside action 'models') or pass a pricing override only if you know it works.",
+			);
+		}
+		resolved.set(candidate, {
+			entry,
+			supportsStructuredOutputs,
+			pricing: { inputPerM: entry.inputPerM, outputPerM: entry.outputPerM, source: catalog.source },
+			// Respect the provider's completion ceiling: a request asking for more
+			// output than the model can produce fails the whole batch.
+			...(entry.maxCompletionTokens !== undefined && { outputCap: entry.maxCompletionTokens }),
+		});
 	}
-	// Respect the provider's completion ceiling: a request asking for more
-	// output than the model can produce fails the whole batch.
-	const outputCap = entry.maxCompletionTokens;
+	const pricing = resolved.get(model)!.pricing;
+	const outputCap = resolved.get(model)!.outputCap;
+	const defaultEntry = resolved.get(model)!.entry;
+	const limit = opts.maxCost ?? config.maxCost;
 
 	// Incremental re-scouting (#142): diff against the previous run's HEAD
 	// and scan only the modules whose files changed. Falls back to a full
@@ -1903,7 +2041,14 @@ export async function runBroadsideSubmit(
 	let estimatedInputTokens = 0;
 	let estimatedOutputTokens = 0;
 	let estimatedTotalCost = 0;
-	const perLensEstimate: Array<{ lens: LensDefinition; cost: number; maxTokens: number }> = [];
+	const perLensEstimate: Array<{
+		lens: LensDefinition;
+		cost: number;
+		maxTokens: number;
+		lensModel: string;
+		lensPricing: ModelPricing;
+		lensOutputCap?: number;
+	}> = [];
 	for (const lensId of lensIds) {
 		const lens = getLens(lensId);
 		let slices = await gatherSlices(cwd, lens, info);
@@ -1913,17 +2058,54 @@ export async function runBroadsideSubmit(
 			slices = slices.filter((s) => s.files.length === 0 || s.files.some((f) => changed!.has(f)));
 		}
 		slicesByLens.set(lensId, slices);
-		const maxTokens = outputCap ? Math.min(lens.maxTokens, outputCap) : lens.maxTokens;
-		const estimate = estimateCost(lens, slices, pricing, maxTokens);
+		const lensModel = modelForLens(lensId);
+		const { pricing: lensPricing, outputCap: lensOutputCap } = resolved.get(lensModel)!;
+		const maxTokens = lensOutputCap ? Math.min(lens.maxTokens, lensOutputCap) : lens.maxTokens;
+		const estimate = estimateCost(lens, slices, lensPricing, maxTokens);
 		estimatedInputTokens += estimate.inputTokens;
 		estimatedOutputTokens += estimate.outputTokens;
 		estimatedTotalCost += estimate.cost;
-		perLensEstimate.push({ lens, cost: estimate.cost, maxTokens });
+		perLensEstimate.push({
+			lens,
+			cost: estimate.cost,
+			maxTokens,
+			lensModel,
+			lensPricing,
+			...(lensOutputCap !== undefined && { lensOutputCap }),
+		});
 	}
 
-	if (limit > 0 && !opts.force && estimatedTotalCost > limit) {
+	const exceedsLimit = limit > 0 && estimatedTotalCost > limit;
+
+	if (opts.confirm) {
+		const approved = await opts.confirm({
+			model,
+			pricing,
+			lenses: perLensEstimate.map(({ lens, cost, maxTokens, lensModel, lensPricing }) => ({
+				lensId: lens.id,
+				name: lens.name,
+				slices: (slicesByLens.get(lens.id) ?? []).length,
+				maxTokens,
+				cost,
+				model: lensModel,
+				pricing: lensPricing,
+			})),
+			mixedModels: perLensEstimate.some(({ lensModel }) => lensModel !== model),
+			totalCost: estimatedTotalCost,
+			inputTokens: estimatedInputTokens,
+			outputTokens: estimatedOutputTokens,
+			maxCost: limit,
+			exceedsLimit,
+			baseHead,
+			sourceDirty,
+			...(outputCap !== undefined && { outputCap }),
+		});
+		if (!approved) throw new BroadsideCancelledError();
+	} else if (exceedsLimit && !opts.force) {
 		const breakdown = perLensEstimate
-			.map(({ lens, cost }) => `  ${lens.name}: ~$${cost.toFixed(4)}`)
+			.map(({ lens, cost, lensModel }) =>
+				`  ${lens.name}: ~$${cost.toFixed(4)}${lensModel === model ? "" : ` (${lensModel})`}`,
+			)
 			.join("\n");
 		throw new Error(
 			`Estimated Broad-Side cost ~$${estimatedTotalCost.toFixed(4)} exceeds the run limit ` +
@@ -1956,20 +2138,25 @@ export async function runBroadsideSubmit(
 
 	const requestsByCustomId: Record<string, BatchRequest> = {};
 	const submissions: Promise<void>[] = [];
-	for (const lensId of lensIds) {
-		const lens = getLens(lensId);
+	// Submit from the estimate rather than recomputing: the user approved that
+	// breakdown, so the request that fires must be the one that was priced.
+	for (const priced of perLensEstimate) {
+		const { lens, maxTokens, lensModel, lensOutputCap } = priced;
+		const lensId = lens.id;
 		const slices = slicesByLens.get(lensId) ?? [];
-		const maxTokens = outputCap ? Math.min(lens.maxTokens, outputCap) : lens.maxTokens;
-		const requests = slices.map((s, i) => buildBatchRequest(lens, info, s, i, slices.length, model, maxTokens));
+		const requests = slices.map((sl, i) => buildBatchRequest(lens, info, sl, i, slices.length, lensModel, maxTokens));
 		for (const request of requests) requestsByCustomId[request.custom_id] = request;
-		const estimate = estimateCost(lens, slices, pricing, maxTokens);
 
 		const entry: BroadsideBatchEntry = {
 			batchId: "",
 			requests: requests.length,
 			status: "submitting",
 			submittedAt: new Date().toISOString(),
-			estimatedCost: estimate.cost,
+			estimatedCost: priced.cost,
+			// Recorded per lens so collect's truncation retry re-submits against
+			// the model and ceiling this lens actually used, not the run default.
+			...(lensModel !== model && { model: lensModel }),
+			...(lensOutputCap !== undefined && { outputCap: lensOutputCap }),
 		};
 		run.batches[lensId] = entry;
 
@@ -1986,7 +2173,7 @@ export async function runBroadsideSubmit(
 				// entry in "submitting" forever — allSettled would swallow the
 				// rejection and collect would never see a terminal status.
 				try {
-					const { batchId, status, error } = await submitBatch(requests, apiKey, opts.fetcher, model);
+					const { batchId, status, error } = await submitBatch(requests, apiKey, opts.fetcher, lensModel);
 					entry.batchId = batchId;
 					entry.status = status;
 					if (error) entry.error = error;
@@ -2017,11 +2204,15 @@ export async function runBroadsideSubmit(
 		estimatedOutputTokens,
 		pricing,
 		maxCost: limit > 0 ? limit : undefined,
+		// modelInfo describes the run's default model. Per-lens overrides are
+		// recorded on their own batch entries.
 		modelInfo: {
-			contextLength: entry.contextLength,
-			maxCompletionTokens: entry.maxCompletionTokens,
-			supportsStructuredOutputs: entry.supportedParameters.length === 0 ? undefined : supportsStructuredOutputs,
-			expirationDate: entry.expirationDate ?? null,
+			contextLength: defaultEntry.contextLength,
+			maxCompletionTokens: defaultEntry.maxCompletionTokens,
+			supportsStructuredOutputs: defaultEntry.supportedParameters.length === 0
+				? undefined
+				: resolved.get(model)!.supportsStructuredOutputs,
+			expirationDate: defaultEntry.expirationDate ?? null,
 		},
 	};
 }
@@ -2304,8 +2495,14 @@ export async function runBroadsideCollect(
 			if (!stored.truncated) continue;
 			const original = requestsByCustomId[stored.customId];
 			if (!original) continue;
+			const lensEntry = run.batches[stored.lensId];
+			// A lens may have run on its own model (config `lens_models`), with its
+			// own completion ceiling. Re-submitting against the run default would
+			// change the model mid-run and could exceed that lens's real ceiling.
+			const lensModel = lensEntry?.model ?? run.model;
+			const lensCap = lensEntry?.outputCap ?? run.outputCap;
 			const previousMax = original.body.max_tokens ?? getLens(stored.lensId).maxTokens;
-			const bumpedMax = run.outputCap ? Math.min(previousMax * 2, run.outputCap) : previousMax * 2;
+			const bumpedMax = lensCap ? Math.min(previousMax * 2, lensCap) : previousMax * 2;
 			if (bumpedMax <= previousMax) continue; // already at the ceiling
 
 			const bumped: BatchRequest = {
@@ -2313,7 +2510,7 @@ export async function runBroadsideCollect(
 				body: { ...original.body, max_tokens: bumpedMax },
 			};
 			try {
-				const { batchId, error } = await submitBatch([bumped], apiKey, opts.fetcher, run.model);
+				const { batchId, error } = await submitBatch([bumped], apiKey, opts.fetcher, lensModel);
 				if (error) continue;
 				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
 					deadlineMs: BROADSIDE_DEFAULT_POLL_BUDGET_MS,
@@ -2473,6 +2670,13 @@ export async function runBroadsideCollect(
 				synthesis: run.synthesis,
 				triage: run.triage,
 				lenses: run.lenses,
+				// Which lens ran on which model. Absent means the run default —
+				// a reader comparing two runs needs to know a lens changed model.
+				lens_models: Object.fromEntries(
+					Object.entries(run.batches)
+						.filter(([, batch]) => batch?.model)
+						.map(([lensId, batch]) => [lensId, batch!.model]),
+				),
 				disclaimer:
 					"Findings are unverified scouting signals from a batch model, not validated claims. " +
 					"Re-verify every file:line lead with the interactive pipeline or by hand.",
@@ -2574,7 +2778,8 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		const entry = result.batches[lens.id];
 		if (!entry) continue;
 		const status = entry.batchId ? `batch ${entry.batchId}` : entry.status;
-		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})`);
+		const override = entry.model ? ` on ${entry.model}` : "";
+		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})${override}`);
 	}
 	lines.push(
 		`Estimated total: ~$${result.estimatedTotalCost.toFixed(4)}`,

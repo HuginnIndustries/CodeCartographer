@@ -59,7 +59,16 @@ not replace any phase; it tells phases where to look.
 
 ## Running Broad-Side
 
-Broad-Side is an executable-surface feature (MCP today):
+Broad-Side is an executable-surface feature. On the Pi extension:
+
+```
+/codecarto-broadside submit [lenses…]   # prices the run, asks, then fires
+/codecarto-broadside collect            # poll, save, synthesize
+/codecarto-broadside status             # show recorded runs
+/codecarto-broadside models             # compare batch models
+```
+
+On the MCP server:
 
 ```
 codecarto_broadside {cwd, action: "submit", lenses: [...]}   # fire the batches
@@ -80,6 +89,26 @@ because every lens depends on `json_schema` response_format.
 Collect runs two cross-lens post-passes by default: **synthesis** (the
 executive report) and **triage** (the prioritized work order). Pass
 `include_synthesis: false` or `include_triage: false` on collect to skip one.
+
+Lenses do not all have to run on the same model. `lens_models` in `config.yaml`
+routes individual lenses to their own batch model — the usual reason being that
+a stronger model changes security and defect findings more than it changes an
+architecture map. Each override is priced, capability-checked, and clamped like
+the default, the submit estimate breaks cost out per lens, and `run-meta.json`
+records which lens ran on what. No stronger default is shipped: which model is
+worth the money depends on the repository and the budget, so compare with the
+`models` action and decide.
+
+Every run knob — `incremental`, `retry_truncated`, `include_synthesis`,
+`include_triage`, `wait_seconds` — also has a repository default under the same
+name in this directory's `config.yaml`, alongside `model`, `api_key`,
+`default_lenses`, `max_cost`, and the `pricing` overrides. An explicit
+parameter on the call always wins over the file.
+
+This file is also served directly: `codecarto_skill {cwd, name: "broadside"}`
+returns it. Unlike the post-pipeline skills under `.codecarto/skills/`, it is
+not gated on a completed pipeline — a scout run is meant to be read before the
+pipeline starts and while it runs.
 
 It works on any git repository — no initialized workspace required — and needs
 an OpenRouter API key via the `api_key` parameter, the `OPENROUTER_API_KEY`

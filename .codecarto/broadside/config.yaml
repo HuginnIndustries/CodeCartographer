@@ -32,6 +32,24 @@
 #   - conventions
 #   - porting
 
+# Per-lens model overrides. A lens listed here runs on its own model; every
+# other lens uses the `model` above. This is how you spend more where it pays:
+# the cheap default is right for architecture and conventions, while security
+# and defect findings are the ones a stronger model most changes. Each override
+# is pre-flighted like the default — priced from the live catalog, refused
+# without structured-output support, and clamped to its own completion ceiling
+# — and the submit estimate breaks the cost out per lens so a mixed-model run
+# cannot be approved without seeing which lens costs what.
+#
+# There is deliberately no stronger default shipped here: which model is worth
+# the money for the semantic lenses depends on your repository and your budget,
+# and picking one for you would spend your money on our guess. Compare
+# candidates with the `models` action first.
+#
+# lens_models:
+#   security: anthropic/claude-opus-4.5:batch
+#   defect: anthropic/claude-opus-4.5:batch
+
 # Approximate run expense limit in USD (0 = no limit). Before submitting,
 # Broad-Side estimates the run cost from the collected file sizes and the
 # model's per-token pricing — fetched live from OpenRouter's model catalog
@@ -52,3 +70,35 @@
 # pricing:
 #   input_per_m: 0.1875
 #   output_per_m: 0.9375
+# ---------------------------------------------------------------------------
+# Run defaults. Each key below mirrors a codecarto_broadside parameter of the
+# same name and sets this repository's default for it; an explicit parameter on
+# the call always wins. Set them here when a repo's scouting policy is stable,
+# so it does not have to be restated on every submit and collect.
+
+# Scan only the modules whose files changed since the previous run's git HEAD.
+# Falls back to a full scan on a dirty tree or when no prior run exists.
+#
+# incremental: false
+
+# Re-submit lens results that came back truncated at the output token limit,
+# once, with a doubled output cap. Truncation is always reported either way.
+#
+# retry_truncated: true
+
+# Run the cross-lens synthesis pass (synthesis.md, the executive report) once
+# every lens batch completes.
+#
+# include_synthesis: true
+
+# Run the triage pass (triage.md, the P0-P3 work order) once every lens batch
+# completes.
+#
+# include_triage: true
+
+# Default poll budget in seconds. 0 returns as soon as the batches are
+# submitted or the recorded state is read; a positive value polls that long
+# before returning with whatever is done. Batch jobs routinely take tens of
+# minutes, so a submit-then-collect-later rhythm is normal.
+#
+# wait_seconds: 0

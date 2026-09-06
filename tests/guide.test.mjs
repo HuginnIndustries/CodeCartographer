@@ -90,6 +90,19 @@ test("the rewrite references carry the disposition vocabulary the porting phase 
 	assert.match(kernel, /fake/i, "must describe the fake-driven acceptance harness");
 });
 
+test("the Broad-Side reference states the rule the feature rests on", async () => {
+	// Broad-Side output is a cheap model's one-shot guesses. The single way it
+	// can actively harm a run is an agent citing a lead as a finding, so the
+	// reference that teaches the tool must say so outright.
+	const topics = await core.listGuideTopics();
+	assert.ok(topics.includes("broadside"), "broadside must be a guide topic");
+	const broadside = (await core.readGuide("broadside")).content;
+	assert.match(broadside, /unverified/i, "must mark findings unverified");
+	assert.match(broadside, /never (be )?evidence|not evidence|leads, never evidence/i);
+	assert.match(broadside, /max_cost/, "must name the cost guardrail");
+	assert.match(broadside, /codecarto_broadside/, "must name the tool an agent calls");
+});
+
 test("SKILL.md carries frontmatter a skill installer can read", async () => {
 	const raw = await readFile(join(SKILL_DIR, "SKILL.md"), "utf8");
 	assert.match(raw, /^---\r?\n/, "SKILL.md must open with frontmatter");

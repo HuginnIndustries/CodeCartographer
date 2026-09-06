@@ -22,7 +22,10 @@ function createHarness(cwd) {
 			pi.sessionName = name;
 		},
 		sendMessage: () => {},
-		sendUserMessage: () => {},
+		sentUserMessages: [],
+		sendUserMessage: (message) => {
+			pi.sentUserMessages.push(message);
+		},
 		activeTools: undefined,
 		sessionName: undefined,
 	};
@@ -102,6 +105,21 @@ test("/codecarto-init activates the CodeCartographer UI and read-only tool polic
 
 		const result = await events.get("tool_call")({ toolName: "bash", input: {} }, ctx);
 		assert.deepEqual(result, { block: true, reason: "CodeCartographer mode disables bash to keep source analysis read-only." });
+	});
+});
+
+test("/codecarto-skill broadside serves the reading guide without a workspace", async () => {
+	// Parity with the MCP surface: Broad-Side is not a post-pipeline skill, so
+	// neither the completion gate nor the workspace requirement applies to it.
+	await withTempRepo(async (cwd) => {
+		const { commands, pi, ctx, ui } = createHarness(cwd);
+
+		await commands.get("codecarto-skill").handler("broadside", ctx);
+
+		assert.equal(pi.sentUserMessages.length, 1, "the guide should be queued as one message");
+		assert.match(pi.sentUserMessages[0], /# Broad-Side/);
+		assert.match(pi.sentUserMessages[0], /unverified scouting signals/);
+		assert.equal(ui.notifications.at(-1).level, "info");
 	});
 });
 

@@ -27,7 +27,24 @@ file only moves when a tier completes.
   and clamps lens `max_tokens` to the provider's completion ceiling.
 - Triage post-pass on collect: findings scored by impact × difficulty into
   a P0–P3 work order with effort estimates, saved as triage.json/md.
-- Tests: 35 unit tests (fake-fetcher based), opt-in live smoke script.
+- Per-lens model overrides (`lens_models`): each lens can run on its own batch
+  model, pre-flighted and priced independently, recorded in `run-meta.json`, and
+  honored by the truncation retry.
+- `scout-first` pipeline variant: a `broadside-scout` phase distills a completed
+  run into `findings/broadside-scout/scout-brief.md`; architecture, both defect
+  scans, contracts, protocols, and porting read it and account for their leads at
+  validation. The phase never submits and never spends.
+- Pi surface: `/codecarto-broadside [submit|collect|status|models] [lenses…]`
+  with a spend confirmation (`confirm` hook on `runBroadsideSubmit`), so Pi asks
+  where MCP must refuse.
+- Reading guide reachable as `codecarto_skill {name: "broadside"}` on both
+  executable surfaces, exempt from the post-pipeline completion gate; agent
+  doctrine as the `broadside` topic of `codecarto_guide`; README / MANUAL /
+  MCP quickstart coverage.
+- Repository defaults in `config.yaml` for every per-call run knob
+  (`incremental`, `retry_truncated`, `include_synthesis`, `include_triage`,
+  `wait_seconds`); an explicit parameter always wins.
+- Tests: fake-fetcher unit suite, opt-in live smoke script (`npm run smoke:broadside`).
 
 ## Tier 1 — make Broad-Side better at what it does
 
@@ -42,15 +59,15 @@ file only moves when a tier completes.
 
 | Item | Issue | Notes |
 |---|---|---|
-| **Pi extension** — `/codecarto-broadside` command with lens picker and live progress | [#138](https://github.com/HuginnIndustries/CodeCartographer/issues/138) | Agreed order: MCP first (shipped), Pi second |
-| **Pipeline phase** — `broadside-scout` phase feeding later phases via `required_reads` | [#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139) | SKILL.md contract stays: leads, never evidence |
+| **Pi extension** — `/codecarto-broadside` command with lens picker and live progress | [#138](https://github.com/HuginnIndustries/CodeCartographer/issues/138) | **Shipped**: four actions with tab-completed lens picker, live per-lens progress widget, and an interactive spend confirmation in place of MCP's refuse-unless-`force` |
+| **Pipeline phase** — `broadside-scout` phase feeding later phases via `required_reads` | [#139](https://github.com/HuginnIndustries/CodeCartographer/issues/139) | **Shipped**: `pipeline-scout-first.yaml`. The phase distills a run into a stable brief (run dirs are timestamped, so no YAML could name one), six phases read it, and each must confirm, dismiss, or carry forward every lead routed to it. Leads, never evidence — enforced at validation |
 | **Zero-config executive** — meta-pass picks lenses and slicing resolution from repo shape | [#140](https://github.com/HuginnIndustries/CodeCartographer/issues/140) | **Shipped**: `auto` slicing collapses small repos to one slice, directory-splits large ones |
 
 ## Tier 3 — cost and coverage economics
 
 | Item | Issue | Notes |
 |---|---|---|
-| **Multi-model** — DeepSeek/Anthropic batch endpoints behind the lens registry | [#141](https://github.com/HuginnIndustries/CodeCartographer/issues/141) | Partially shipped: catalog lookup, `models` action, pricing + capability pre-flight. Remaining: per-model prompt tweaks and a stronger default for semantic lenses |
+| **Multi-model** — DeepSeek/Anthropic batch endpoints behind the lens registry | [#141](https://github.com/HuginnIndustries/CodeCartographer/issues/141) | **Mechanism shipped**: catalog lookup, `models` action, pricing + capability pre-flight, and per-lens model overrides (`lens_models`) priced, clamped, and retried per lens. **Deliberately not shipped**: a stronger default for the semantic lenses. Which model earns its price is a comparative-evaluation question on real repositories, and picking one for every user spends their money on our guess. Per-model prompt tweaks stay open pending that same evidence |
 | **Incremental re-scouting** — diff against previous run's HEAD, rescan changed modules only | [#142](https://github.com/HuginnIndustries/CodeCartographer/issues/142) | **Shipped**: `incremental: true` diffs against the prior run's HEAD; dirty tree falls back to full scan |
 | **CodeCartoShow pipeline stage** — BATCH-SCOUT between SELECT and the interactive run | [CodeCartoShow#1](https://github.com/HuginnIndustries/CodeCartoShow/issues/1) | `scripts/batch-analyze.py` proved it; evidence rules apply unchanged |
 

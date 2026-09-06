@@ -239,6 +239,7 @@ The default is a 7-phase run that splits the defect scan into a mechanical early
 | Variant | Phases | Use when |
 |---|---|---|
 | **Full with deep audit** (default) | 7 | Complete analysis with split defect scan; reimplementation grounded in contracts/protocols-aware defect findings |
+| **Scout first** | 8 | The deep-audit run preceded by a `broadside-scout` phase that distills an existing [Broad-Side](#broad-side-batch-reconnaissance) run into a routing brief every later phase reads |
 | **Full with audit** | 6 | Single early defect scan; cheaper than the deep variant when defects are mostly mechanical |
 | **Full** | 5 | Porting or reimplementation without any defect scan |
 | **Defect scan** | 2 | Maintenance audit to surface latent problems |
@@ -253,6 +254,7 @@ Switch the active pipeline with `/codecarto-switch-pipeline <variant>` (Pi) or `
 | Variant | Pipeline file |
 |---|---|
 | Full with deep audit (**default**) | `workflow/pipeline-full-with-deep-audit.yaml` |
+| Scout first | `workflow/pipeline-scout-first.yaml` |
 | Full with audit | `workflow/pipeline-full-with-audit.yaml` |
 | Full | `workflow/pipeline.yaml` |
 | Defect scan | `workflow/pipeline-defect-scan.yaml` |
@@ -318,7 +320,8 @@ Beyond the slash commands, the Pi extension layers on:
 | `/codecarto-phase <id>` | Force a specific phase, even out of pipeline order |
 | `/codecarto-validate [phase]` | Validate a phase output against completion criteria |
 | `/codecarto-complete [phase]` | Validate and atomically apply the phase handoff, canonical status, closeout, and log entry |
-| `/codecarto-skill <name>` | Run a post-pipeline skill once all phases are complete |
+| `/codecarto-skill <name>` | Run a post-pipeline skill once all phases are complete (or `broadside` any time, for the scout reading guide) |
+| `/codecarto-broadside [action] [lenses…]` | Batch reconnaissance (Broad-Side). Actions: `submit`, `collect`, `status`, `models`. Prices the run and asks before spending; works with or without a workspace |
 | `/codecarto-publish` | Publish the reimplementation spec to the configured library after reviewing an explicit confirmation preview |
 | `/codecarto-library-init <path> [--namespace <name>]` | Create a library directory with marker and write the config — fixes the first-publish dead end |
 | `/codecarto-config` | Show the effective merged configuration (global + workspace) and library marker status |
@@ -357,9 +360,38 @@ Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/spec
 | `codecarto_publish` | MCP-only library publish |
 | `codecarto_library_list` | MCP-only library listing |
 | `codecarto_library_reindex` | MCP-only library reindex |
-| `codecarto_broadside` | MCP-only batch reconnaissance (Broad-Side) |
+| `codecarto_broadside` | `/codecarto-broadside` |
 
 Each workflow tool accepts an absolute `cwd` for the target repository. `codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation). The library tools accept an explicit absolute `library_path` or resolve `library.path` from `.codecarto/workflow/config.yaml` / `~/.codecarto/config.yaml`. The library schema is experimental and may break before v2.
+
+---
+
+## Broad-Side (batch reconnaissance)
+
+Broad-Side is the cheap sweep you run *before* the expensive interactive run. It fires six analysis lenses — architecture, API surface, security, mechanical defect scan, convention extraction, porting — at a repository as single-turn prompts over the [OpenRouter Batch API](https://openrouter.ai/docs), then cross-references them into one executive report (`synthesis.md`) and a prioritized P0–P3 work order (`triage.md`).
+
+**Broad-Side findings are unverified scouting leads, not evidence.** Each lens is one shot: no cross-file traversal, no runtime verification, no builds, no tests. Every finding is a `file:line` pointer that the interactive pipeline — or you — must confirm before it is a fact. That division of labor is the point: a sub-dollar unattended sweep that tells the expensive run where to look. Nothing downstream may cite a Broad-Side report as a source.
+
+It runs on any git repository — no initialized workspace required — and needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY` environment variable, or `api_key` in `.codecarto/broadside/config.yaml`).
+
+```
+codecarto_broadside {cwd, action: "models"}                   # compare batch models and pricing
+codecarto_broadside {cwd, action: "submit", lenses: [...]}    # fire the batches, priced first
+codecarto_broadside {cwd, action: "status"}                   # what is in flight
+codecarto_broadside {cwd, action: "collect"}                  # poll, save, synthesize, triage
+```
+
+Submit and collect are separate because batch jobs routinely take tens of minutes; collect is resumable and picks up whatever is still in flight. Submit prices the run from the collected file sizes against the model's live per-token pricing (cached 24h) and refuses when the estimate exceeds `max_cost` unless `force: true` is passed — a pre-flight estimate, not a runtime stop. Actual spend lands in each run's `run-meta.json`.
+
+Repository defaults live in `.codecarto/broadside/config.yaml` (`model`, `api_key`, `default_lenses`, `max_cost`, `pricing` overrides, `lens_models`, `incremental`, `retry_truncated`, `include_synthesis`, `include_triage`, `wait_seconds`); an explicit tool parameter always wins. `lens_models` routes individual lenses to their own batch model — a stronger model changes security and defect findings far more than it changes an architecture map — and each override is priced, capability-checked, and clamped exactly like the default, with the estimate broken out per lens so a mixed-model run cannot be approved without seeing which lens costs what. CodeCartographer ships no stronger default: which model earns its price depends on your repository and budget, so compare candidates with the `models` action and choose. `codecarto_skill {cwd, name: "broadside"}` returns the reading guide for a completed run, and unlike post-pipeline skills it is not gated on a finished pipeline.
+
+On the Pi extension the same run is `/codecarto-broadside [submit|collect|status|models] [lenses…]`, with tab-completion for actions and lens names and live per-lens progress while batches poll. The two surfaces differ in one deliberate place: MCP cannot ask a human, so it refuses a run over `max_cost` until you pass `force`; Pi shows the per-lens breakdown and asks, and your approval *is* the force flag. Neither surface takes an API key as a command argument — a key typed into a slash command lands in the session transcript.
+
+Broad-Side needs runtime code, so firing a run is an executable-surface feature: Pi and MCP have it, the pure drop-in template does not (it carries only the reading guide).
+
+**Feeding a run into the pipeline** is the `scout-first` variant. Its first phase, `broadside-scout`, distills a completed run into `findings/broadside-scout/scout-brief.md` — a short list of leads, each routed to a specific later phase with the source pointer that phase should start from. Six later phases read the brief, and each must account for the leads addressed to it at validation: confirmed against the source, dismissed with a reason, or carried forward. None may be reported as a finding on the brief's authority. The scout phase itself never submits a batch and never spends; with no run on disk it writes an explicitly empty brief and the pipeline proceeds unchanged.
+
+The indirection is deliberate. Run directories are timestamped and gitignored, so no pipeline YAML could name one as a `required_reads` path; the brief is the stable, reviewable artifact that a phase contract can point at — and distilling into it is where the "which of these is worth anyone's attention" judgment happens.
 
 ---
 
@@ -507,6 +539,7 @@ If you're testing a new model, start with `pipeline-architecture-only.yaml` on a
   scratch/                   # Disposable notes plus checkpoints and structured phase handoffs.
   templates/                 # Output structure templates.
   workflow/                  # Pipeline definitions, status, validation, config.
+  broadside/                 # Broad-Side batch reconnaissance: config, state, run results.
   closeouts/                 # Per-session closeout files.
   THREAD_LOG.md              # Cross-session summary log.
   dashboard.html             # Generated; gitignored.

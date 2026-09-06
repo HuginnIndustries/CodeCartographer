@@ -311,6 +311,124 @@ test("config falls back to defaults and honors overrides", async () => {
 	}
 });
 
+test("config carries repo defaults for every per-call run knob", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-run-defaults-"));
+	try {
+		const defaults = await loadBroadsideConfig(dir);
+		assert.equal(defaults.incremental, false);
+		assert.equal(defaults.retryTruncated, true, "truncation repair is on unless a repo turns it off");
+		assert.equal(defaults.includeSynthesis, true);
+		assert.equal(defaults.includeTriage, true);
+		assert.equal(defaults.waitSeconds, 0, "0 means submit and collect later");
+
+		await writeFile(
+			join(dir, "config.yaml"),
+			[
+				"incremental: true",
+				"retry_truncated: false",
+				"include_synthesis: false",
+				"include_triage: false",
+				"wait_seconds: 600",
+				"",
+			].join("\n"),
+		);
+		const set = await loadBroadsideConfig(dir);
+		assert.equal(set.incremental, true);
+		assert.equal(set.retryTruncated, false);
+		assert.equal(set.includeSynthesis, false);
+		assert.equal(set.includeTriage, false);
+		assert.equal(set.waitSeconds, 600);
+
+		// config.yaml is hand-edited: a typo must not cost a user their batches.
+		await writeFile(join(dir, "config.yaml"), "incremental: yes-please\nwait_seconds: soon\n");
+		const malformed = await loadBroadsideConfig(dir);
+		assert.equal(malformed.incremental, false, "a non-boolean flag falls back to the shipped default");
+		assert.equal(malformed.waitSeconds, 0, "a non-numeric poll budget falls back to the shipped default");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("every documented config key is one loadBroadsideConfig actually reads", async () => {
+	// The commented-out keys in the shipped config.yaml are the only
+	// documentation a user gets. A key documented but not parsed reads as a
+	// working setting that silently does nothing; a key parsed but not
+	// documented is a feature nobody can find.
+	const shipped = await readFile(join(REPO_ROOT, ".codecarto", "broadside", "config.yaml"), "utf8");
+	// Commented YAML keeps its indentation after the "# ", so nesting depth
+	// separates top-level keys from the examples under pricing / lens_models.
+	const documentedTop = [...shipped.matchAll(/^# ([a-z_]+):/gm)].map((match) => match[1]);
+	const documentedNested = [...shipped.matchAll(/^#\s{2,}([a-z_]+):/gm)].map((match) => match[1]);
+
+	const parsedTop = new Set([
+		"model",
+		"api_key",
+		"default_lenses",
+		"max_cost",
+		"pricing",
+		"lens_models",
+		"incremental",
+		"retry_truncated",
+		"include_synthesis",
+		"include_triage",
+		"wait_seconds",
+	]);
+	const undocumented = [...parsedTop].filter((key) => !documentedTop.includes(key));
+	assert.deepEqual(undocumented, [], `config.yaml does not document: ${undocumented.join(", ")}`);
+	for (const key of documentedTop) {
+		assert.ok(parsedTop.has(key), `config.yaml documents ${key}, which loadBroadsideConfig does not read`);
+	}
+
+	// Nested examples must be real too: pricing's two fields, or a lens id.
+	const parsedNested = new Set(["input_per_m", "output_per_m", ...BROADSIDE_LENS_IDS]);
+	for (const key of documentedNested) {
+		assert.ok(parsedNested.has(key), `config.yaml shows a nested ${key} key that nothing reads`);
+	}
+	assert.ok(
+		documentedNested.some((key) => BROADSIDE_LENS_IDS.includes(key)),
+		"lens_models must be documented with at least one real lens id as an example",
+	);
+});
+
+test("per-lens model overrides parse, and unknown lens ids are dropped", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-lens-models-"));
+	try {
+		assert.deepEqual((await loadBroadsideConfig(dir)).lensModels, {}, "no overrides by default");
+
+		await writeFile(
+			join(dir, "config.yaml"),
+			"lens_models:\n  security: vendor/strong:batch\n  nonsense: vendor/whatever:batch\n  defect: \n",
+		);
+		const config = await loadBroadsideConfig(dir);
+		assert.deepEqual(
+			config.lensModels,
+			{ security: "vendor/strong:batch" },
+			"an unknown lens id and an empty value are both dropped rather than carried",
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("the Broad-Side reading guide is readable from a repo with no workspace", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-skill-"));
+	try {
+		// No .codecarto/ at all: the packaged copy answers.
+		const packaged = await core.readBroadsideSkill(dir);
+		assert.match(packaged.content, /# Broad-Side/);
+		assert.ok(packaged.path.includes(join("broadside", "SKILL.md")));
+
+		// A workspace copy wins, so a user's edits to their own scaffold are served.
+		await mkdir(join(dir, ".codecarto", "broadside"), { recursive: true });
+		await writeFile(join(dir, ".codecarto", "broadside", "SKILL.md"), "# Local guide\n");
+		const local = await core.readBroadsideSkill(dir);
+		assert.equal(local.content, "# Local guide\n");
+		assert.equal(local.path, join(dir, ".codecarto", "broadside", "SKILL.md"));
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 // ---------- pricing resolution & expense limits ----------
 
 function modelsCatalog(body) {
@@ -426,6 +544,139 @@ test("submit refuses over-budget runs and creates no run entry; force bypasses",
 		state = await loadBroadsideState(join(dir, ".codecarto", "broadside"));
 		assert.equal(state.runs.length, 1);
 		assert.equal(state.runs[0].pricing.source, "built-in");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a confirm hook decides the run, and declining submits nothing", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-confirm-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await mkdir(join(dir, "big"), { recursive: true });
+		for (let i = 0; i < 40; i++) {
+			await writeFile(join(dir, "big", `file${i}.go`), "package big\n" + `// ${"y".repeat(2000)}\n`);
+		}
+		let posted = 0;
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				posted += 1;
+				return fakeResponse(202, { id: "batch-ok", status: "validating" });
+			}
+			return fakeResponse(200, { id: "x", status: "in_progress" });
+		};
+		const stateDir = join(dir, ".codecarto", "broadside");
+
+		// Declining is not an error condition to paper over: nothing is spent,
+		// nothing is recorded, and the caller can tell it apart from a failure.
+		const seen = [];
+		await assert.rejects(
+			() => runBroadsideSubmit(dir, "sk-fake", {
+				lenses: ["defect"],
+				fetcher,
+				confirm: (estimate) => { seen.push(estimate); return false; },
+			}),
+			(error) => {
+				assert.equal(error.name, "BroadsideCancelledError");
+				assert.match(error.message, /Nothing was submitted/);
+				return true;
+			},
+		);
+		assert.equal(posted, 0, "a declined run must not submit a batch");
+		assert.equal((await loadBroadsideState(stateDir)).runs.length, 0, "a declined run must not be recorded");
+
+		assert.equal(seen.length, 1, "the hook is called once, before submission");
+		assert.equal(seen[0].lenses.length, 1);
+		assert.equal(seen[0].lenses[0].lensId, "defect");
+		assert.ok(seen[0].totalCost > 0, "the estimate must carry a price");
+		assert.ok(seen[0].lenses[0].slices > 0, "the estimate must say how much work was sliced");
+
+		// An interactive approval is the force flag: it carries the run past a
+		// max_cost the non-interactive path would refuse.
+		const approved = [];
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["defect"],
+			fetcher,
+			maxCost: 0.0001,
+			confirm: (estimate) => { approved.push(estimate); return true; },
+		});
+		assert.equal(approved[0].exceedsLimit, true, "the hook must be told it is over budget");
+		assert.equal(approved[0].maxCost, 0.0001);
+		assert.equal(result.batches.defect.status, "validating");
+		assert.equal((await loadBroadsideState(stateDir)).runs.length, 1);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a per-lens override reaches the wire, the estimate, and the retry", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-per-lens-model-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		await mkdir(join(dir, "big"), { recursive: true });
+		for (let i = 0; i < 10; i++) {
+			await writeFile(join(dir, "big", `file${i}.go`), `package big\n// ${"y".repeat(1500)}\n`);
+		}
+		await mkdir(join(dir, ".codecarto", "broadside"), { recursive: true });
+		await writeFile(
+			join(dir, ".codecarto", "broadside", "config.yaml"),
+			"lens_models:\n  defect: vendor/strong:batch\n",
+		);
+
+		const posted = [];
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				posted.push(JSON.parse(init.body));
+				return fakeResponse(202, { id: `batch-${posted.length}`, status: "validating" });
+			}
+			if (String(url).includes("/models")) {
+				// Both models must price: the override is pre-flighted like the default.
+				return fakeResponse(200, modelsCatalog([
+					{
+						id: "vendor/strong:batch",
+						name: "Strong",
+						pricing: { prompt: "0.000005", completion: "0.000025" },
+						context_length: 200000,
+						top_provider: { max_completion_tokens: 32000 },
+						supported_parameters: ["structured_outputs"],
+					},
+				]));
+			}
+			return fakeResponse(200, { id: "x", status: "in_progress" });
+		};
+
+		const seen = [];
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["architecture", "defect"],
+			fetcher,
+			confirm: (estimate) => { seen.push(estimate); return true; },
+		});
+
+		// The estimate must price each lens against its own model, or the number
+		// the user approves is not the number they will be billed.
+		const [estimate] = seen;
+		assert.equal(estimate.mixedModels, true);
+		const defectRow = estimate.lenses.find((l) => l.lensId === "defect");
+		const archRow = estimate.lenses.find((l) => l.lensId === "architecture");
+		assert.equal(defectRow.model, "vendor/strong:batch");
+		assert.equal(archRow.model, BROADSIDE_MODEL);
+		assert.equal(defectRow.pricing.outputPerM, 25, "the override's own rates must price its lens");
+		assert.notEqual(archRow.pricing.outputPerM, defectRow.pricing.outputPerM);
+
+		// And the batch that fires must carry it, at both payload levels.
+		const defectBatch = posted.find((p) => p.model === "vendor/strong:batch");
+		assert.ok(defectBatch, "the defect batch must be submitted on the override model");
+		assert.equal(defectBatch.requests[0].body.model, "vendor/strong:batch");
+		assert.ok(
+			posted.some((p) => p.model === BROADSIDE_MODEL),
+			"the architecture batch must stay on the run default",
+		);
+
+		// Recorded per lens, so collect's truncation retry re-submits on the same
+		// model and against that model's ceiling rather than the run default's.
+		assert.equal(result.batches.defect.model, "vendor/strong:batch");
+		assert.equal(result.batches.defect.outputCap, 32000);
+		assert.equal(result.batches.architecture.model, undefined, "the default model is not restated per lens");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

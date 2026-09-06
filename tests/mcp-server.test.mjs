@@ -23,6 +23,7 @@ const {
 	handleValidate,
 	handleComplete,
 	handleSkill,
+	handleListSkills,
 } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { buildPhasePrompt, getNextEligiblePhase, getWorkspaceState } = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
@@ -99,6 +100,39 @@ test("handleSkill refuses while pipeline is incomplete", async () => {
 			assert.ok(error instanceof McpError, "expected McpError");
 			assert.equal(error.code, ErrorCode.InvalidRequest);
 			assert.match(error.message, /pipeline is not complete/);
+			return true;
+		},
+	);
+});
+
+test("handleSkill serves the Broad-Side reading guide without the completion gate", async () => {
+	// Scout leads are read before and during the pipeline, so the one skill
+	// name that is not a post-pipeline skill must not be gated on completion.
+	const result = await handleSkill({ cwd: WORKSPACE, name: "broadside" });
+	assert.match(result.content[0].text, /# Broad-Side/);
+	assert.match(result.content[0].text, /unverified scouting signals/);
+	assert.equal(result.structuredContent.skill, "broadside");
+	assert.equal(result.structuredContent.postPipeline, false);
+});
+
+test("handleListSkills advertises Broad-Side apart from the post-pipeline set", async () => {
+	const result = await handleListSkills({ cwd: WORKSPACE });
+	assert.equal(result.structuredContent.broadside, true);
+	assert.match(result.content[0].text, /not pipeline-gated.*broadside/s);
+	assert.ok(
+		!result.structuredContent.skills.includes("broadside"),
+		"broadside is not a post-pipeline skill and must not be listed as one",
+	);
+});
+
+test("an unknown skill name points at the Broad-Side exemption", async () => {
+	await assert.rejects(
+		handleSkill({ cwd: WORKSPACE, name: "no-such-skill" }),
+		(error) => {
+			assert.ok(error instanceof McpError, "expected McpError");
+			// The completion gate fires first for a workspace mid-pipeline; either
+			// message is acceptable, but the name must never dead-end silently.
+			assert.match(error.message, /pipeline is not complete|Unknown skill/);
 			return true;
 		},
 	);

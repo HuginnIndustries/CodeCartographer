@@ -29,6 +29,7 @@ import {
 	BROADSIDE_DIR,
 	broadsideDirFor,
 	BROADSIDE_LENS_IDS,
+	BROADSIDE_SKILL_NAME,
 	type BroadsideLensId,
 	canonicalPath,
 	copyPackagedWorkspace,
@@ -79,6 +80,7 @@ import {
 	refreshScaffold,
 	resolvePhase,
 	resolvePipelineChoice,
+	readBroadsideSkill,
 	runBroadsideCollect,
 	runBroadsideStatus,
 	runBroadsideSubmit,
@@ -435,6 +437,17 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 		throw new McpError(ErrorCode.InvalidParams, "name is required");
 	}
 	const cwd = await validateCwd(args.cwd);
+
+	// Broad-Side is a reading guide for batch reconnaissance output, not a
+	// post-pipeline skill: it is useful before the pipeline starts and on a
+	// repository with no workspace at all, so it is served ahead of both gates.
+	if (args.name.trim() === BROADSIDE_SKILL_NAME) {
+		const skill = await readBroadsideSkill(cwd).catch((error) => {
+			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		});
+		return textResult(skill.content, { skill: BROADSIDE_SKILL_NAME, path: skill.path, postPipeline: false });
+	}
+
 	const state = await requireWorkspace(cwd);
 	const nextPhase = getNextEligiblePhase(state);
 	if (nextPhase) {
@@ -447,7 +460,10 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 	if (!(await pathExists(skillFile))) {
 		const available = await listSkillNames(state.workspaceDir);
 		const hint = available.length > 0 ? ` Available: ${available.join(", ")}.` : " No skills installed.";
-		throw new McpError(ErrorCode.InvalidParams, `Unknown skill: ${args.name}.${hint}`);
+		throw new McpError(
+			ErrorCode.InvalidParams,
+			`Unknown skill: ${args.name}.${hint} The Broad-Side reading guide is served as \`${BROADSIDE_SKILL_NAME}\` and is not pipeline-gated.`,
+		);
 	}
 	const prompt = await buildSkillPrompt(state, args.name);
 	return textResult(prompt, { skill: args.name });
@@ -926,7 +942,17 @@ export async function handleListSkills(args: { cwd: string }) {
 	const lines = skills.length > 0
 		? [`Available skills (${skills.length}):`, ...skills.map((s) => `  - ${s}`)]
 		: ["No skills installed."];
-	return textResult(lines.join("\n"), { skills });
+
+	// Broad-Side is listed apart from the post-pipeline set because it answers
+	// to codecarto_skill without the completion gate.
+	const broadsideAvailable = await readBroadsideSkill(cwd).then(() => true, () => false);
+	if (broadsideAvailable) {
+		lines.push(
+			"",
+			`Also served by codecarto_skill (not pipeline-gated): ${BROADSIDE_SKILL_NAME} — how to read a Broad-Side batch reconnaissance run.`,
+		);
+	}
+	return textResult(lines.join("\n"), { skills, broadside: broadsideAvailable });
 }
 
 export async function handleRefreshScaffold(args: { cwd: string }) {
@@ -1023,7 +1049,16 @@ export async function handleBroadside(args: {
 	}
 
 	const apiKey = resolveBroadsideApiKey(args.api_key, config);
-	const waitMs = typeof args.wait_seconds === "number" && args.wait_seconds > 0 ? args.wait_seconds * 1000 : undefined;
+	// Every run knob resolves the same way: explicit parameter, else the repo's
+	// config.yaml default, else the shipped default baked into loadBroadsideConfig.
+	const waitSeconds = typeof args.wait_seconds === "number" && args.wait_seconds > 0
+		? args.wait_seconds
+		: config.waitSeconds;
+	const waitMs = waitSeconds > 0 ? waitSeconds * 1000 : undefined;
+	const includeSynthesis = args.include_synthesis ?? config.includeSynthesis;
+	const includeTriage = args.include_triage ?? config.includeTriage;
+	const retryTruncated = args.retry_truncated ?? config.retryTruncated;
+	const incremental = args.incremental ?? config.incremental;
 
 	if (action === "models") {
 		const { entries, benchmarks } = await listBatchModels(broadsideDirFor(cwd), config, apiKey, {
@@ -1057,7 +1092,7 @@ export async function handleBroadside(args: {
 			model: config.model,
 			maxCost,
 			force: args.force === true,
-			incremental: args.incremental === true,
+			incremental,
 		}).catch((error) => {
 			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
@@ -1067,9 +1102,9 @@ export async function handleBroadside(args: {
 			lines.push("", "Waiting for batches to complete...");
 			const collect = await runBroadsideCollect(cwd, apiKey, {
 				waitMs,
-				includeSynthesis: args.include_synthesis !== false,
-				includeTriage: args.include_triage !== false,
-				retryTruncated: args.retry_truncated !== false,
+				includeSynthesis,
+				includeTriage,
+				retryTruncated,
 				onStatus: (lensId, status, counts) =>
 					lines.push(`  ${lensId}: ${status} (${counts.completed ?? 0}/${counts.total ?? "?"})`),
 			});
@@ -1088,9 +1123,9 @@ export async function handleBroadside(args: {
 	// action === "collect"
 	const collect = await runBroadsideCollect(cwd, apiKey, {
 		waitMs,
-		includeSynthesis: args.include_synthesis !== false,
-		includeTriage: args.include_triage !== false,
-		retryTruncated: args.retry_truncated !== false,
+		includeSynthesis,
+		includeTriage,
+		retryTruncated,
 	}).catch((error) => {
 		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
@@ -1209,12 +1244,12 @@ const TOOLS = [
 	{
 		name: "codecarto_skill",
 		description:
-			"Return the prompt text for a post-pipeline skill (only callable after all phases are complete). Use codecarto_status to confirm completion first.",
+			"Return the prompt text for a post-pipeline skill (only callable after all phases are complete). Use codecarto_status to confirm completion first. One name is exempt from the completion gate: \"broadside\" returns the reading guide for a Broad-Side batch reconnaissance run, which is meant to be read before or during the pipeline and works without a workspace.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				cwd: { type: "string", description: "Absolute path to the target repository." },
-				name: { type: "string", description: "Skill name (a directory under .codecarto/skills/)." },
+				name: { type: "string", description: "Skill name (a directory under .codecarto/skills/), or \"broadside\" for the Broad-Side reading guide." },
 			},
 			required: ["cwd", "name"],
 		},
@@ -1372,7 +1407,8 @@ const TOOLS = [
 	},
 	{
 		name: "codecarto_list_skills",
-		description: "List available post-pipeline skills installed in the workspace.",
+		description:
+			"List available post-pipeline skills installed in the workspace, plus the Broad-Side reading guide when it is present (that one is not pipeline-gated).",
 		inputSchema: {
 			type: "object",
 			properties: { cwd: { type: "string", description: "Absolute path to the target repository." } },
@@ -1426,21 +1462,21 @@ const TOOLS = [
 				},
 				wait_seconds: {
 					type: "number",
-					description: "For submit: after submitting, poll up to this many seconds before returning. For collect: poll up to this many seconds before returning with partial state.",
+					description: "For submit: after submitting, poll up to this many seconds before returning. For collect: poll up to this many seconds before returning with partial state. Falls back to wait_seconds in .codecarto/broadside/config.yaml.",
 				},
 				include_synthesis: {
 					type: "boolean",
-					description: "Run the cross-lens synthesis pass once all lens batches complete (default true).",
+					description: "Run the cross-lens synthesis pass once all lens batches complete. Falls back to include_synthesis in .codecarto/broadside/config.yaml (default true).",
 				},
 				include_triage: {
 					type: "boolean",
 					description:
-						"Run the triage pass once all lens batches complete: turns the findings into a prioritized work order (impact × difficulty, P0-P3, effort estimates). Default true.",
+						"Run the triage pass once all lens batches complete: turns the findings into a prioritized work order (impact × difficulty, P0-P3, effort estimates). Falls back to include_triage in .codecarto/broadside/config.yaml (default true).",
 				},
 				retry_truncated: {
 					type: "boolean",
 					description:
-						"Re-submit lens results that came back truncated at the output token limit, once, with a doubled output cap. Default true.",
+						"Re-submit lens results that came back truncated at the output token limit, once, with a doubled output cap. Falls back to retry_truncated in .codecarto/broadside/config.yaml (default true).",
 				},
 				max_cost: {
 					type: "number",
@@ -1454,7 +1490,7 @@ const TOOLS = [
 				incremental: {
 					type: "boolean",
 					description:
-						"Diff against the previous run's git HEAD and scan only the modules whose files changed (falls back to a full scan on a dirty tree or when no prior run exists). Default false.",
+						"Diff against the previous run's git HEAD and scan only the modules whose files changed (falls back to a full scan on a dirty tree or when no prior run exists). Falls back to incremental in .codecarto/broadside/config.yaml (default false).",
 				},
 				include_benchmarks: {
 					type: "boolean",
