@@ -10,9 +10,14 @@
 // Flags mirror the codecarto_broadside tool parameters, with the negative
 // forms spelled out because a slash command has no place to pass `false`:
 //   --incremental          --no-synthesis
-//   --max-cost=N           --no-triage
-//   --wait=SECONDS         --no-retry-truncated
-//   --benchmarks (models only)
+//   --no-incremental       --no-triage
+//   --max-cost=N           --no-retry-truncated
+//   --wait=SECONDS         --benchmarks (models only)
+//
+// --incremental has a spelled-out negative because the value is tri-state:
+// absent defers to config.yaml, so a repository that set `incremental: true`
+// can still ask for a one-off full scan (#163), exactly as an MCP caller can
+// with `incremental: false`.
 //
 // The parser never throws. index.ts decides how to surface unknown tokens and
 // invalid combinations, matching parseNextFlags.
@@ -25,7 +30,12 @@ export interface BroadsideFlags {
 	action: BroadsideAction;
 	/** Empty means "the repository's default lens set". */
 	lenses: BroadsideLensId[];
-	incremental: boolean;
+	/**
+	 * Undefined means "use the repository's config default". --incremental sets
+	 * true and --no-incremental sets false, so a config-set `incremental: true`
+	 * can be overridden back to a full scan for one run (#163).
+	 */
+	incremental?: boolean;
 	includeSynthesis?: boolean;
 	includeTriage?: boolean;
 	retryTruncated?: boolean;
@@ -48,6 +58,7 @@ export const KNOWN_BROADSIDE_TOKENS = [
 	"models",
 	...BROADSIDE_LENS_IDS,
 	"--incremental",
+	"--no-incremental",
 	"--max-cost=",
 	"--wait=",
 	"--no-synthesis",
@@ -74,7 +85,6 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 	const result: BroadsideFlags = {
 		action: "submit",
 		lenses: [],
-		incremental: false,
 		benchmarks: false,
 		unknown: [],
 	};
@@ -91,7 +101,16 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 			if (!result.lenses.includes(token as BroadsideLensId)) result.lenses.push(token as BroadsideLensId);
 			continue;
 		}
-		if (token === "--incremental") { result.incremental = true; continue; }
+		if (token === "--incremental" || token === "--no-incremental") {
+			const value = token === "--incremental";
+			// Last-one-wins would be a silent tiebreak on a command that spends
+			// money; a contradiction is an error.
+			if (result.incremental !== undefined && result.incremental !== value) {
+				result.error ??= "--incremental and --no-incremental contradict each other; pass one or neither.";
+			}
+			result.incremental = value;
+			continue;
+		}
 		if (token === "--no-synthesis") { result.includeSynthesis = false; continue; }
 		if (token === "--no-triage") { result.includeTriage = false; continue; }
 		if (token === "--no-retry-truncated") { result.retryTruncated = false; continue; }
@@ -103,12 +122,14 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 
 	// Flags that only mean something for one action are refused rather than
 	// ignored: silently dropping --incremental on a collect would read as
-	// "collected incrementally", which is not a thing.
+	// "collected incrementally", which is not a thing (and --no-incremental
+	// would read as a full re-collect, which is not one either).
 	if (result.lenses.length > 0 && result.action !== "submit") {
 		result.error ??= `Lens names are only meaningful for submit (got action "${result.action}").`;
 	}
-	if (result.incremental && result.action !== "submit") {
-		result.error ??= `--incremental is only meaningful for submit (got action "${result.action}").`;
+	if (result.incremental !== undefined && result.action !== "submit") {
+		const flag = result.incremental ? "--incremental" : "--no-incremental";
+		result.error ??= `${flag} is only meaningful for submit (got action "${result.action}").`;
 	}
 	if (result.benchmarks && result.action !== "models") {
 		result.error ??= `--benchmarks is only meaningful for models (got action "${result.action}").`;

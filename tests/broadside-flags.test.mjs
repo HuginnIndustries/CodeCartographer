@@ -16,7 +16,7 @@ test("no arguments means submit with the repository's default lenses", () => {
 	const r = parseBroadsideFlags("");
 	assert.equal(r.action, "submit");
 	assert.deepEqual(r.lenses, [], "empty means 'let config decide', not 'no lenses'");
-	assert.equal(r.incremental, false);
+	assert.equal(r.incremental, undefined, "absence must defer to config, not force a full scan");
 	assert.equal(r.maxCost, undefined);
 	assert.equal(r.waitSeconds, undefined);
 	assert.deepEqual(r.unknown, []);
@@ -73,6 +73,42 @@ test("flags that mean nothing for the chosen action are refused, not ignored", (
 	assert.match(parseBroadsideFlags("submit --benchmarks").error ?? "", /--benchmarks is only meaningful for models/);
 	assert.match(parseBroadsideFlags("status --wait=60").error ?? "", /--wait is only meaningful for submit and collect/);
 	assert.equal(parseBroadsideFlags("models --benchmarks").error, undefined);
+});
+
+test("--incremental is tri-state: absent defers to config, --no-incremental forces a full scan", () => {
+	// Before #163 the parser had no negative form and the handler merged with
+	// `||`, so a repository that set `incremental: true` in config.yaml could
+	// never get a one-off full scan from Pi (MCP could, via incremental: false).
+	// Absence must stay undefined so the handler's `??` merge lets config decide.
+	assert.equal(parseBroadsideFlags("submit").incremental, undefined);
+	assert.equal(parseBroadsideFlags("submit --incremental").incremental, true);
+
+	const full = parseBroadsideFlags("submit --no-incremental");
+	assert.equal(full.incremental, false);
+	assert.equal(full.error, undefined);
+	assert.deepEqual(full.unknown, []);
+
+	assert.equal(parseBroadsideFlags("--no-incremental architecture").incremental, false, "the implicit submit accepts it too");
+});
+
+test("--no-incremental is submit-only, refused on every other action like --incremental", () => {
+	for (const action of ["collect", "status", "models"]) {
+		assert.match(
+			parseBroadsideFlags(`${action} --no-incremental`).error ?? "",
+			/--no-incremental is only meaningful for submit/,
+			`${action} must refuse --no-incremental`,
+		);
+	}
+});
+
+test("passing both --incremental and --no-incremental is a contradiction, not a tiebreak", () => {
+	for (const args of ["submit --incremental --no-incremental", "submit --no-incremental --incremental"]) {
+		assert.match(parseBroadsideFlags(args).error ?? "", /--incremental and --no-incremental contradict/, `${args} must error`);
+	}
+	// Repeating one form is redundant, not contradictory.
+	const repeated = parseBroadsideFlags("submit --no-incremental --no-incremental");
+	assert.equal(repeated.error, undefined);
+	assert.equal(repeated.incremental, false);
 });
 
 test("unknown tokens are collected for the caller to surface", () => {

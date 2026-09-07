@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pi: `/codecarto-broadside` can request a one-off full scan over a config-set `incremental: true`** (#163). The flag grammar had `--incremental` but no negative form, and the handler merged it with `||`, so once a repository set `incremental: true` in `.codecarto/broadside/config.yaml` no Pi invocation could turn it back off for a single run — while MCP's `codecarto_broadside {incremental: false}` already won over config. New `--no-incremental` flag, tab-completed next to `--incremental` and submit-only like it; the parsed value is now tri-state (absent defers to config) and the handler resolves `flags.incremental ?? config.incremental`, exactly as MCP does. Passing both forms on one command is refused as contradictory rather than letting the last one win.
+
 ### Security
 
 - **The `@earendil-works/pi-coding-agent` peer range is now a floor, `>=0.84.0`.** The old `^0.80.10` pinned the 0.80 minor (caret on a 0.x version), so an `npm install codecartographer-pi` auto-installed pi-coding-agent 0.80.x — whose `undici` 8.x dependency carries five high-severity advisories (response desynchronization, cross-user cache disclosure, CRLF injection, cookie attribute injection: GHSA-8xcm-r25x-g524, GHSA-4cwx-7wf7-3272, GHSA-m8rv-5g2x-5cg5, GHSA-jr45-8vmc-qm54, GHSA-v3r7-h72x-cjcm) — while the user's own `pi` (0.85.x) sat outside the range. This repository was already clean through its own `undici` override, but overrides do not travel to consumers; the peer range does. pi-coding-agent 0.84.0+ depends on undici 8.9.0, past the affected `8.0.0–8.8.0` range. The lockfile moves to 0.85.1 and the suite passes against it. Consumers who see the advisory should update `@earendil-works/pi-coding-agent` (or `pi update`) — not run `npm audit fix --force`, which downgrades codecartographer-pi to 0.10.0.

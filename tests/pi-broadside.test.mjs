@@ -6,8 +6,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { promisify } from "node:util";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -56,6 +58,28 @@ async function scoutableRepo() {
 	for (let i = 0; i < 20; i++) {
 		await writeFile(join(cwd, "big", `file${i}.go`), `package big\n// ${"y".repeat(2000)}\n`);
 	}
+	return cwd;
+}
+
+const execFileAsync = promisify(execFile);
+
+async function git(dir, ...args) {
+	await execFileAsync("git", ["-C", dir, ...args], { maxBuffer: 16 * 1024 * 1024 });
+}
+
+/**
+ * A committed scoutable repository whose config.yaml fixes `incremental: true`
+ * — the setup in which #163 left Pi with no way to ask for a full scan.
+ */
+async function scoutableGitRepoPreferringIncremental() {
+	const cwd = await scoutableRepo();
+	await mkdir(join(cwd, ".codecarto", "broadside"), { recursive: true });
+	await writeFile(join(cwd, ".codecarto", "broadside", "config.yaml"), "incremental: true\n");
+	await git(cwd, "init", "-q");
+	await git(cwd, "config", "user.email", "test@example.com");
+	await git(cwd, "config", "user.name", "Test");
+	await git(cwd, "add", "-A");
+	await git(cwd, "commit", "-q", "-m", "initial");
 	return cwd;
 }
 
@@ -178,6 +202,51 @@ test("a bad argument is refused before anything is priced or spent", async () =>
 
 			assert.equal(ui.confirmations.length, 0);
 			assert.equal(posts.length, 0);
+		});
+	} finally {
+		if (key === undefined) delete process.env.OPENROUTER_API_KEY;
+		else process.env.OPENROUTER_API_KEY = key;
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("--no-incremental overrides a config-set incremental: true; absence defers to it (#163)", async () => {
+	// The parser tests pin the flag's tri-state value; this pins the merge in
+	// the handler, which is where the bug lived: `flags.incremental ||
+	// config.incremental` let a config-set true swallow every attempt at a
+	// one-off full scan. The observable is the spend prompt, which names the
+	// baseline commit only when the run will actually diff against one.
+	const cwd = await scoutableGitRepoPreferringIncremental();
+	const key = process.env.OPENROUTER_API_KEY;
+	process.env.OPENROUTER_API_KEY = "sk-fake";
+	try {
+		await withStubbedFetch(() => fakeResponse(202, { id: "batch-1", status: "validating" }), async (posts) => {
+			// Baseline run: nothing to diff against yet, so config's incremental
+			// still prices a full scan. Approve it so it records the HEAD.
+			const baseline = createHarness(cwd, { confirm: async () => true });
+			await baseline.commands.get("codecarto-broadside").handler("submit defect", baseline.ctx);
+			assert.equal(posts.length, 1, "the baseline run must actually submit");
+			assert.doesNotMatch(baseline.ui.confirmations[0].body, /Incremental/, "no prior run means nothing to diff against");
+
+			// Change one file and commit. `add -A` also tracks the scout state the
+			// baseline wrote, so the tree reads clean and the diff is trusted.
+			await writeFile(join(cwd, "big", "file0.go"), "package big\n// changed\n");
+			await git(cwd, "add", "-A");
+			await git(cwd, "commit", "-q", "-m", "change one file");
+
+			// No flag: config decides, and config says incremental.
+			const byConfig = createHarness(cwd, { confirm: async () => false });
+			await byConfig.commands.get("codecarto-broadside").handler("submit defect", byConfig.ctx);
+			assert.equal(byConfig.ui.confirmations.length, 1);
+			assert.match(byConfig.ui.confirmations[0].body, /Incremental: only modules changed since/, "absence must defer to config.yaml");
+
+			// --no-incremental: the flag beats config, as MCP's `incremental: false` does.
+			const full = createHarness(cwd, { confirm: async () => false });
+			await full.commands.get("codecarto-broadside").handler("submit defect --no-incremental", full.ctx);
+			assert.equal(full.ui.confirmations.length, 1, "the flag must be accepted and the run priced");
+			assert.doesNotMatch(full.ui.confirmations[0].body, /Incremental/, "--no-incremental must price a full scan over config's incremental: true");
+
+			assert.equal(posts.length, 1, "both declined runs must have submitted nothing");
 		});
 	} finally {
 		if (key === undefined) delete process.env.OPENROUTER_API_KEY;
