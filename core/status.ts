@@ -291,31 +291,37 @@ export function applyHandoff(status: NormalizedStatus, handoff: PhaseHandoff): N
 			}
 		}
 	}
-	// Now merge into the current phase: overwrite by id or append new
+	// Now merge into the current phase: overwrite by id or append new. An entry
+	// with neither id nor description has no key to merge on; it is kept as-is
+	// rather than lost when the array is rebuilt from the map (#134).
 	const localOqMap = new Map<string, OpenQuestionEntry>();
+	const unkeyedOpenQuestions: OpenQuestionEntry[] = [];
 	for (const entry of phase.open_questions) {
 		const key = entry.id || entry.description || "";
 		if (key) localOqMap.set(key, entry);
+		else unkeyedOpenQuestions.push(entry);
 	}
 	for (const entry of handoff.open_questions) {
 		const key = entry.id || entry.description || "";
 		if (key) localOqMap.set(key, entry);
-		else phase.open_questions.push(entry);
+		else unkeyedOpenQuestions.push(entry);
 	}
-	phase.open_questions = [...localOqMap.values()];
+	phase.open_questions = [...localOqMap.values(), ...unkeyedOpenQuestions];
 
-	// Merge carry_forward: overwrite by id or append new
+	// Merge carry_forward: overwrite by id or append new, same unkeyed rule
 	const cfMap = new Map<string, CarryForwardEntry>();
+	const unkeyedCarryForward: CarryForwardEntry[] = [];
 	for (const entry of phase.carry_forward) {
 		const key = entry.id || entry.description || "";
 		if (key) cfMap.set(key, entry);
+		else unkeyedCarryForward.push(entry);
 	}
 	for (const entry of handoff.carry_forward) {
 		const key = entry.id || entry.description || "";
 		if (key) cfMap.set(key, entry);
-		else phase.carry_forward.push(entry);
+		else unkeyedCarryForward.push(entry);
 	}
-	phase.carry_forward = [...cfMap.values()];
+	phase.carry_forward = [...cfMap.values(), ...unkeyedCarryForward];
 
 	// Apply closures: remove carry_forward entries from ALL phases by id
 	for (const closureId of handoff.carry_forward_closures) {

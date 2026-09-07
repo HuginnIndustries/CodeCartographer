@@ -90,6 +90,9 @@ export function phaseCompactionExtension(pi: ExtensionAPI): void {
 		if (!phaseId || !ctx.model) return undefined;
 		try {
 			const state = await getWorkspaceState(ctx.cwd);
+			// No workspace under this cwd: nothing phase-aware to add, so the host
+			// default applies — not a failure worth a warning (#134).
+			if (!state) return undefined;
 			const phase = state.pipeline.phases.find((candidate) => candidate.id === phaseId);
 			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
 			if (!auth.ok || !auth.apiKey) return undefined;

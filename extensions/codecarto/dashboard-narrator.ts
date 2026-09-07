@@ -100,7 +100,7 @@ async function readRecentCloseouts(workspaceDir: string): Promise<RecentCloseout
 			return m ? { date: m[1], phaseOrModule: m[2], fileName: name } : null;
 		})
 		.filter((x): x is { date: string; phaseOrModule: string; fileName: string } => x !== null)
-		.sort((a, b) => (a.date < b.date ? 1 : -1))
+		.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
 		.slice(0, MAX_CLOSEOUTS);
 
 	const out: RecentCloseout[] = [];

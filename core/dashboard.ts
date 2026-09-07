@@ -519,7 +519,9 @@ function usagePhaseNote(phaseId: string, status: NormalizedStatus): string {
 
 function renderActivityTimeline(runs: UsageRun[]): string {
 	if (runs.length === 0) return "";
-	const sorted = [...runs].sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+	// Newest first. The comparator must return 0 for equal keys: returning -1
+	// in both directions left same-timestamp order implementation-defined (#134).
+	const sorted = [...runs].sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : 0));
 	const visible = sorted.slice(0, TIMELINE_VISIBLE_COUNT);
 	const overflow = sorted.slice(TIMELINE_VISIBLE_COUNT);
 	const hasSessionLinks = sorted.some((run) => Boolean(run.session_file && safeRelativeHref(run.session_file)));
@@ -572,7 +574,7 @@ function renderPostPipelineWork(status: NormalizedStatus): string {
 function renderCloseoutsList(inputs: DashboardInputs): string {
 	const closeouts = inputs.closeouts;
 	if (closeouts.length === 0) return [`<section class="cc-card cc-closeouts" id="closeouts" aria-label="Closeouts" data-section>`, `<h2>Closeouts</h2>`, `<p class="cc-empty">No closeouts yet.</p>`, `</section>`].join("\n");
-	const sorted = [...closeouts].sort((a, b) => (a.date < b.date ? 1 : -1));
+	const sorted = [...closeouts].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 	const rows = sorted.map((c) => {
 		const phase = getPhase(inputs.pipeline, c.phaseOrModule);
 		const outputs = inputs.outputsPresent.get(c.phaseOrModule);
@@ -721,7 +723,7 @@ function getPhase(pipeline: PipelineFile, phaseId: string): PipelinePhase | unde
 }
 
 function closeoutForPhase(closeouts: DashboardCloseoutEntry[], phaseId: string): DashboardCloseoutEntry | undefined {
-	return [...closeouts].filter((c) => c.phaseOrModule === phaseId).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+	return [...closeouts].filter((c) => c.phaseOrModule === phaseId).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))[0];
 }
 
 function phaseAnchor(phaseId: string): string {

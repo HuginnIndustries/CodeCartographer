@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { getNextEligiblePhase } from "./pipeline.ts";
 import { buildTerminalNextActions, ensureArray, normalizeStatus } from "./status.ts";
 import type { WorkspaceState } from "./types.ts";
-import { dateOnly, pathExists } from "./utils.ts";
+import { dateOnly, newlineIfUnterminated, pathExists } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
 import { loadYamlFile } from "./yaml.ts";
 
@@ -176,7 +176,7 @@ export async function applyAmendment(cwd: string, name: string): Promise<Amendme
 			// Created below when absent.
 		}
 		if (!current.split(/\r?\n/).some((line) => line.includes(`[closeout](closeouts/${closeoutFile})`))) {
-			await appendFile(threadLogPath, `${entry}\n`, "utf8");
+			await appendFile(threadLogPath, `${newlineIfUnterminated(current)}${entry}\n`, "utf8");
 		}
 		closeoutNotice = `Closeout: .codecarto/closeouts/${closeoutFile}`;
 

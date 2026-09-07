@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { getNextEligiblePhase, resolvePhase, validatePhaseOutput } from "./pipeline.ts";
 import { applyHandoff, autoAssignIds, buildTerminalNextActions, loadHandoffFile, normalizeStatus } from "./status.ts";
 import type { NormalizedStatus, OpenQuestionEntry, PhaseHandoff, ProposedConventionEntry, ValidationResult, WorkspaceState } from "./types.ts";
-import { dateOnly, pathExists, uniqueStrings } from "./utils.ts";
+import { dateOnly, newlineIfUnterminated, pathExists, uniqueStrings } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
 
 export type CompletionResult = {
@@ -271,7 +271,7 @@ async function writeCompletionArtifacts(
 	}
 	const link = `[closeout](closeouts/${closeoutFile})`;
 	if (!current.split(/\r?\n/).some((line) => line.includes(link))) {
-		await appendFile(threadLogPath, `${entry}\n`, "utf8");
+		await appendFile(threadLogPath, `${newlineIfUnterminated(current)}${entry}\n`, "utf8");
 	}
 
 	// Mechanize the orchestrator loop's bookkeeping half (issue #98): decisions

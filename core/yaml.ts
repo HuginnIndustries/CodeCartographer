@@ -5,6 +5,18 @@
 import { readFile } from "node:fs/promises";
 import { isPlainObject } from "./utils.ts";
 
+/**
+ * True when the double quote at `index` is escaped, i.e. preceded by an odd
+ * run of backslashes. Checking only the single previous character read `\\"`
+ * (an escaped backslash, then the closing quote) as an escaped quote, so the
+ * scalar never closed and a trailing ` # comment` leaked into the value (#134).
+ */
+function isEscapedQuote(text: string, index: number): boolean {
+	let backslashes = 0;
+	for (let i = index - 1; i >= 0 && text[i] === "\\"; i--) backslashes++;
+	return backslashes % 2 === 1;
+}
+
 export function stripYamlComment(value: string): string {
 	let inSingle = false;
 	let inDouble = false;
@@ -15,7 +27,7 @@ export function stripYamlComment(value: string): string {
 			inSingle = !inSingle;
 			continue;
 		}
-		if (char === '"' && !inSingle && value[i - 1] !== "\\") {
+		if (char === '"' && !inSingle && !isEscapedQuote(value, i)) {
 			inDouble = !inDouble;
 			continue;
 		}
@@ -54,7 +66,7 @@ function findKeySeparator(text: string): number {
 			inSingle = !inSingle;
 			continue;
 		}
-		if (char === '"' && !inSingle && text[i - 1] !== "\\") {
+		if (char === '"' && !inSingle && !isEscapedQuote(text, i)) {
 			inDouble = !inDouble;
 			continue;
 		}
@@ -76,14 +88,17 @@ export function parseYamlScalar(rawValue: string): unknown {
 	if (trimmed === "false") return false;
 	if (/^-?\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10);
 	if (/^-?\d+\.\d+$/.test(trimmed)) return Number.parseFloat(trimmed);
-	if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+	// A quoted scalar needs at least its two quotes: a lone quote character
+	// satisfied startsWith and endsWith at once and was sliced to "" (#134).
+	const canBeQuoted = trimmed.length >= 2;
+	if (canBeQuoted && trimmed.startsWith('"') && trimmed.endsWith('"')) {
 		try {
 			return JSON.parse(trimmed);
 		} catch {
 			return trimmed.slice(1, -1);
 		}
 	}
-	if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+	if (canBeQuoted && trimmed.startsWith("'") && trimmed.endsWith("'")) {
 		return trimmed.slice(1, -1).replace(/''/g, "'");
 	}
 	return trimmed;

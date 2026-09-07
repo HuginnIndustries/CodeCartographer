@@ -9,7 +9,7 @@ import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock, applyHandoff, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
 import type { PhaseHandoff, PipelineFile, StatusFile, WorkspaceState } from "./types.ts";
-import { pathExists } from "./utils.ts";
+import { newlineIfUnterminated, pathExists } from "./utils.ts";
 import { loadYamlFile, stringifySimpleYaml } from "./yaml.ts";
 
 // Walk up from the current file to find the package root. Needed because the
@@ -266,7 +266,14 @@ export async function refreshScaffold(cwd: string): Promise<RefreshScaffoldResul
 		await copyFile(join(packagedWorkspaceDir, relativePath), target);
 	}
 	const entry = `- ${new Date().toISOString().slice(0, 10)} — scaffold-refresh — Refreshed ${files.length} framework-owned file(s) from the packaged template (${scaffoldVersionBefore ?? "unversioned"} → ${PACKAGE_VERSION}); project state, user config, and session outputs untouched.`;
-	await appendFile(join(state.workspaceDir, "THREAD_LOG.md"), `${entry}\n`, "utf8");
+	const threadLogPath = join(state.workspaceDir, "THREAD_LOG.md");
+	let currentLog = "";
+	try {
+		currentLog = await readFile(threadLogPath, "utf8");
+	} catch {
+		// Created by the append when absent (pre-template scaffolds).
+	}
+	await appendFile(threadLogPath, `${newlineIfUnterminated(currentLog)}${entry}\n`, "utf8");
 	return {
 		written: files,
 		...(scaffoldVersionBefore !== undefined && { scaffoldVersionBefore }),
@@ -357,7 +364,7 @@ export async function updateStatusAtomically(
 			const normalizedEntry = result.threadLogEntry.trim();
 			const isDuplicate = logEntries.some((line) => line.trim() === normalizedEntry);
 			if (!isDuplicate) {
-				await appendFile(threadLogPath, result.threadLogEntry, "utf8");
+				await appendFile(threadLogPath, `${newlineIfUnterminated(currentLog)}${normalizedEntry}\n`, "utf8");
 			}
 		}
 
