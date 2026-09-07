@@ -396,3 +396,105 @@ test("handleLibraryReindex rejects on missing marker", async () => {
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+// ─── Provenance conflicts (#148) ───────────────────────────────────────────
+
+// The on-disk shape a pre-guard slug collision left behind: v1 from one
+// project, v2 from another, the index naming only the second. Writing it
+// today takes the explicit override, which is the point of the override.
+async function publishCollidedWhisper(libraryPath) {
+	await handlePublish(basePublishArgs(libraryPath, {
+		slug: "whisper",
+		spec: "# openai whisper\n",
+		source_repo: "https://github.com/openai/whisper",
+	}));
+	await handlePublish(basePublishArgs(libraryPath, {
+		slug: "whisper",
+		spec: "# acme whisper\n",
+		source_repo: "https://github.com/acme/whisper",
+		allow_source_repo_change: true,
+	}));
+}
+
+const expectedWhisperConflict = {
+	slug: "whisper",
+	namespace: "james",
+	latest_version: 2,
+	source_repo: "https://github.com/acme/whisper",
+	disagreeing_versions: [{ version: 1, source_repo: "https://github.com/openai/whisper" }],
+};
+
+test("handleLibraryReindex reports an entry whose versions disagree about source_repo", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await publishCollidedWhisper(libraryPath);
+		await handlePublish(basePublishArgs(libraryPath));
+
+		const result = await handleLibraryReindex({ library_path: libraryPath });
+		const text = result.content[0].text;
+		assert.match(text, /^Reindexed .*: 2 entries across namespaces \[james\]\./m);
+		assert.match(text, /^Provenance conflicts — 1 entry whose versions disagree about source_repo:$/m);
+		assert.match(
+			text,
+			/^  james\/whisper: the index advertises https:\/\/github\.com\/acme\/whisper \(v2\), but v1 records https:\/\/github\.com\/openai\/whisper\.$/m,
+		);
+		assert.match(text, /Repair is manual: split the entry by hand — the framework does not rename or renumber versions, because entry paths are ABI\./);
+		// The healthy entry stays out of the report.
+		assert.doesNotMatch(text, /james\/sample/);
+		assert.deepEqual(result.structuredContent.provenance_conflicts, [expectedWhisperConflict]);
+		assert.equal(result.structuredContent.entry_count, 2);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handleLibraryReindex says nothing about provenance on a healthy library", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await handlePublish(basePublishArgs(libraryPath, { spec: "# v1\n" }));
+		await handlePublish(basePublishArgs(libraryPath, { spec: "# v2\n", source_repo: "git@github.com:myorg/sample.git" }));
+
+		const result = await handleLibraryReindex({ library_path: libraryPath });
+		assert.equal(result.content[0].text, `Reindexed ${libraryPath}: 1 entry across namespaces [james].`);
+		assert.deepEqual(result.structuredContent.provenance_conflicts, []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handleLibraryList flags a conflicted entry and leaves the healthy ones alone", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await publishCollidedWhisper(libraryPath);
+		await handlePublish(basePublishArgs(libraryPath));
+
+		const result = await handleLibraryList({ library_path: libraryPath });
+		const lines = result.content[0].text.split("\n");
+		const whisperLine = lines.find((l) => l.startsWith("  james/whisper v2"));
+		const sampleLine = lines.find((l) => l.startsWith("  james/sample v1"));
+		assert.ok(whisperLine.endsWith(" — PROVENANCE CONFLICT (see below)"), whisperLine);
+		assert.doesNotMatch(sampleLine, /CONFLICT/);
+		assert.match(result.content[0].text, /^Provenance conflicts — 1 entry whose versions disagree about source_repo:$/m);
+		assert.match(result.content[0].text, /v1 records https:\/\/github\.com\/openai\/whisper/);
+		assert.match(result.content[0].text, /Repair is manual/);
+		assert.deepEqual(result.structuredContent.provenance_conflicts, [expectedWhisperConflict]);
+		assert.equal(result.structuredContent.count, 2);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handleLibraryList checks only the entries it lists", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await publishCollidedWhisper(libraryPath);
+		await handlePublish(basePublishArgs(libraryPath));
+
+		const result = await handleLibraryList({ library_path: libraryPath, slug: "sample" });
+		assert.equal(result.structuredContent.count, 1);
+		assert.deepEqual(result.structuredContent.provenance_conflicts, []);
+		assert.doesNotMatch(result.content[0].text, /conflict/i);
+	} finally {
+		await cleanup();
+	}
+});

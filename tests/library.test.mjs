@@ -7,8 +7,10 @@
 // listEntries filters, reindex from a hand-edited tree, malformed
 // metadata graceful fallback, commitPublish in a non-git directory, the
 // source_repo collision guard that stops one project's spec landing in
-// another's version history, and the confidentiality guard that stops an
-// entry landing in a library more widely visible than the entry is.
+// another's version history, the confidentiality guard that stops an
+// entry landing in a library more widely visible than the entry is, and the
+// reindex-time report of entries the collision already merged before the
+// guard existed (#148).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -40,6 +42,7 @@ const {
 	normalizeSourceRepo,
 	sameSourceRepo,
 	ConfidentialityMismatchError,
+	detectProvenanceConflicts,
 } = lib;
 
 async function makeLibrary({ namespaced = true, name = "test-library", visibility = undefined } = {}) {
@@ -998,6 +1001,164 @@ test("the two publish overrides are independent of each other", async () => {
 			allowConfidentialityMismatch: true,
 		});
 		assert.equal(result.version, 2);
+	} finally {
+		await cleanup();
+	}
+});
+
+// ─── Provenance conflicts (#148) ───────────────────────────────────────────
+
+// Reproduce the shape a slug collision left behind before the guard existed:
+// two projects whose source_repo shares a trailing path segment, published
+// into one entry. allowSourceRepoChange is the only way to write that today,
+// and it produces exactly the on-disk state of the original bug — v1's
+// metadata names one repository, v2's names another, the index names v2's.
+async function publishCollidedWhisper(libraryRoot, overrides = {}) {
+	await publishEntry(libraryRoot, "# openai whisper\n", sampleInput({
+		slug: "whisper",
+		source_repo: "https://github.com/openai/whisper",
+		...overrides,
+	}));
+	await publishEntry(libraryRoot, "# acme whisper\n", sampleInput({
+		slug: "whisper",
+		source_repo: "https://github.com/acme/whisper",
+		...overrides,
+	}), { allowSourceRepoChange: true });
+}
+
+test("reindex reports an entry whose versions disagree about source_repo", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishCollidedWhisper(libraryRoot);
+		await publishEntry(libraryRoot, "# healthy\n", sampleInput({ slug: "healthy" }));
+
+		const idx = await reindex(libraryRoot);
+		assert.deepEqual(idx.provenance_conflicts, [{
+			slug: "whisper",
+			namespace: "james",
+			latest_version: 2,
+			source_repo: "https://github.com/acme/whisper",
+			disagreeing_versions: [{ version: 1, source_repo: "https://github.com/openai/whisper" }],
+		}]);
+
+		// The index is exactly what it was before: the entry is still listed,
+		// still attributed to the newest version, and the report never lands
+		// in either derived file — their shapes are ABI.
+		const whisper = idx.entries.find((e) => e.slug === "whisper");
+		assert.deepEqual(whisper.versions, [1, 2]);
+		assert.equal(whisper.source_repo, "https://github.com/acme/whisper");
+		assert.equal(idx.entry_count, 2);
+		const indexYaml = await readFile(join(libraryRoot, LIBRARY_INDEX_FILE), "utf8");
+		assert.doesNotMatch(indexYaml, /provenance_conflicts|disagreeing/);
+		const indexMd = await readFile(join(libraryRoot, LIBRARY_INDEX_MD_FILE), "utf8");
+		assert.doesNotMatch(indexMd, /conflict/i);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("every disagreeing version is reported, in a single-tenant library too", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary({ namespaced: false });
+	try {
+		const openai = { slug: "whisper", namespace: undefined, source_repo: "https://github.com/openai/whisper" };
+		await publishEntry(libraryRoot, "# v1\n", sampleInput(openai));
+		await publishEntry(libraryRoot, "# v2\n", sampleInput(openai));
+		await publishEntry(libraryRoot, "# v3\n", sampleInput({ ...openai, source_repo: "https://github.com/acme/whisper" }), {
+			allowSourceRepoChange: true,
+		});
+
+		const idx = await reindex(libraryRoot);
+		assert.deepEqual(idx.provenance_conflicts, [{
+			slug: "whisper",
+			latest_version: 3,
+			source_repo: "https://github.com/acme/whisper",
+			disagreeing_versions: [
+				{ version: 1, source_repo: "https://github.com/openai/whisper" },
+				{ version: 2, source_repo: "https://github.com/openai/whisper" },
+			],
+		}]);
+		assert.equal("namespace" in idx.provenance_conflicts[0], false);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("reindex reports no conflict when one repository is spelled two ways", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		// No override needed: the publish guard already accepts these as the
+		// same repository, and the report must agree with it.
+		await publishEntry(libraryRoot, "# v1\n", sampleInput({ source_repo: "https://github.com/myorg/hexbridge.git" }));
+		await publishEntry(libraryRoot, "# v2\n", sampleInput({ source_repo: "git@github.com:MyOrg/HexBridge" }));
+
+		const idx = await reindex(libraryRoot);
+		assert.deepEqual(idx.entries.map((e) => e.versions), [[1, 2]]);
+		assert.deepEqual(idx.provenance_conflicts, []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("a version with missing or unreadable metadata is skipped, and reindex still succeeds", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		const openai = { slug: "whisper", source_repo: "https://github.com/openai/whisper" };
+		await publishEntry(libraryRoot, "# v1\n", sampleInput(openai));
+		await publishEntry(libraryRoot, "# v2\n", sampleInput(openai));
+		await publishEntry(libraryRoot, "# v3\n", sampleInput(openai));
+		await publishEntry(libraryRoot, "# v4\n", sampleInput({ ...openai, source_repo: "https://github.com/acme/whisper" }), {
+			allowSourceRepoChange: true,
+		});
+		const entryDir = join(libraryRoot, ENTRIES_DIR, "james", "whisper");
+		await writeFile(join(entryDir, "v1", METADATA_FILE), ":::not valid yaml:::\n", "utf8");
+		await rm(join(entryDir, "v2", METADATA_FILE));
+
+		// Neither the corrupt v1 nor the metadata-less v2 is reported or fatal;
+		// v3 still is, because it can be read and it disagrees.
+		const idx = await reindex(libraryRoot);
+		assert.equal(idx.entries.length, 1);
+		assert.deepEqual(idx.entries[0].versions, [1, 2, 3, 4]);
+		assert.deepEqual(idx.provenance_conflicts[0].disagreeing_versions, [
+			{ version: 3, source_repo: "https://github.com/openai/whisper" },
+		]);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("an entry whose newest metadata is unreadable is not checked — there is nothing to compare against", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishCollidedWhisper(libraryRoot);
+		await writeFile(join(libraryRoot, ENTRIES_DIR, "james", "whisper", "v2", METADATA_FILE), ":::not valid yaml:::\n", "utf8");
+
+		// buildIndexEntry already drops the entry; the direct check reaches the
+		// same answer for the same reason.
+		const idx = await reindex(libraryRoot);
+		assert.deepEqual(idx.entries, []);
+		assert.deepEqual(idx.provenance_conflicts, []);
+		assert.deepEqual(await detectProvenanceConflicts(libraryRoot, [{ slug: "whisper", namespace: "james" }]), []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("detectProvenanceConflicts is read-only and works from index entries", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishCollidedWhisper(libraryRoot);
+		await publishEntry(libraryRoot, "# healthy\n", sampleInput({ slug: "healthy" }));
+		const entries = await listEntries(libraryRoot);
+		await rm(join(libraryRoot, LIBRARY_INDEX_FILE));
+		await rm(join(libraryRoot, LIBRARY_INDEX_MD_FILE));
+
+		const conflicts = await detectProvenanceConflicts(libraryRoot, entries);
+		assert.deepEqual(conflicts.map((c) => c.slug), ["whisper"]);
+		// Only the entries handed in are checked — the list tool passes its
+		// filtered set — and nothing was regenerated along the way.
+		assert.deepEqual(await detectProvenanceConflicts(libraryRoot, entries.filter((e) => e.slug === "healthy")), []);
+		await assert.rejects(readFile(join(libraryRoot, LIBRARY_INDEX_FILE), "utf8"), { code: "ENOENT" });
+		await assert.rejects(readFile(join(libraryRoot, LIBRARY_INDEX_MD_FILE), "utf8"), { code: "ENOENT" });
 	} finally {
 		await cleanup();
 	}

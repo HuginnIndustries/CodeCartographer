@@ -46,6 +46,7 @@ import {
 	discoverLibrary,
 
 	describeScaffoldStaleness,
+	detectProvenanceConflicts,
 	type EntryGeneration,
 	estimateSubmitText,
 	type GuideDocument,
@@ -77,6 +78,7 @@ import {
 	PhasePreflightError,
 	PIPELINE_ALIASES,
 	type PipelineFile,
+	type ProvenanceConflict,
 	publishEntry,
 	reindex as libraryReindex,
 	refreshScaffold,
@@ -618,6 +620,38 @@ async function resolveDefaultsFromWorkspace(
 	return { pipeline, namespace };
 }
 
+// ---------- library provenance reporting ----------
+
+function conflictEntryLabel(conflict: ProvenanceConflict): string {
+	return conflict.namespace ? `${conflict.namespace}/${conflict.slug}` : conflict.slug;
+}
+
+/**
+ * The report block appended to the list and reindex text results when an
+ * entry's versions disagree about source_repo (#148). Empty when there is
+ * nothing to report, so a healthy library's output does not change. Repair
+ * is manual by design: the framework does not rename or renumber versions,
+ * because entry paths are ABI.
+ */
+function provenanceConflictLines(conflicts: ProvenanceConflict[]): string[] {
+	if (conflicts.length === 0) return [];
+	const lines = [
+		"",
+		`Provenance conflicts — ${conflicts.length} ${conflicts.length === 1 ? "entry" : "entries"} whose versions disagree about source_repo:`,
+	];
+	for (const conflict of conflicts) {
+		const others = conflict.disagreeing_versions
+			.map((v) => `v${v.version} records ${v.source_repo}`)
+			.join("; ");
+		lines.push(`  ${conflictEntryLabel(conflict)}: the index advertises ${conflict.source_repo} (v${conflict.latest_version}), but ${others}.`);
+	}
+	lines.push(
+		"These entries were merged by a slug collision before publish refused cross-project appends, so each version history spans more than one codebase (a repository that genuinely moved and was re-published with allow_source_repo_change leaves the same shape).",
+		"Repair is manual: split the entry by hand — the framework does not rename or renumber versions, because entry paths are ABI.",
+	);
+	return lines;
+}
+
 // ---------- library handlers ----------
 
 export async function handlePublish(args: Record<string, unknown>) {
@@ -742,6 +776,10 @@ export async function handleLibraryList(args: Record<string, unknown>) {
 	if (typeof args.source_repo === "string" && args.source_repo !== "") filter.source_repo = args.source_repo;
 
 	const entries = await listEntries(libraryPath, filter);
+	// Computed over the listed entries only, read-only: one readdir per entry
+	// plus one small metadata read per older version.
+	const conflicts = await detectProvenanceConflicts(libraryPath, entries);
+	const conflicted = new Set(conflicts.map((c) => `${c.namespace ?? ""}/${c.slug}`));
 	const summary = entries.length === 0
 		? `No entries match the filter in ${libraryPath}.`
 		: [
@@ -749,8 +787,10 @@ export async function handleLibraryList(args: Record<string, unknown>) {
 			...entries.map((e: LibraryIndexEntry) => {
 				const ns = e.namespace ? `${e.namespace}/` : "";
 				const tags = e.tags.length > 0 ? ` [${e.tags.slice(0, 4).join(", ")}${e.tags.length > 4 ? ", ..." : ""}]` : "";
-				return `  ${ns}${e.slug} v${e.latest_version} — ${e.headline}${tags}`;
+				const flag = conflicted.has(`${e.namespace ?? ""}/${e.slug}`) ? " — PROVENANCE CONFLICT (see below)" : "";
+				return `  ${ns}${e.slug} v${e.latest_version} — ${e.headline}${tags}${flag}`;
 			}),
+			...provenanceConflictLines(conflicts),
 		].join("\n");
 
 	return textResult(summary, {
@@ -759,6 +799,7 @@ export async function handleLibraryList(args: Record<string, unknown>) {
 		namespaced: marker.namespaced,
 		count: entries.length,
 		entries,
+		provenance_conflicts: conflicts,
 	});
 }
 
@@ -774,12 +815,16 @@ export async function handleLibraryReindex(args: Record<string, unknown>) {
 	const index = await libraryReindex(libraryPath);
 	const namespaces = index.namespaces.length > 0 ? index.namespaces.join(", ") : "(none)";
 	return textResult(
-		`Reindexed ${libraryPath}: ${index.entry_count} ${index.entry_count === 1 ? "entry" : "entries"} across namespaces [${namespaces}].`,
+		[
+			`Reindexed ${libraryPath}: ${index.entry_count} ${index.entry_count === 1 ? "entry" : "entries"} across namespaces [${namespaces}].`,
+			...provenanceConflictLines(index.provenance_conflicts),
+		].join("\n"),
 		{
 			libraryPath,
 			libraryName: index.library_name,
 			entry_count: index.entry_count,
 			namespaces: index.namespaces,
+			provenance_conflicts: index.provenance_conflicts,
 		},
 	);
 }
@@ -1320,7 +1365,7 @@ const TOOLS = [
 	{
 		name: "codecarto_library_list",
 		description:
-			"List entries in a CodeCartographer library, optionally filtered by namespace, tag, slug, or source_repo. The library is identified by library_path (absolute) or by cwd's config.yaml.",
+			"List entries in a CodeCartographer library, optionally filtered by namespace, tag, slug, or source_repo. The library is identified by library_path (absolute) or by cwd's config.yaml. Flags entries whose versions disagree about source_repo (merged by a slug collision before publish refused cross-project appends); repair is manual.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -1336,7 +1381,7 @@ const TOOLS = [
 	{
 		name: "codecarto_library_reindex",
 		description:
-			"Regenerate index.yaml and INDEX.md for a CodeCartographer library from filesystem state. Use after manual edits or to resolve a git merge conflict on index.yaml.",
+			"Regenerate index.yaml and INDEX.md for a CodeCartographer library from filesystem state. Use after manual edits or to resolve a git merge conflict on index.yaml. Also reports entries whose versions disagree about source_repo (merged by a slug collision before publish refused cross-project appends); the index files are not changed and repair is manual.",
 		inputSchema: {
 			type: "object",
 			properties: {

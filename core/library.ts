@@ -20,6 +20,10 @@
 //    Treat both as derived artifacts; never hand-edit. Resolution
 //    recipe for git merge conflicts is documented in
 //    docs/library-format.md.
+//  - reindex also reports, on its return value and never in the index
+//    files, entries whose versions disagree about source_repo — the shape
+//    a slug collision left behind before publish refused cross-project
+//    appends. Repair is manual; see the "Provenance conflicts" section.
 //  - Git operations (`commitPublish`) shell out to the `git` binary.
 //    Failures are non-fatal — the caller decides how to surface them.
 
@@ -123,6 +127,33 @@ export interface LibraryIndex {
 	entry_count: number;
 	namespaces: string[];
 	entries: LibraryIndexEntry[];
+}
+
+/** One older version whose recorded source_repo names a different repository than the newest version's. */
+export interface ProvenanceConflictVersion {
+	version: number;
+	source_repo: string;
+}
+
+/** An entry whose version history spans more than one repository. */
+export interface ProvenanceConflict {
+	slug: string;
+	namespace?: string;
+	/** The newest version — the one whose metadata the index reports for the whole entry. */
+	latest_version: number;
+	/** The source_repo recorded on the newest version, i.e. what index.yaml advertises. */
+	source_repo: string;
+	/** Older versions that disagree with it, ascending. Versions with missing or unreadable metadata are skipped. */
+	disagreeing_versions: ProvenanceConflictVersion[];
+}
+
+/**
+ * What `reindex` returns: the index it wrote, plus findings that ride on the
+ * return value only. `provenance_conflicts` is never serialized into
+ * index.yaml or INDEX.md — both shapes are ABI (docs/library-format.md).
+ */
+export interface ReindexResult extends LibraryIndex {
+	provenance_conflicts: ProvenanceConflict[];
 }
 
 // ─── Marker / discovery ─────────────────────────────────────────────────────
@@ -320,10 +351,11 @@ export function sameSourceRepo(a: string, b: string): boolean {
 }
 
 /**
- * The `source_repo` recorded on an entry's newest version, or null when it
+ * The `source_repo` recorded on one version of an entry, or null when it
  * cannot be determined (no metadata, unreadable, or malformed). Null means
  * "unknown", and callers treat unknown as permission to proceed rather than
- * as a mismatch.
+ * as a mismatch — the publish guard lets the publish through, and conflict
+ * detection skips the version.
  */
 async function readRecordedSourceRepo(
 	libraryRoot: string,
@@ -801,7 +833,7 @@ export async function listEntries(
 
 // ─── Reindex ────────────────────────────────────────────────────────────────
 
-export async function reindex(libraryRoot: string): Promise<LibraryIndex> {
+export async function reindex(libraryRoot: string): Promise<ReindexResult> {
 	const marker = await readMarker(libraryRoot);
 	if (!marker) {
 		throw new Error(`Not a CodeCartographer library: ${LIBRARY_MARKER_FILE} missing at ${libraryRoot}`);
@@ -856,7 +888,11 @@ export async function reindex(libraryRoot: string): Promise<LibraryIndex> {
 
 	await atomicWriteYaml(join(libraryRoot, LIBRARY_INDEX_FILE), index);
 	await writeIndexMarkdown(libraryRoot, index, marker);
-	return index;
+
+	// Reported, not written. The index files above are ABI, so the conflict
+	// list travels on the return value only (see ReindexResult).
+	const provenance_conflicts = await detectProvenanceConflicts(libraryRoot, entries);
+	return { ...index, provenance_conflicts };
 }
 
 async function buildIndexEntry(
@@ -990,6 +1026,75 @@ function escapeMd(value: string): string {
 	// turn the emitted `\|` into a literal-backslash-plus-cell-delimiter and
 	// break out of the table cell (code scanning alert #3).
 	return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
+// ─── Provenance conflicts ───────────────────────────────────────────────────
+//
+// Before publish refused cross-project appends (#123), two projects whose
+// source_repo shared a trailing path segment derived the same slug, and the
+// second publish landed as the next version of the first project's entry.
+// Nothing rewrites those entries after the fact: the index reads only the
+// newest version's metadata, so it advertises every version under whichever
+// project published last, and a synthesis run reading the entry gets one
+// project's spec history presented as another's (#148). Detection reads every
+// version and reports the disagreement. Repair is deliberately manual —
+// splitting an entry means inventing a slug, renumbering versions and
+// repointing `latest`, all of which are paths docs/library-format.md calls
+// ABI — so nothing here renames, renumbers, or moves anything.
+
+/**
+ * Read-only check over the given entries: does every version of each entry
+ * record the same repository as its newest version? Comparison goes through
+ * `sameSourceRepo`, so spellings of one repository (scheme, `.git`, SCP
+ * syntax, casing where safe) do not count as disagreement. A version whose
+ * metadata is missing, unreadable, or lacks `source_repo` is skipped rather
+ * than reported — the stance the publish guard takes — and an entry whose
+ * newest version is unreadable is skipped entirely, since there is nothing to
+ * compare against. Never writes.
+ *
+ * A repository that genuinely moved and was re-published with
+ * `allowSourceRepoChange` leaves the same on-disk shape as a collision and is
+ * reported the same way; the history alone cannot tell the two apart.
+ */
+export async function detectProvenanceConflicts(
+	libraryRoot: string,
+	entries: ReadonlyArray<Pick<LibraryIndexEntry, "slug" | "namespace">>,
+): Promise<ProvenanceConflict[]> {
+	const conflicts: ProvenanceConflict[] = [];
+	for (const entry of entries) {
+		const conflict = await findProvenanceConflict(libraryRoot, entry.namespace, entry.slug);
+		if (conflict) conflicts.push(conflict);
+	}
+	return conflicts;
+}
+
+async function findProvenanceConflict(
+	libraryRoot: string,
+	namespace: string | undefined,
+	slug: string,
+): Promise<ProvenanceConflict | null> {
+	const versions = await listVersionDirs(entryRoot(libraryRoot, namespace, slug));
+	if (versions.length < 2) return null;
+	const latest = versions[versions.length - 1]!;
+	const latestRepo = await readRecordedSourceRepo(libraryRoot, namespace, slug, latest);
+	if (latestRepo === null) return null;
+
+	const disagreeing: ProvenanceConflictVersion[] = [];
+	for (const version of versions.slice(0, -1)) {
+		const recorded = await readRecordedSourceRepo(libraryRoot, namespace, slug, version);
+		if (recorded === null) continue;
+		if (!sameSourceRepo(recorded, latestRepo)) disagreeing.push({ version, source_repo: recorded });
+	}
+	if (disagreeing.length === 0) return null;
+
+	const conflict: ProvenanceConflict = {
+		slug,
+		latest_version: latest,
+		source_repo: latestRepo,
+		disagreeing_versions: disagreeing,
+	};
+	if (namespace) conflict.namespace = namespace;
+	return conflict;
 }
 
 // ─── Atomic YAML write ──────────────────────────────────────────────────────

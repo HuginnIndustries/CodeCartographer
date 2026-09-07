@@ -327,6 +327,22 @@ If `latest` is missing or dangling, fall back to the highest-numbered
 `v<N>` directory present. CodeCartographer treats a dangling `latest`
 as a recoverable error: `codecarto library-reindex` repairs it.
 
+Reindex also reads every `v<N>/metadata.yaml` and compares each recorded
+`source_repo` against the newest version's (normalized as in "Source repo
+conflicts" below). An entry whose versions disagree is reported on the
+reindex result and flagged by `codecarto_library_list` — never written
+into `index.yaml` or `INDEX.md`, whose shapes are stable. Such an entry is
+what a slug collision left behind before publish refused cross-project
+appends: two repositories sharing a trailing path segment
+(`openai/whisper`, `acme/whisper`) derived one slug, the second landed as
+the next version of the first, and the index attributes both codebases to
+whichever published last. A version whose metadata is missing or
+unreadable is skipped rather than reported. Repair is manual — split the
+entry by hand — because inventing a slug, renumbering versions, and
+repointing `latest` would change paths this document treats as ABI. A
+repository that genuinely moved and was re-published with the source-repo
+override leaves the same shape and is reported the same way.
+
 ## Idempotence and version increments
 
 `codecarto publish` is idempotent on content:
