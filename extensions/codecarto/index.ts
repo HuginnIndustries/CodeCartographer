@@ -913,7 +913,9 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						lenses,
 						model: config.model,
 						maxCost: flags.maxCost ?? config.maxCost,
-						incremental: flags.incremental || config.incremental,
+						// `??`, not `||`: --no-incremental parses to false and must beat a
+						// config-set true, exactly as MCP's `incremental: false` does (#163).
+						incremental: flags.incremental ?? config.incremental,
 						// Pi can ask, so it asks instead of refusing over max_cost the
 						// way MCP has to. An approval here IS the force flag.
 						confirm: (estimate) =>
