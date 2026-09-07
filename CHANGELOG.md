@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Security
+
+- **The `@earendil-works/pi-coding-agent` peer range is now a floor, `>=0.84.0`.** The old `^0.80.10` pinned the 0.80 minor (caret on a 0.x version), so an `npm install codecartographer-pi` auto-installed pi-coding-agent 0.80.x — whose `undici` 8.x dependency carries five high-severity advisories (response desynchronization, cross-user cache disclosure, CRLF injection, cookie attribute injection: GHSA-8xcm-r25x-g524, GHSA-4cwx-7wf7-3272, GHSA-m8rv-5g2x-5cg5, GHSA-jr45-8vmc-qm54, GHSA-v3r7-h72x-cjcm) — while the user's own `pi` (0.85.x) sat outside the range. This repository was already clean through its own `undici` override, but overrides do not travel to consumers; the peer range does. pi-coding-agent 0.84.0+ depends on undici 8.9.0, past the affected `8.0.0–8.8.0` range. The lockfile moves to 0.85.1 and the suite passes against it. Consumers who see the advisory should update `@earendil-works/pi-coding-agent` (or `pi update`) — not run `npm audit fix --force`, which downgrades codecartographer-pi to 0.10.0.
+
 ## [0.17.0] — 2026-09-06
 
 The Broad-Side round. Batch reconnaissance grew from an MCP-only tool into a first-class capability on every executable surface: a Pi command with an interactive spend gate, a `scout-first` pipeline variant that routes leads into the interactive phases under an account-for-every-lead criterion, per-lens model overrides, incremental re-scouting, and repository defaults for every run knob — plus the paper trail (README, MANUAL, MCP quickstart, served guide topic, and a reachable reading guide) that the seven feature PRs had left behind. Ships with the workspace-init isolation fix and the publish source-repo collision guard.
