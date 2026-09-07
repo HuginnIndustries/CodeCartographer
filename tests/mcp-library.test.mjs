@@ -16,6 +16,13 @@ const { handlePublish, handleLibraryList, handleLibraryReindex } = await import(
 const { writeMarker, LIBRARY_MARKER_FILE, LIBRARY_INDEX_FILE, ENTRIES_DIR, METADATA_FILE, SPEC_FILE, ConfidentialityMismatchError } = await import(pathToFileURL(`${REPO_ROOT}/core/library.ts`).href);
 const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
 
+// handlePublish reads the user-global config for its publish_confirm gate.
+// Point that at a path which does not exist so the developer's real
+// ~/.codecarto/config.yaml (which library-init writes publish_confirm: true
+// into) cannot leak into these tests. node --test runs each file in its own
+// process, so this cannot leak out either.
+process.env.CODECARTO_USER_CONFIG_PATH = join(tmpdir(), `cc-mcp-lib-no-user-config-${process.pid}`, "config.yaml");
+
 async function makeLib({ namespaced = true, name = "mcp-test-lib", visibility = undefined } = {}) {
 	const dir = await mkdtemp(join(tmpdir(), "cc-mcp-lib-"));
 	await writeMarker(dir, { schema_version: 1, name, namespaced, ...(visibility ? { visibility } : {}) });
@@ -313,6 +320,228 @@ test("handlePublish only honours a boolean true as the confidentiality override"
 			handlePublish(basePublishArgs(libraryPath, { confidentiality: "internal", allow_confidentiality_mismatch: "true" })),
 			ConfidentialityMismatchError,
 		);
+	} finally {
+		await cleanup();
+	}
+});
+
+// ─── handlePublish: the publish_confirm gate (#162) ────────────────────────
+
+/** Run `fn` with the user-global config set to `content` (or absent when undefined). */
+async function withUserConfig(content, fn) {
+	const previous = process.env.CODECARTO_USER_CONFIG_PATH;
+	const dir = await mkdtemp(join(tmpdir(), "cc-mcp-userconfig-"));
+	const path = join(dir, "config.yaml");
+	if (content !== undefined) await writeFile(path, content, "utf8");
+	process.env.CODECARTO_USER_CONFIG_PATH = path;
+	try {
+		return await fn();
+	} finally {
+		process.env.CODECARTO_USER_CONFIG_PATH = previous;
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+/** A workspace whose .codecarto/workflow/config.yaml holds `content`. */
+async function makeWorkspace(content) {
+	const cwd = await mkdtemp(join(tmpdir(), "cc-mcp-ws-"));
+	await mkdir(join(cwd, ".codecarto", "workflow"), { recursive: true });
+	await writeFile(join(cwd, ".codecarto", "workflow", "config.yaml"), content, "utf8");
+	return { cwd, cleanup: () => rm(cwd, { recursive: true, force: true }) };
+}
+
+const GATE_ON = "library:\n  publish_confirm: true\n";
+const GATE_OFF = "library:\n  publish_confirm: false\n";
+
+function assertPublishConfirmRefusal(error) {
+	// The shape codecarto_broadside's spend gate has: an InvalidRequest whose
+	// message is the whole story, so a host that reads only the error text
+	// still sees the preview and the way forward.
+	assert.ok(error instanceof McpError);
+	assert.equal(error.code, ErrorCode.InvalidRequest);
+	assert.match(error.message, /library\.publish_confirm is set/);
+	assert.match(error.message, /Nothing was written/);
+	assert.match(error.message, /confirm: true/);
+	assert.equal(error.data.refused, "publish_confirm");
+	return true;
+}
+
+test("handlePublish refuses without confirm when publish_confirm is configured, previews, and writes nothing", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await withUserConfig(GATE_ON, async () => {
+			await assert.rejects(
+				handlePublish(basePublishArgs(libraryPath)),
+				(error) => {
+					assertPublishConfirmRefusal(error);
+					// The preview is what Pi's dialog shows: where, what, and which
+					// branch of the version history it would take.
+					assert.match(error.message, new RegExp(`Would publish james/sample to ${libraryPath}`));
+					assert.match(error.message, /Version: v1 \(first version of a new entry\)/);
+					assert.match(error.message, /Source repo: https:\/\/github\.com\/myorg\/sample/);
+					assert.match(error.message, /Headline: Sample library entry\./);
+					assert.match(error.message, /Confidentiality: internal \(the default; none declared\)/);
+					assert.match(error.message, /Spec: inline \(\d+ characters\)/);
+					assert.deepEqual(
+						{ ...error.data },
+						{
+							refused: "publish_confirm",
+							libraryPath,
+							namespace: "james",
+							slug: "sample",
+							version: 1,
+							isNewVersion: true,
+							latestVersion: 0,
+							source_repo: "https://github.com/myorg/sample",
+							headline: "Sample library entry.",
+							confidentiality: null,
+						},
+					);
+					return true;
+				},
+			);
+		});
+		assert.deepEqual(await readdir(libraryPath), [LIBRARY_MARKER_FILE], "a refusal must write nothing, not even an index");
+	} finally {
+		await cleanup();
+	}
+});
+
+test("the publish_confirm preview tells a metadata-only update from a new version", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await withUserConfig(GATE_ON, async () => {
+			const first = await handlePublish(basePublishArgs(libraryPath, { confirm: true }));
+			assert.equal(first.structuredContent.version, 1);
+
+			await assert.rejects(
+				handlePublish(basePublishArgs(libraryPath, { tags: ["retagged"] })),
+				(error) => {
+					assertPublishConfirmRefusal(error);
+					assert.match(error.message, /Version: v1 \(metadata-only update; the content hash matches the newest version\)/);
+					assert.equal(error.data.isNewVersion, false);
+					assert.equal(error.data.latestVersion, 1);
+					return true;
+				},
+			);
+			await assert.rejects(
+				handlePublish(basePublishArgs(libraryPath, { spec: "# changed\n" })),
+				(error) => {
+					assertPublishConfirmRefusal(error);
+					assert.match(error.message, /Version: v2 \(new content version; the newest is v1\)/);
+					assert.deepEqual([error.data.version, error.data.isNewVersion], [2, true]);
+					return true;
+				},
+			);
+			await assert.rejects(
+				handlePublish(basePublishArgs(libraryPath, { force_new_version: true })),
+				(error) => {
+					assertPublishConfirmRefusal(error);
+					assert.match(error.message, /Version: v2 \(new content version/, "force_new_version is part of what would happen");
+					return true;
+				},
+			);
+			// Nothing above changed the library: the retag never landed.
+			const meta = await readFile(join(libraryPath, ENTRIES_DIR, "james", "sample", "v1", METADATA_FILE), "utf8");
+			assert.doesNotMatch(meta, /retagged/);
+			assert.deepEqual(await readdir(join(libraryPath, ENTRIES_DIR, "james", "sample")), ["latest", "v1"]);
+		});
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handlePublish with confirm: true publishes through a configured gate", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await withUserConfig(GATE_ON, async () => {
+			const result = await handlePublish(basePublishArgs(libraryPath, { confirm: true, spec_path: undefined }));
+			assert.equal(result.structuredContent.version, 1);
+			assert.match(result.content[0].text, /Published james\/sample v1/);
+		});
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handlePublish only honours a boolean true as the confirmation", async () => {
+	// Same rule as every other flag on this tool: `=== true`. A host that
+	// passes the string "true" has not confirmed anything.
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await withUserConfig(GATE_ON, async () => {
+			await assert.rejects(handlePublish(basePublishArgs(libraryPath, { confirm: "true" })), assertPublishConfirmRefusal);
+		});
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handlePublish is not gated when publish_confirm is unset or false", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		// Unset: the loader defaults publish_confirm to true, but that default
+		// drives Pi's dialog; a host that never configured the key keeps the
+		// behavior it had. No config file at all is the common MCP shape.
+		await withUserConfig(undefined, async () => {
+			const result = await handlePublish(basePublishArgs(libraryPath, { slug: "unset" }));
+			assert.equal(result.structuredContent.version, 1);
+		});
+		// A file that sets other keys but not this one is still "unset".
+		await withUserConfig("library:\n  namespace: james\n", async () => {
+			const result = await handlePublish(basePublishArgs(libraryPath, { slug: "other-keys" }));
+			assert.equal(result.structuredContent.version, 1);
+		});
+		await withUserConfig(GATE_OFF, async () => {
+			const result = await handlePublish(basePublishArgs(libraryPath, { slug: "off" }));
+			assert.equal(result.structuredContent.version, 1);
+			// confirm: true is harmless when nothing asks for it.
+			const again = await handlePublish(basePublishArgs(libraryPath, { slug: "off-confirmed", confirm: true }));
+			assert.equal(again.structuredContent.version, 1);
+		});
+	} finally {
+		await cleanup();
+	}
+});
+
+test("the gate reads the same layered config codecarto_config reports for a cwd", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	const on = await makeWorkspace(GATE_ON);
+	const off = await makeWorkspace(GATE_OFF);
+	try {
+		// Workspace sets it, user-global does not: gated.
+		await withUserConfig(undefined, async () => {
+			await assert.rejects(handlePublish(basePublishArgs(libraryPath, { cwd: on.cwd })), assertPublishConfirmRefusal);
+		});
+		// User-global sets true, workspace overrides with false: not gated.
+		await withUserConfig(GATE_ON, async () => {
+			const result = await handlePublish(basePublishArgs(libraryPath, { cwd: off.cwd }));
+			assert.equal(result.structuredContent.version, 1);
+		});
+		// User-global sets false, workspace overrides with true: gated.
+		await withUserConfig(GATE_OFF, async () => {
+			await assert.rejects(handlePublish(basePublishArgs(libraryPath, { cwd: on.cwd, spec: "# v2\n" })), assertPublishConfirmRefusal);
+		});
+	} finally {
+		await on.cleanup();
+		await off.cleanup();
+		await cleanup();
+	}
+});
+
+test("the gate runs after argument validation, so a refusal previews a publish that would succeed", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await withUserConfig(GATE_ON, async () => {
+			const args = basePublishArgs(libraryPath);
+			delete args.headline;
+			await assert.rejects(handlePublish(args), (error) => {
+				assert.ok(error instanceof McpError);
+				assert.equal(error.code, ErrorCode.InvalidParams, "a bad argument is reported as such, not hidden behind the gate");
+				assert.match(error.message, /headline/);
+				return true;
+			});
+		});
 	} finally {
 		await cleanup();
 	}

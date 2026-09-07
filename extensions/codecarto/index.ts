@@ -71,10 +71,13 @@ import {
 	PIPELINE_ALIASES,
 	publishEntry,
 	type PublishInput,
+	type PublishOptions,
 	type PublishResult,
 	type PipelineFile,
 	resolvePhase,
 	resolvePipelineChoice,
+	resolvePublishSourceRepo,
+	SourceRepoMismatchError,
 	runPhasePreflight,
 	SCAFFOLD_REFRESH_PROTECTED,
 	seedOrchestratorFiles,
@@ -1236,17 +1239,21 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			}
 
 			const spec = await readFile(specPath, "utf8");
-			const slug = deriveSlug(ctx.cwd);
+			// The git remote when there is one, the directory otherwise (#147).
+			// Slug and source_repo derive from the same value so they agree.
+			const source = await resolvePublishSourceRepo(ctx.cwd);
+			const slug = deriveSlug(source.source_repo);
 			const headline = derivePublishHeadline(spec, ctx.cwd);
 			const namespace = marker.namespaced ? config.library.namespace ?? undefined : undefined;
 			if (marker.namespaced && !namespace) {
 				ctx.ui.notify("The configured library is namespaced; set library.namespace before publishing.", "error");
 				return;
 			}
+			const label = `${namespace ? `${namespace}/` : ""}${slug}`;
 
 			const preview = [
-				`Publish ${namespace ? `${namespace}/` : ""}${slug} to ${config.library.path}`,
-				`Source: ${ctx.cwd}`,
+				`Publish ${label} to ${config.library.path}`,
+				`Source: ${source.source_repo}${source.remote ? ` (git remote ${source.remote})` : ""}`,
 				`Spec: .codecarto/${phase.primary_output}`,
 				`Headline: ${headline}`,
 				`Provenance: Pi / ${ctx.model?.provider ?? "unknown"} / ${ctx.model?.id ?? "unknown"}`,
@@ -1256,7 +1263,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const input: PublishInput = {
 				slug,
 				namespace,
-				source_repo: ctx.cwd,
+				source_repo: source.source_repo,
 				analyzed_at: new Date().toISOString(),
 				pipeline: state.status.pipeline,
 				codecarto_version: PACKAGE_VERSION,
@@ -1267,23 +1274,47 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			};
 
 			try {
-				let result: PublishResult;
-				try {
-					result = await publishEntry(config.library.path, spec, input);
-				} catch (error) {
-					if (!(error instanceof ConfidentialityMismatchError)) throw error;
-					// Nothing was written. Pi declares no confidentiality, so the entry
-					// sits at the internal default; whether it may go into a wider
-					// library is the user's call, and a yes is the override.
-					const publishAnyway = await ctx.ui.confirm(
-						"Confidentiality mismatch — publish anyway?",
-						`This spec's confidentiality is "${error.entryConfidentiality}" (CodeCartographer's default; /codecarto-publish declares none), but the library "${marker.name}" has visibility "${error.libraryVisibility}". Publishing would expose it to everyone that library reaches. Publish anyway?`,
-					);
-					if (!publishAnyway) {
-						ctx.ui.notify("Publish cancelled. Nothing was written.", "info");
-						return;
+				// Both guards in publishEntry raise before anything is written, and
+				// each asks a question only the user can answer, so the command has
+				// no flags for them: a yes is the override. The options accumulate,
+				// so a publish that trips both guards asks both questions in turn.
+				const options: PublishOptions = {};
+				let result: PublishResult | undefined;
+				while (!result) {
+					try {
+						result = await publishEntry(config.library.path, spec, input, options);
+					} catch (error) {
+						if (error instanceof SourceRepoMismatchError && !options.allowSourceRepoChange) {
+							// The entry's history belongs to whatever the newest version
+							// records. Appending is right only if that repository and this
+							// one are the same project under a new address (#146) — which
+							// includes the first publish after upgrading from a Pi that
+							// recorded the directory to one that records the git remote.
+							const moved = await ctx.ui.confirm(
+								"Source repository changed — did it move?",
+								`Library entry ${label} records source_repo "${error.recorded}", but this publish carries "${error.incoming}". If the repository genuinely moved (rename, org transfer, host change — or this is the first publish since CodeCartographer began recording the git remote instead of the local directory), answer yes and this spec is appended as the entry's next version. If these are two different projects that share a directory name, answer no: nothing is written, and the second project needs a distinct slug (codecarto_publish on MCP accepts one). Did the repository move?`,
+							);
+							if (!moved) {
+								ctx.ui.notify("Publish cancelled. Nothing was written.", "info");
+								return;
+							}
+							options.allowSourceRepoChange = true;
+						} else if (error instanceof ConfidentialityMismatchError && !options.allowConfidentialityMismatch) {
+							// Pi declares no confidentiality, so the entry sits at the internal
+							// default; whether it may go into a wider library is the user's call.
+							const publishAnyway = await ctx.ui.confirm(
+								"Confidentiality mismatch — publish anyway?",
+								`This spec's confidentiality is "${error.entryConfidentiality}" (CodeCartographer's default; /codecarto-publish declares none), but the library "${marker.name}" has visibility "${error.libraryVisibility}". Publishing would expose it to everyone that library reaches. Publish anyway?`,
+							);
+							if (!publishAnyway) {
+								ctx.ui.notify("Publish cancelled. Nothing was written.", "info");
+								return;
+							}
+							options.allowConfidentialityMismatch = true;
+						} else {
+							throw error;
+						}
 					}
-					result = await publishEntry(config.library.path, spec, input, { allowConfidentialityMismatch: true });
 				}
 				lastFeedbackLines = [`Published ${result.namespace ? `${result.namespace}/` : ""}${result.slug} v${result.version}`, result.isNewVersion ? "New content version." : "Metadata-only update (content unchanged)."];
 				await writeDashboard(ctx.cwd, PACKAGE_VERSION);

@@ -10,16 +10,20 @@
 // metadata graceful fallback, commitPublish in a non-git directory, the
 // source_repo collision guard that stops one project's spec landing in
 // another's version history, the confidentiality guard that stops an
-// entry landing in a library more widely visible than the entry is, and the
+// entry landing in a library more widely visible than the entry is, the
 // reindex-time report of entries the collision already merged before the
-// guard existed (#148).
+// guard existed (#148), the read-only version preview the MCP publish_confirm
+// gate describes a publish with (#162), and the git-remote resolver the Pi
+// command records source_repo from (#147).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const lib = await import(pathToFileURL(`${REPO_ROOT}/core/library.ts`).href);
@@ -44,8 +48,18 @@ const {
 	normalizeSourceRepo,
 	sameSourceRepo,
 	ConfidentialityMismatchError,
+	SourceRepoMismatchError,
 	detectProvenanceConflicts,
+	previewPublishVersion,
+	resolvePublishSourceRepo,
 } = lib;
+
+const execFileAsync = promisify(execFile);
+
+async function git(dir, ...args) {
+	const { stdout } = await execFileAsync("git", ["-C", dir, ...args]);
+	return stdout;
+}
 
 async function makeLibrary({ namespaced = true, name = "test-library", visibility = undefined } = {}) {
 	const dir = await mkdtemp(join(tmpdir(), "codecarto-library-"));
@@ -107,6 +121,27 @@ test("deriveSlug strips .git suffix and lowercases", () => {
 	// Empty / weird input still produces a valid slug.
 	const empty = deriveSlug("///");
 	assert.equal(isValidSlug(empty), true);
+});
+
+test("deriveSlug gives a clone's remote and its checkout directory the same slug", () => {
+	// Pi switched from recording the analyzed directory to recording the git
+	// remote (#147). The slug derives from whichever it records, so every
+	// spelling of the remote has to land where the directory did, or the
+	// upgrade would rename everyone's entry instead of appending to it.
+	const fromDirectory = deriveSlug("/home/me/work/whisper");
+	assert.equal(fromDirectory, "whisper");
+	for (const spelling of [
+		"https://github.com/acme/whisper.git",
+		"https://github.com/acme/whisper/",
+		"ssh://git@github.com/acme/whisper",
+		"git@github.com:acme/whisper.git",
+		// A repository at the root of an SSH host has no slash anywhere.
+		"git@host:whisper.git",
+		"file:///srv/git/whisper.git",
+		"C:\\repos\\whisper",
+	]) {
+		assert.equal(deriveSlug(spelling), fromDirectory, spelling);
+	}
 });
 
 // ─── Marker / discovery ────────────────────────────────────────────────────
@@ -744,9 +779,141 @@ test("the refusal names where the override actually lives", async () => {
 				assert.match(err.message, /allow_source_repo_change/);
 				assert.match(err.message, /allowSourceRepoChange/);
 				assert.doesNotMatch(err.message, /Pass an explicit/);
+				// Typed, and carrying both values, so Pi can ask "did the repository
+				// move?" from the values rather than by parsing this message (#146).
+				assert.ok(err instanceof SourceRepoMismatchError);
+				assert.equal(err.name, "SourceRepoMismatchError");
+				assert.equal(err.recorded, "https://github.com/openai/whisper");
+				assert.equal(err.incoming, "https://github.com/acme/whisper");
 				return true;
 			},
 		);
+	} finally {
+		await cleanup();
+	}
+});
+
+// ─── previewPublishVersion ─────────────────────────────────────────────────
+
+test("previewPublishVersion predicts the version publishEntry then lands on", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	const ref = { slug: "hexbridge", namespace: "james" };
+	try {
+		assert.deepEqual(await previewPublishVersion(libraryRoot, "# v1\n", ref), { latestVersion: 0, version: 1, isNewVersion: true });
+		assert.deepEqual(await readdir(libraryRoot), [LIBRARY_MARKER_FILE], "a preview writes nothing");
+
+		const first = await publishEntry(libraryRoot, "# v1\n", sampleInput());
+		assert.equal(first.version, 1);
+
+		// Same bytes: the metadata-only branch. Different bytes: a new version.
+		// Force: a new version even for the same bytes. Each matches what
+		// publishEntry does with the same input because publishEntry asks it.
+		assert.deepEqual(await previewPublishVersion(libraryRoot, "# v1\n", ref), { latestVersion: 1, version: 1, isNewVersion: false });
+		assert.deepEqual(await previewPublishVersion(libraryRoot, "# v2\n", ref), { latestVersion: 1, version: 2, isNewVersion: true });
+		assert.deepEqual(await previewPublishVersion(libraryRoot, "# v1\n", ref, { forceNewVersion: true }), { latestVersion: 1, version: 2, isNewVersion: true });
+
+		const same = await publishEntry(libraryRoot, "# v1\n", sampleInput());
+		assert.deepEqual([same.version, same.isNewVersion], [1, false]);
+		const changed = await publishEntry(libraryRoot, "# v2\n", sampleInput());
+		assert.deepEqual([changed.version, changed.isNewVersion], [2, true]);
+	} finally {
+		await cleanup();
+	}
+});
+
+// ─── resolvePublishSourceRepo ──────────────────────────────────────────────
+
+async function tempDir(prefix) {
+	const dir = await mkdtemp(join(tmpdir(), prefix));
+	return { dir, cleanup: () => rm(dir, { recursive: true, force: true }) };
+}
+
+test("resolvePublishSourceRepo records origin's fetch URL verbatim", async () => {
+	const { dir, cleanup } = await tempDir("cc-src-origin-");
+	try {
+		await git(dir, "init", "-q");
+		await git(dir, "remote", "add", "origin", "git@github.com:Acme/Tool.git");
+		const resolved = await resolvePublishSourceRepo(dir);
+		// Verbatim: case, .git suffix and SCP syntax all kept. Spellings are
+		// reconciled at comparison time by sameSourceRepo, not on the way in.
+		assert.deepEqual(resolved, { source_repo: "git@github.com:Acme/Tool.git", remote: "origin" });
+	} finally {
+		await cleanup();
+	}
+});
+
+test("resolvePublishSourceRepo falls back to the remote the current branch tracks", async () => {
+	const { dir, cleanup } = await tempDir("cc-src-upstream-");
+	try {
+		await git(dir, "init", "-q");
+		await git(dir, "symbolic-ref", "HEAD", "refs/heads/main");
+		await git(dir, "remote", "add", "upstream", "https://example.com/acme/tool.git");
+		await git(dir, "config", "branch.main.remote", "upstream");
+		await git(dir, "config", "branch.main.merge", "refs/heads/main");
+		assert.deepEqual(await resolvePublishSourceRepo(dir), { source_repo: "https://example.com/acme/tool.git", remote: "upstream" });
+
+		// origin outranks the tracked remote once it exists.
+		await git(dir, "remote", "add", "origin", "https://example.com/me/tool.git");
+		assert.deepEqual(await resolvePublishSourceRepo(dir), { source_repo: "https://example.com/me/tool.git", remote: "origin" });
+	} finally {
+		await cleanup();
+	}
+});
+
+test("resolvePublishSourceRepo records the directory when there is nothing better", async () => {
+	const { dir, cleanup } = await tempDir("cc-src-none-");
+	try {
+		// Not a git repository at all.
+		assert.deepEqual(await resolvePublishSourceRepo(dir), { source_repo: dir, remote: null });
+
+		// A repository with no remote.
+		await git(dir, "init", "-q");
+		assert.deepEqual(await resolvePublishSourceRepo(dir), { source_repo: dir, remote: null });
+
+		// A branch tracking another local branch has a "." remote and no URL.
+		await git(dir, "symbolic-ref", "HEAD", "refs/heads/topic");
+		await git(dir, "config", "branch.topic.remote", ".");
+		await git(dir, "config", "branch.topic.merge", "refs/heads/main");
+		assert.deepEqual(await resolvePublishSourceRepo(dir), { source_repo: dir, remote: null });
+	} finally {
+		await cleanup();
+	}
+});
+
+test("resolvePublishSourceRepo keeps a subdirectory of a work tree on its own path", async () => {
+	// Every subdirectory of one repository would otherwise resolve to the same
+	// URL and slug, and the second published would land as a new version of
+	// the first with no guard able to tell — the append the guard exists to
+	// refuse. The directory is what the analysis actually covered.
+	const { dir, cleanup } = await tempDir("cc-src-subdir-");
+	try {
+		await git(dir, "init", "-q");
+		await git(dir, "remote", "add", "origin", "https://github.com/acme/monorepo.git");
+		const sub = join(dir, "packages", "whisper");
+		await mkdir(sub, { recursive: true });
+		assert.deepEqual(await resolvePublishSourceRepo(sub), { source_repo: sub, remote: null });
+		assert.equal(deriveSlug((await resolvePublishSourceRepo(sub)).source_repo), "whisper");
+		// The root itself still resolves.
+		assert.equal((await resolvePublishSourceRepo(dir)).remote, "origin");
+	} finally {
+		await cleanup();
+	}
+});
+
+test("resolvePublishSourceRepo sees through a symlink to the work tree root", async () => {
+	// git reports the real path of the top level; the comparison has to
+	// canonicalize the caller's path too, or a symlinked checkout (macOS's
+	// /tmp, a ~/work -> /data/work link) would read as a subdirectory.
+	const { dir, cleanup } = await tempDir("cc-src-link-");
+	try {
+		const repo = join(dir, "repo");
+		await mkdir(repo);
+		await git(repo, "init", "-q");
+		await git(repo, "remote", "add", "origin", "https://github.com/acme/tool.git");
+		const link = join(dir, "link");
+		await symlink(repo, link, "dir");
+		assert.deepEqual(await resolvePublishSourceRepo(link), { source_repo: "https://github.com/acme/tool.git", remote: "origin" });
+		assert.equal(basename(link), "link", "the fixture is the symlink, not the target");
 	} finally {
 		await cleanup();
 	}
