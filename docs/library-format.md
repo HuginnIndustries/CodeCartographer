@@ -319,10 +319,12 @@ ignored and are not preserved on rewrite.
 
 Hand edits to `headline`, `tags` and `capabilities` are picked up by the
 next reindex, but they do not survive a re-publish: a later publish of
-identical spec bytes rewrites the version's `metadata.yaml` wholesale
-from the incoming publish (see "Idempotence and version increments").
-Neither surface passes `provenance` on publish, so that rewrite also
-drops the `provenance` block the version's original publish wrote.
+identical spec bytes rewrites the version's `metadata.yaml` from the
+incoming publish (see "Idempotence and version increments"). The
+exception is `provenance`: the in-place rewrite preserves the version's
+recorded `provenance` block unless the publish supplies a new one, so a
+re-publish from either surface — neither passes `provenance` — leaves
+the block the version's original publish wrote in place.
 
 ## Generation capture matrix
 
@@ -458,18 +460,20 @@ _Generated 2026-05-14T19:02:00.000Z. Do not edit by hand — regenerate with `co
 
 | Slug | Latest | Headline | Tags |
 |---|---|---|---|
-| [hexbridge](entries/james/hexbridge/latest/) | v2 | Bridge service that fans out events from Kafka into per-tenant Redis streams with lag-based backpressure. | event-routing, multi-tenant, kafka, redis, backpressure |
-| [payment-router](entries/james/payment-router/latest/) | v1 | ... | ... |
+| [hexbridge](entries/james/hexbridge/v2/) | v2 | Bridge service that fans out events from Kafka into per-tenant Redis streams with lag-based backpressure. | event-routing, multi-tenant, kafka, redis, backpressure |
+| [payment-router](entries/james/payment-router/v1/) | v1 | ... | ... |
 ```
 
 The heading carries the marker's `name`. A namespaced library gets one
 `## <namespace> (N entries)` section per namespace, in sorted order; a
 single-tenant library gets a single table directly under the summary
-line, with rows linking to `entries/<slug>/latest/`. Every tag is listed;
+line, with rows linking to `entries/<slug>/v<N>/`. Every tag is listed;
 `|` and `\` in headlines and tags are escaped and newlines are collapsed
-to spaces. Note that the row link targets the `latest/` path, and
-`latest` is a file rather than a directory (see "Version directories"),
-so on a forge the link lands on the pointer, not on a version directory.
+to spaces. Each row links to the entry's newest version directory,
+`v<N>/` where `N` is its `latest_version`, rather than to `latest`: the
+pointer is a regular file, not a directory or symlink (see "Version
+directories"), so a link to `latest/` has no directory to land on when
+the library is browsed on a forge.
 
 ## Version resolution
 
@@ -510,8 +514,9 @@ this order:
 3. Unless a new version is forced: if the highest-numbered version
    directory holds a `reimplementation-spec.md` whose SHA-256 equals
    that of the incoming spec, rewrite that version's `metadata.yaml`
-   wholesale from the incoming publish (version number retained),
-   regenerate `index.yaml` + `INDEX.md`, and report a metadata-only
+   from the incoming publish (version number retained; the recorded
+   `provenance` block is carried forward unless the publish supplies
+   one), regenerate `index.yaml` + `INDEX.md`, and report a metadata-only
    update. The comparison is against the highest-numbered directory,
    not the `latest` pointer.
 4. Otherwise stage `reimplementation-spec.md` and `metadata.yaml` in a

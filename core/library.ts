@@ -15,7 +15,8 @@
 //  - publishEntry is content-hash idempotent: re-publishing the same
 //    spec bytes does not create a new version. Metadata-only changes
 //    (headline, tags, capabilities) update the existing latest
-//    metadata.yaml in place.
+//    metadata.yaml in place; the version's recorded provenance is
+//    carried forward unless the publish supplies its own.
 //  - reindex regenerates index.yaml and INDEX.md from filesystem state.
 //    Treat both as derived artifacts; never hand-edit. Resolution
 //    recipe for git merge conflicts is documented in
@@ -375,6 +376,30 @@ async function readRecordedSourceRepo(
 	}
 }
 
+/**
+ * The `provenance` block recorded on one version of an entry, or undefined
+ * when there is none to carry forward (no metadata, unreadable, malformed,
+ * or a version that never had the block — a hand-built entry, say). The
+ * metadata-only publish branch uses this so an identical re-publish, which
+ * neither surface sends `provenance` with, rewrites `metadata.yaml` without
+ * dropping what the version's original publish recorded.
+ */
+async function readRecordedProvenance(
+	libraryRoot: string,
+	namespace: string | undefined,
+	slug: string,
+	version: number,
+): Promise<EntryProvenance | undefined> {
+	const metaPath = join(versionDir(libraryRoot, namespace, slug, version), METADATA_FILE);
+	if (!(await pathExists(metaPath))) return undefined;
+	try {
+		const raw = parseSimpleYaml(await readFile(metaPath, "utf8"));
+		return normalizeMetadata(raw, { slug, namespace, version }).provenance;
+	} catch {
+		return undefined;
+	}
+}
+
 // ─── Path helpers ───────────────────────────────────────────────────────────
 
 function entryRoot(libraryRoot: string, namespace: string | undefined, slug: string): string {
@@ -576,7 +601,11 @@ export async function publishEntry(
 		if (await pathExists(latestSpecPath)) {
 			const existingSpec = await readFile(latestSpecPath, "utf8");
 			if (sha256(existingSpec) === newSpecHash) {
-				const metadata = buildMetadata(input, latestVersion);
+				// buildMetadata writes provenance only when the input carries it, and
+				// neither surface sends it on publish — so without this the rewrite
+				// would drop the block the version's original publish recorded.
+				const provenance = input.provenance ?? (await readRecordedProvenance(libraryRoot, namespace, input.slug, latestVersion));
+				const metadata = buildMetadata({ ...input, provenance }, latestVersion);
 				await atomicWriteYaml(join(latestVersionDir, METADATA_FILE), metadata);
 				if (!opts.skipReindex) await reindex(libraryRoot);
 				return {
@@ -974,7 +1003,10 @@ async function writeIndexMarkdown(libraryRoot: string, index: LibraryIndex, mark
 	lines.push("");
 	lines.push(`_Generated ${index.generated_at}. Do not edit by hand — regenerate with \`codecarto library-reindex\`._`);
 	lines.push("");
-	lines.push(`**${index.entry_count} ${index.entry_count === 1 ? "entry" : "entries"}** across ${index.namespaces.length || 1} ${index.namespaces.length === 1 ? "namespace" : "namespaces"}.`);
+	// A single-tenant library has no namespaces but is still one namespace's
+	// worth of entries; count once so the noun agrees with the number shown.
+	const namespaceCount = index.namespaces.length || 1;
+	lines.push(`**${index.entry_count} ${index.entry_count === 1 ? "entry" : "entries"}** across ${namespaceCount} ${namespaceCount === 1 ? "namespace" : "namespaces"}.`);
 	lines.push("");
 
 	if (marker.namespaced) {
@@ -1014,7 +1046,11 @@ async function writeIndexMarkdown(libraryRoot: string, index: LibraryIndex, mark
 }
 
 function formatIndexRow(e: LibraryIndexEntry, namespaced: boolean): string {
-	const pathPart = namespaced && e.namespace ? `${ENTRIES_DIR}/${e.namespace}/${e.slug}/latest/` : `${ENTRIES_DIR}/${e.slug}/latest/`;
+	// Link to the newest version directory, not `latest/`: the pointer is a
+	// one-line regular file (see the module header), so a `latest/` link has
+	// nothing to land on when the library is browsed on a forge.
+	const entryPath = namespaced && e.namespace ? `${ENTRIES_DIR}/${e.namespace}/${e.slug}` : `${ENTRIES_DIR}/${e.slug}`;
+	const pathPart = `${entryPath}/v${e.latest_version}/`;
 	const slugLink = `[${escapeMd(e.slug)}](${pathPart})`;
 	const headline = escapeMd(e.headline).replace(/\n+/g, " ");
 	const tags = e.tags.length === 0 ? "" : e.tags.map(escapeMd).join(", ");
