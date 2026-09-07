@@ -5,13 +5,14 @@
 // content-hash idempotence, force-new-version override, namespacing
 // (on and off), slug validation, readEntry (latest + specific version),
 // listEntries filters, reindex from a hand-edited tree, malformed
-// metadata graceful fallback, commitPublish in a non-git directory, and the
+// metadata graceful fallback, commitPublish in a non-git directory, the
 // source_repo collision guard that stops one project's spec landing in
-// another's version history.
+// another's version history, and the confidentiality guard that stops an
+// entry landing in a library more widely visible than the entry is.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,14 +39,16 @@ const {
 	commitPublish,
 	normalizeSourceRepo,
 	sameSourceRepo,
+	ConfidentialityMismatchError,
 } = lib;
 
-async function makeLibrary({ namespaced = true, name = "test-library" } = {}) {
+async function makeLibrary({ namespaced = true, name = "test-library", visibility = undefined } = {}) {
 	const dir = await mkdtemp(join(tmpdir(), "codecarto-library-"));
 	await writeMarker(dir, {
 		schema_version: 1,
 		name,
 		namespaced,
+		...(visibility ? { visibility } : {}),
 	});
 	return { libraryRoot: dir, cleanup: () => rm(dir, { recursive: true, force: true }) };
 }
@@ -777,6 +780,224 @@ test("forceNewVersion does not bypass the collision guard", async () => {
 			),
 			/Refusing to publish/,
 		);
+	} finally {
+		await cleanup();
+	}
+});
+
+// ─── Confidentiality vs library visibility ─────────────────────────────────
+
+// Least to most widely visible. An entry may sit in a library at or below its
+// own level; one above it would expose the entry to everyone the library reaches.
+const VISIBILITY_LEVELS = ["internal", "shared", "public"];
+const leaksInto = (confidentiality, libraryVisibility) =>
+	VISIBILITY_LEVELS.indexOf(confidentiality) < VISIBILITY_LEVELS.indexOf(libraryVisibility);
+
+test("exactly three of the nine level combinations leak", () => {
+	// Pins the matrix the loop below runs against, so a change to the ordering
+	// cannot silently turn the nine generated tests into a different rule.
+	const leaking = [];
+	for (const libraryVisibility of VISIBILITY_LEVELS) {
+		for (const confidentiality of VISIBILITY_LEVELS) {
+			if (leaksInto(confidentiality, libraryVisibility)) leaking.push(`${confidentiality} -> ${libraryVisibility}`);
+		}
+	}
+	assert.deepEqual(leaking, ["internal -> shared", "internal -> public", "shared -> public"]);
+});
+
+const article = (word) => (/^[aeiou]/.test(word) ? "an" : "a");
+
+for (const libraryVisibility of VISIBILITY_LEVELS) {
+	for (const confidentiality of VISIBILITY_LEVELS) {
+		const leaks = leaksInto(confidentiality, libraryVisibility);
+		test(`${article(confidentiality)} ${confidentiality} entry into ${article(libraryVisibility)} ${libraryVisibility} library ${leaks ? "is refused" : "publishes"}`, async () => {
+			const { libraryRoot, cleanup } = await makeLibrary({ visibility: libraryVisibility });
+			try {
+				const publish = () => publishEntry(libraryRoot, "# spec\n", sampleInput({ confidentiality }));
+				if (leaks) {
+					await assert.rejects(publish, ConfidentialityMismatchError);
+				} else {
+					const result = await publish();
+					assert.equal(result.version, 1);
+					const entry = await readEntry(libraryRoot, { slug: "hexbridge", namespace: "james" });
+					assert.equal(entry.metadata.confidentiality, confidentiality);
+				}
+			} finally {
+				await cleanup();
+			}
+		});
+	}
+}
+
+test("a marker with no visibility is treated as internal", async () => {
+	// No visibility field is the shape every marker had before the field
+	// mattered. Internal is the floor, so every level lands and nothing that
+	// published before is refused now.
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		for (const confidentiality of [undefined, ...VISIBILITY_LEVELS]) {
+			const slug = `entry-${confidentiality ?? "unset"}`;
+			const result = await publishEntry(libraryRoot, "# spec\n", sampleInput({ slug, confidentiality }));
+			assert.equal(result.version, 1);
+		}
+	} finally {
+		await cleanup();
+	}
+});
+
+test("an entry with no declared confidentiality is treated as internal", async () => {
+	// The documented default. Pi never declares one, so this is the shape a Pi
+	// publish into a shared or public library takes.
+	const { libraryRoot, cleanup } = await makeLibrary({ visibility: "public" });
+	try {
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# spec\n", sampleInput({ confidentiality: undefined })),
+			(err) => {
+				assert.ok(err instanceof ConfidentialityMismatchError);
+				assert.equal(err.entryConfidentiality, "internal");
+				assert.equal(err.libraryVisibility, "public");
+				assert.match(err.message, /the default when none is declared/);
+				return true;
+			},
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("the confidentiality refusal names both levels and where the override lives", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary({ name: "team-shelf", visibility: "shared" });
+	try {
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# spec\n", sampleInput({ confidentiality: "internal" })),
+			(err) => {
+				assert.equal(err.name, "ConfidentialityMismatchError");
+				assert.match(err.message, /^Refusing to publish/);
+				assert.match(err.message, /entry "james\/hexbridge" has confidentiality "internal"/);
+				assert.doesNotMatch(err.message, /the default when none is declared/);
+				assert.match(err.message, /library "team-shelf" has visibility "shared"/);
+				// Both spellings, for the same reason the collision guard gives both:
+				// the reader may be on either surface, and Pi's command takes no
+				// arguments, so the message must not tell them to "pass" anything.
+				assert.match(err.message, /allow_confidentiality_mismatch/);
+				assert.match(err.message, /allowConfidentialityMismatch/);
+				assert.doesNotMatch(err.message, /Pass an explicit/);
+				return true;
+			},
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("a confidentiality refusal writes nothing to a fresh library", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary({ visibility: "public" });
+	try {
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# spec\n", sampleInput({ confidentiality: "internal" })),
+			ConfidentialityMismatchError,
+		);
+		// No entries tree, no index, no staging leftovers: only the marker.
+		assert.deepEqual(await readdir(libraryRoot), [LIBRARY_MARKER_FILE]);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("a confidentiality refusal leaves an existing entry untouched", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary({ visibility: "shared" });
+	try {
+		await publishEntry(libraryRoot, "# v1\n", sampleInput({ confidentiality: "shared" }));
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# v2\n", sampleInput({ confidentiality: "internal", headline: "Reclassified." })),
+			ConfidentialityMismatchError,
+		);
+		const entryDir = join(libraryRoot, ENTRIES_DIR, "james", "hexbridge");
+		assert.deepEqual((await readdir(entryDir)).sort(), [LATEST_POINTER_FILE, "v1"]);
+		const entry = await readEntry(libraryRoot, { slug: "hexbridge", namespace: "james" });
+		assert.equal(entry.metadata.confidentiality, "shared");
+		assert.equal(entry.metadata.headline, sampleInput().headline);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("the confidentiality guard also covers the metadata-only path", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary({ visibility: "public" });
+	try {
+		const spec = "# identical bytes\n";
+		await publishEntry(libraryRoot, spec, sampleInput({ confidentiality: "public" }));
+		// Identical bytes would otherwise take the in-place metadata branch and
+		// quietly stamp an internal classification onto a public library's entry.
+		await assert.rejects(
+			() => publishEntry(libraryRoot, spec, sampleInput({ confidentiality: "internal" })),
+			ConfidentialityMismatchError,
+		);
+		const entry = await readEntry(libraryRoot, { slug: "hexbridge", namespace: "james" });
+		assert.equal(entry.metadata.confidentiality, "public");
+	} finally {
+		await cleanup();
+	}
+});
+
+test("allowConfidentialityMismatch publishes the entry anyway", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary({ visibility: "public" });
+	try {
+		const result = await publishEntry(
+			libraryRoot,
+			"# spec\n",
+			sampleInput({ confidentiality: "internal" }),
+			{ allowConfidentialityMismatch: true },
+		);
+		assert.equal(result.version, 1);
+		// The override permits the placement; it does not reclassify the entry.
+		const entry = await readEntry(libraryRoot, { slug: "hexbridge", namespace: "james" });
+		assert.equal(entry.metadata.confidentiality, "internal");
+	} finally {
+		await cleanup();
+	}
+});
+
+test("forceNewVersion does not bypass the confidentiality guard", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary({ visibility: "public" });
+	try {
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# spec\n", sampleInput({ confidentiality: "internal" }), { forceNewVersion: true }),
+			ConfidentialityMismatchError,
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("the two publish overrides are independent of each other", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary({ visibility: "public" });
+	try {
+		await publishEntry(libraryRoot, "# v1\n", sampleInput({
+			confidentiality: "public",
+			source_repo: "https://github.com/oldorg/hexbridge",
+		}));
+		const moved = sampleInput({ confidentiality: "internal", source_repo: "https://github.com/neworg/hexbridge" });
+
+		// Allowing the repo change still trips the confidentiality guard...
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# v2\n", moved, { allowSourceRepoChange: true }),
+			ConfidentialityMismatchError,
+		);
+		// ...and allowing the mismatch still trips the collision guard.
+		await assert.rejects(
+			() => publishEntry(libraryRoot, "# v2\n", moved, { allowConfidentialityMismatch: true }),
+			(err) => {
+				assert.ok(!(err instanceof ConfidentialityMismatchError));
+				assert.match(err.message, /source_repo/);
+				return true;
+			},
+		);
+		const result = await publishEntry(libraryRoot, "# v2\n", moved, {
+			allowSourceRepoChange: true,
+			allowConfidentialityMismatch: true,
+		});
+		assert.equal(result.version, 2);
 	} finally {
 		await cleanup();
 	}

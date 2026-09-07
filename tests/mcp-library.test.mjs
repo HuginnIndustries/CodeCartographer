@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,12 +13,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const { handlePublish, handleLibraryList, handleLibraryReindex } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
-const { writeMarker, LIBRARY_INDEX_FILE, ENTRIES_DIR, METADATA_FILE, SPEC_FILE } = await import(pathToFileURL(`${REPO_ROOT}/core/library.ts`).href);
+const { writeMarker, LIBRARY_MARKER_FILE, LIBRARY_INDEX_FILE, ENTRIES_DIR, METADATA_FILE, SPEC_FILE, ConfidentialityMismatchError } = await import(pathToFileURL(`${REPO_ROOT}/core/library.ts`).href);
 const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
 
-async function makeLib({ namespaced = true, name = "mcp-test-lib" } = {}) {
+async function makeLib({ namespaced = true, name = "mcp-test-lib", visibility = undefined } = {}) {
 	const dir = await mkdtemp(join(tmpdir(), "cc-mcp-lib-"));
-	await writeMarker(dir, { schema_version: 1, name, namespaced });
+	await writeMarker(dir, { schema_version: 1, name, namespaced, ...(visibility ? { visibility } : {}) });
 	return { libraryPath: dir, cleanup: () => rm(dir, { recursive: true, force: true }) };
 }
 
@@ -241,6 +241,81 @@ test("handlePublish rejects without library_path or cwd config", async () => {
 			return true;
 		},
 	);
+});
+
+// ─── handlePublish: confidentiality vs library visibility ──────────────────
+
+test("handlePublish refuses an internal entry into a public library and writes nothing", async () => {
+	const { libraryPath, cleanup } = await makeLib({ visibility: "public" });
+	try {
+		await assert.rejects(
+			handlePublish(basePublishArgs(libraryPath, { confidentiality: "internal" })),
+			(error) => {
+				// Surfaced as the core's typed error, not rewrapped: the server's
+				// CallTool handler turns any non-McpError into an InternalError that
+				// keeps this message, and the message names the override.
+				assert.ok(error instanceof ConfidentialityMismatchError);
+				assert.equal(error.entryConfidentiality, "internal");
+				assert.equal(error.libraryVisibility, "public");
+				assert.match(error.message, /allow_confidentiality_mismatch/);
+				return true;
+			},
+		);
+		assert.deepEqual(await readdir(libraryPath), [LIBRARY_MARKER_FILE]);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handlePublish treats an omitted confidentiality as internal", async () => {
+	const { libraryPath, cleanup } = await makeLib({ visibility: "shared" });
+	try {
+		// basePublishArgs carries no confidentiality — the common MCP call shape.
+		await assert.rejects(handlePublish(basePublishArgs(libraryPath)), ConfidentialityMismatchError);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handlePublish accepts an entry at or above the library's visibility", async () => {
+	const { libraryPath, cleanup } = await makeLib({ visibility: "shared" });
+	try {
+		const same = await handlePublish(basePublishArgs(libraryPath, { slug: "same-level", confidentiality: "shared" }));
+		assert.equal(same.structuredContent.version, 1);
+		const wider = await handlePublish(basePublishArgs(libraryPath, { slug: "wider", confidentiality: "public" }));
+		assert.equal(wider.structuredContent.version, 1);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handlePublish allow_confidentiality_mismatch publishes anyway without reclassifying", async () => {
+	const { libraryPath, cleanup } = await makeLib({ visibility: "public" });
+	try {
+		const result = await handlePublish(basePublishArgs(libraryPath, {
+			confidentiality: "internal",
+			allow_confidentiality_mismatch: true,
+		}));
+		assert.equal(result.structuredContent.version, 1);
+		const meta = await readFile(join(libraryPath, ENTRIES_DIR, "james", "sample", "v1", METADATA_FILE), "utf8");
+		assert.match(meta, /^confidentiality: internal$/m);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("handlePublish only honours a boolean true as the confidentiality override", async () => {
+	// Same shape as allow_source_repo_change: the flag is `=== true`, so a
+	// host that passes the string "true" has not opted in.
+	const { libraryPath, cleanup } = await makeLib({ visibility: "public" });
+	try {
+		await assert.rejects(
+			handlePublish(basePublishArgs(libraryPath, { confidentiality: "internal", allow_confidentiality_mismatch: "true" })),
+			ConfidentialityMismatchError,
+		);
+	} finally {
+		await cleanup();
+	}
 });
 
 // ─── handleLibraryList ─────────────────────────────────────────────────────

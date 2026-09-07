@@ -20,6 +20,7 @@ import {
 	copyPackagedWorkspace,
 	computePerPhaseTotals,
 	computeTotals,
+	ConfidentialityMismatchError,
 	createEmptyStatus,
 	DEFAULT_PIPELINE_PATH,
 	describeScaffoldStaleness,
@@ -59,6 +60,8 @@ import {
 	type PhasePreflightResult,
 	PIPELINE_ALIASES,
 	publishEntry,
+	type PublishInput,
+	type PublishResult,
 	type PipelineFile,
 	resolvePhase,
 	resolvePipelineChoice,
@@ -1031,19 +1034,38 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			].join("\n");
 			if (config.library.publish_confirm && !(await ctx.ui.confirm("Publish reimplementation spec", preview))) return;
 
+			const input: PublishInput = {
+				slug,
+				namespace,
+				source_repo: ctx.cwd,
+				analyzed_at: new Date().toISOString(),
+				pipeline: state.status.pipeline,
+				codecarto_version: PACKAGE_VERSION,
+				headline,
+				tags: [],
+				capabilities: [],
+				generation: piGeneration(ctx),
+			};
+
 			try {
-				const result = await publishEntry(config.library.path, spec, {
-					slug,
-					namespace,
-					source_repo: ctx.cwd,
-					analyzed_at: new Date().toISOString(),
-					pipeline: state.status.pipeline,
-					codecarto_version: PACKAGE_VERSION,
-					headline,
-					tags: [],
-					capabilities: [],
-					generation: piGeneration(ctx),
-				});
+				let result: PublishResult;
+				try {
+					result = await publishEntry(config.library.path, spec, input);
+				} catch (error) {
+					if (!(error instanceof ConfidentialityMismatchError)) throw error;
+					// Nothing was written. Pi declares no confidentiality, so the entry
+					// sits at the internal default; whether it may go into a wider
+					// library is the user's call, and a yes is the override.
+					const publishAnyway = await ctx.ui.confirm(
+						"Confidentiality mismatch — publish anyway?",
+						`This spec's confidentiality is "${error.entryConfidentiality}" (CodeCartographer's default; /codecarto-publish declares none), but the library "${marker.name}" has visibility "${error.libraryVisibility}". Publishing would expose it to everyone that library reaches. Publish anyway?`,
+					);
+					if (!publishAnyway) {
+						ctx.ui.notify("Publish cancelled. Nothing was written.", "info");
+						return;
+					}
+					result = await publishEntry(config.library.path, spec, input, { allowConfidentialityMismatch: true });
+				}
 				lastFeedbackLines = [`Published ${result.namespace ? `${result.namespace}/` : ""}${result.slug} v${result.version}`, result.isNewVersion ? "New content version." : "Metadata-only update (content unchanged)."];
 				await writeDashboard(ctx.cwd, PACKAGE_VERSION);
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);
