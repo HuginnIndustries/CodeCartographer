@@ -4,6 +4,12 @@
 // and amendment rebuilds them so closure counts never go stale. The failure
 // this pins: two full runs ended at a dead-end message with every
 // post-pipeline surface unused.
+//
+// Every tool a routing line names is spelled for both executable surfaces —
+// the MCP tool name and the Pi slash command — because the same strings render
+// in codecarto_status on MCP and as the Pi widget's "Next:" line, and a Pi user
+// handed only the MCP name has nothing to run (the sibling of #177's scaffold
+// notice fix).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -19,6 +25,22 @@ const { handleInit, handleComplete, handleAmend } = await import(pathToFileURL(`
 let WORKSPACE;
 let CODECARTO;
 
+const piName = (tool) => `/codecarto-${tool.replaceAll("_", "-")}`;
+const mcpName = (tool) => `codecarto_${tool}`;
+/** The line names the tool for both surfaces. */
+const namesBoth = (line, tool) => line.includes(mcpName(tool)) && line.includes(piName(tool));
+/** The line names the tool on either surface (for asserting absence). */
+const namesEither = (line, tool) => line.includes(mcpName(tool)) || line.includes(piName(tool));
+
+/** No routing line may name an MCP tool without its Pi slash command beside it. */
+function assertEveryToolSpelledForBothSurfaces(lines) {
+	for (const line of lines) {
+		for (const [, tool] of line.matchAll(/\bcodecarto_([a-z_]+)/g)) {
+			assert.ok(line.includes(piName(tool)), `${mcpName(tool)} is named for MCP only in: ${line}`);
+		}
+	}
+}
+
 test("unit: the builder names each surface exactly when it applies", () => {
 	const base = {
 		phases: {
@@ -27,11 +49,12 @@ test("unit: the builder names each surface exactly when it applies", () => {
 		post_pipeline: [],
 	};
 	const quiet = core.buildTerminalNextActions(base);
-	assert.match(quiet[0], /codecarto_list_skills/);
-	assert.ok(!quiet.some((line) => line.includes("codecarto_amend")), "no amend line without pending work");
-	assert.ok(!quiet.some((line) => line.includes("codecarto_publish")), "no publish line without a spec phase");
-	assert.match(quiet.at(-1), /codecarto_dashboard/);
-	assert.match(quiet.at(-1), /codecarto_usage/);
+	assert.ok(namesBoth(quiet[0], "list_skills") && namesBoth(quiet[0], "skill"), `skills routing on both surfaces, got: ${quiet[0]}`);
+	assert.ok(!quiet.some((line) => namesEither(line, "amend")), "no amend line without pending work");
+	assert.ok(!quiet.some((line) => namesEither(line, "publish")), "no publish line without a spec phase");
+	assert.ok(namesBoth(quiet.at(-1), "dashboard"), `dashboard on both surfaces, got: ${quiet.at(-1)}`);
+	assert.ok(namesBoth(quiet.at(-1), "usage"), `usage on both surfaces, got: ${quiet.at(-1)}`);
+	assertEveryToolSpelledForBothSurfaces(quiet);
 
 	const busy = {
 		phases: {
@@ -41,8 +64,15 @@ test("unit: the builder names each surface exactly when it applies", () => {
 		post_pipeline: [{ id: "pp-1" }],
 	};
 	const routed = core.buildTerminalNextActions(busy);
-	assert.ok(routed.some((line) => line.includes("2 open question(s) and 1 post-pipeline item(s)") && line.includes("codecarto_amend")));
-	assert.ok(routed.some((line) => line.includes("codecarto_publish")));
+	assert.ok(routed.some((line) => line.includes("2 open question(s) and 1 post-pipeline item(s)") && namesBoth(line, "amend")));
+	assert.ok(routed.some((line) => namesBoth(line, "publish") && namesBoth(line, "library_init")));
+	assertEveryToolSpelledForBothSurfaces(routed);
+});
+
+test("unit: the Pi widget's Next: line (next_actions[0]) leads with the terminal state and stays one sentence-pair", () => {
+	const [first] = core.buildTerminalNextActions({ phases: {}, post_pipeline: [] });
+	assert.ok(first.startsWith("All phases complete."), first);
+	assert.match(first, /codecarto_list_skills then codecarto_skill on MCP, \/codecarto-list-skills then \/codecarto-skill on Pi\.$/);
 });
 
 test("setup: complete a pipeline with pending work", async () => {
@@ -83,21 +113,26 @@ test("setup: complete a pipeline with pending work", async () => {
 	await handleComplete({ cwd: WORKSPACE });
 });
 
-test("terminal next_actions route to skills, amend with live counts, and the dashboard", async () => {
+test("terminal next_actions route to skills, amend with live counts, and the dashboard, naming both surfaces", async () => {
 	const state = await core.getWorkspaceState(WORKSPACE);
 	const actions = state.status.next_actions;
-	assert.match(actions[0], /codecarto_list_skills/);
-	assert.ok(actions.some((line) => line.includes("1 open question(s) and 1 post-pipeline item(s)") && line.includes("codecarto_amend")), `amend routing with live counts, got: ${JSON.stringify(actions)}`);
-	assert.ok(!actions.some((line) => line.includes("codecarto_publish")), "architecture-only produces no spec; no publish line");
-	assert.ok(actions.some((line) => line.includes("codecarto_dashboard") && line.includes("codecarto_usage")));
+	assert.ok(namesBoth(actions[0], "list_skills"), `skills routing on both surfaces, got: ${actions[0]}`);
+	assert.ok(actions.some((line) => line.includes("1 open question(s) and 1 post-pipeline item(s)") && namesBoth(line, "amend")), `amend routing with live counts, got: ${JSON.stringify(actions)}`);
+	assert.ok(!actions.some((line) => namesEither(line, "publish")), "architecture-only produces no spec; no publish line");
+	assert.ok(actions.some((line) => namesBoth(line, "dashboard") && namesBoth(line, "usage")));
+	assertEveryToolSpelledForBothSurfaces(actions);
 });
 
-test("codecarto_status text renders every routing line, not just the first (#114)", async () => {
+test("codecarto_status text renders every routing line, not just the first (#114), with both surfaces named", async () => {
 	const { handleStatus } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 	const result = await handleStatus({ cwd: WORKSPACE });
-	assert.match(result.structuredContent.text, /codecarto_list_skills/);
-	assert.match(result.structuredContent.text, /codecarto_amend/, "the amend routing line must reach the text view");
-	assert.match(result.structuredContent.text, /codecarto_dashboard/);
+	const text = result.structuredContent.text;
+	assert.match(text, /codecarto_list_skills/);
+	assert.match(text, /\/codecarto-list-skills/);
+	assert.match(text, /codecarto_amend/, "the amend routing line must reach the text view");
+	assert.match(text, /\/codecarto-amend/, "the amend routing line must name the Pi command too");
+	assert.match(text, /codecarto_dashboard/);
+	assert.match(text, /\/codecarto-dashboard/);
 });
 
 test("amendment rebuilds the routing so counts never go stale", async () => {
@@ -116,8 +151,9 @@ test("amendment rebuilds the routing so counts never go stale", async () => {
 
 	const state = await core.getWorkspaceState(WORKSPACE);
 	const actions = state.status.next_actions;
-	assert.ok(!actions.some((line) => line.includes("codecarto_amend")), `amend line must drop once nothing is pending, got: ${JSON.stringify(actions)}`);
-	assert.match(actions[0], /codecarto_list_skills/);
+	assert.ok(!actions.some((line) => namesEither(line, "amend")), `amend line must drop once nothing is pending, got: ${JSON.stringify(actions)}`);
+	assert.ok(namesBoth(actions[0], "list_skills"), `skills routing on both surfaces, got: ${actions[0]}`);
+	assertEveryToolSpelledForBothSurfaces(actions);
 });
 
 test("teardown: remove temp workspace", async () => {
