@@ -15,7 +15,7 @@ A CodeCartographer **library** is a directory of published reimplementation-spec
 | `codecarto_library_init` | Create the directory, write the marker, record `library.path` in user-global config | Idempotent; pass `namespace` to create a namespaced library |
 | `codecarto_publish` | Publish a spec as a library entry | Required: `source_repo`, `headline`, and `spec` (inline) or `spec_path` (absolute). Content-hash idempotent: identical bytes update metadata in place, no version bump. `slug` derives from `source_repo` if omitted; namespaced libraries require `namespace` (or inherit via `cwd`). Provenance (`source_commit`, `source_branch`, `source_dirty`, `analyzed_at`, `pipeline`, `model_metadata`) is recorded; omitted generation fields default to `unknown` |
 | `codecarto_library_list` | List entries | Filter by `namespace`, `tag`, `slug`, or `source_repo` |
-| `codecarto_library_reindex` | Regenerate `index.yaml` + `INDEX.md` from filesystem state | For manual edits and index merge conflicts |
+| `codecarto_library_reindex` | Regenerate `index.yaml` + `INDEX.md` from filesystem state | For manual edits and index merge conflicts. Also reports entries whose versions disagree about `source_repo` (merged by a slug collision before publish refused cross-project appends; `codecarto_library_list` flags them too) — repair is manual, split the entry by hand |
 
 ## When to publish
 
