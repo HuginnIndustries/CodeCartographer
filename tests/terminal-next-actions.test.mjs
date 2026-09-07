@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -73,6 +73,27 @@ test("unit: the Pi widget's Next: line (next_actions[0]) leads with the terminal
 	const [first] = core.buildTerminalNextActions({ phases: {}, post_pipeline: [] });
 	assert.ok(first.startsWith("All phases complete."), first);
 	assert.match(first, /codecarto_list_skills then codecarto_skill on MCP, \/codecarto-list-skills then \/codecarto-skill on Pi\.$/);
+});
+
+test("unit: every Pi command the routing names is one the extension registers", async () => {
+	// onBothSurfaces derives the Pi name from the MCP tool name rather than
+	// spelling it out, so the string assertions above pass whether or not the
+	// command exists. This is what stops the derivation from naming a command
+	// Pi does not ship: rename one, or spell a tool whose slash command was
+	// never registered, and this fails instead of shipping a dead instruction
+	// into the widget.
+	const lines = core.buildTerminalNextActions({
+		phases: {
+			architecture: { open_questions: [{ id: "a" }] },
+			"reimplementation-spec": { open_questions: [] },
+		},
+		post_pipeline: [{ id: "pp-1" }],
+	});
+	const named = [...new Set(lines.join("\n").match(/\/codecarto-[a-z-]+/g) ?? [])];
+	assert.ok(named.length >= 6, `expected the routing to name Pi commands, got: ${JSON.stringify(named)}`);
+	const indexSrc = await readFile(join(REPO_ROOT, "extensions", "codecarto", "index.ts"), "utf8");
+	const unregistered = named.filter((command) => !indexSrc.includes(`pi.registerCommand("${command.slice(1)}"`));
+	assert.deepEqual(unregistered, [], `terminal next_actions name Pi commands the extension does not register: ${unregistered.join(", ")}`);
 });
 
 test("setup: complete a pipeline with pending work", async () => {
