@@ -13,6 +13,18 @@ import { promisify } from "node:util";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// Git fixtures must not inherit the developer's git configuration. A global
+// `url.<base>.insteadOf` rewrites what `git remote get-url` reports — which is
+// exactly what resolvePublishSourceRepo reads — so a verbatim-URL assertion
+// fails on any machine carrying that common setting while staying green on
+// CI's bare runners. `commit.gpgsign` and `init.defaultBranch` reach the
+// committing fixtures the same way. Point both config layers at a path that
+// does not exist: git reads a missing file as empty config. Identity is set
+// per fixture in repo-local config, so commits still work.
+const ABSENT_GIT_CONFIG = join(tmpdir(), "codecarto-tests-absent-gitconfig");
+process.env.GIT_CONFIG_GLOBAL = ABSENT_GIT_CONFIG;
+process.env.GIT_CONFIG_SYSTEM = ABSENT_GIT_CONFIG;
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { default: codeCartographerExtension } = await import(
 	pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href
