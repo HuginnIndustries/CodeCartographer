@@ -13,8 +13,11 @@ The common failure is treating defect reports as a separate document that the po
 | `fix before porting` | the defect would be reproduced by a faithful port | design it out; the spec states the correct behavior |
 | `port differently` | the behavior is needed but the mechanism is wrong | spec the intent, not the implementation |
 | `leave behind` | dead, vestigial, or actively harmful | name it explicitly so a later reader doesn't "restore" it |
+| `verify at runtime` | the diagnosis is an `external-behavior claim` or `open question` — about a server, engine, driver, or API this source only calls | a spike in the spec's Spike List and a `post_pipeline` `kind: spike` entry; never a design consequence, because the claim is unconfirmed |
 
-Add the acceptance-test implication alongside each row. A hazard with no test in the spec will be reintroduced by whoever implements it.
+Add the acceptance-test implication alongside each row.
+
+The fourth disposition exists because of a real run: a defect scan asserted, as `strong inference` / `fix before porting`, that an inference server expected a different `logit_bias` payload shape, and recommended a one-line reshape. Runtime testing against the pinned engine inverted it — the shape the code already sent worked, and the recommended one was silently ignored. The evidence level bounds the action: `open question` or `external-behavior claim` evidence never pairs with `fix before porting`, and validation now fails a defect report that does so. A hazard with no test in the spec will be reintroduced by whoever implements it.
 
 Close a carry-forward item only once its guidance is represented in an artifact a later phase actually consumes — not merely mentioned in the phase that raised it.
 

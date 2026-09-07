@@ -151,7 +151,7 @@ Pass `pipeline: "<variant>"` to `codecarto_init` to choose. See the [pipeline va
 - `findings/porting/reverse-engineering-bundle.md` — synthesis bundle with priority rankings
 - `findings/reimplementation-spec/reimplementation-spec.md` — the final build spec
 
-Every finding is tagged: `observed fact`, `strong inference`, `portability hazard`, or `open question`.
+Every finding is tagged: `observed fact`, `strong inference`, `portability hazard`, `external-behavior claim`, or `open question`. The last two never pair with a settled action: an unverifiable claim about a system this code only calls is routed as `verify at runtime`, and a defect report that marks one `fix before porting` fails validation.
 
 ## Optional: scout first with Broad-Side
 

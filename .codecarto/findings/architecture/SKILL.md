@@ -84,6 +84,7 @@ Write the output in seven sections:
 Mark every conclusion with one of these evidence levels:
 - `observed fact`: direct statement from docs, tests, schemas, types, or code.
 - `strong inference`: architectural conclusion drawn from multiple facts.
+- `external-behavior claim`: a claim about what a system outside this source tree does (a server, engine, driver, third-party API, OS); unverifiable by reading this code, so it stays unsettled until a runtime probe or that system's own source confirms it.
 - `portability hazard`: assumption tied to the source language, runtime, terminal, OS, or third-party SDKs.
 - `open question`: missing or conflicting behavior that still needs evidence.
 

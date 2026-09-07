@@ -3,7 +3,7 @@
 <!--
   Output template for the architecture phase.
   Fill in each section. Remove placeholder text. Keep the section headers.
-  Mark every conclusion as: fact / strong inference / open question.
+  Mark every conclusion as: fact / strong inference / external-behavior claim / open question.
 -->
 
 ## System Intent

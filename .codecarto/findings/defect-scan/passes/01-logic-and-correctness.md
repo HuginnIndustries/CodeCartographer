@@ -41,7 +41,7 @@ For each finding, record:
 - **Defect**: what is wrong, in one sentence.
 - **Evidence**: what you observed that proves or strongly suggests the defect.
 - **Severity**: critical (incorrect results in normal use), high (incorrect results in edge cases), medium (dead code or latent risk), low (style issue with correctness implications).
-- **Evidence level**: observed fact / strong inference / open question.
+- **Evidence level**: observed fact / strong inference / external-behavior claim / open question. A claim about what another system does with this code's output (a server, engine, driver, third-party API, OS) is an `external-behavior claim`, not a `strong inference` — see findings/defect-scan/SKILL.md §Evidence Classification.
 
 ## What to skip
 

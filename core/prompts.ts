@@ -48,7 +48,7 @@ async function buildOrchestratorDuties(
 		}
 	}
 	if (retriage.length > 0) {
-		lines.push("- Re-triage these open questions' kind labels — a label is a claim needing its own evidence; re-test whether each is now answerable by reading before accepting it:");
+		lines.push("- Re-triage these open questions' kind labels — a label is a claim needing its own evidence; re-test whether each is now answerable by reading before accepting it. If one still needs a runtime test, no finding in this phase may assert one of its candidate answers with a settled action (fix before porting / fix now): the finding inherits the question's uncertainty as `verify at runtime` until runtime evidence closes the question:");
 		for (const label of retriage.slice(0, RETRIAGE_LIST_LIMIT)) lines.push(`  - ${label}`);
 		if (retriage.length > RETRIAGE_LIST_LIMIT) lines.push(`  - (+${retriage.length - RETRIAGE_LIST_LIMIT} more in workflow/status.yaml)`);
 	}

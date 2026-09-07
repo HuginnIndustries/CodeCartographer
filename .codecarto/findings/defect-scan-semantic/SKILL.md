@@ -47,6 +47,8 @@ When citing a contract or protocol violation, include the contract ID or state-m
 
 Read the `carry_forward` entries in `workflow/status.yaml` whose `target_phase` is `defect-scan-semantic`. The mechanical phase may have routed semantic-flavored sightings here for closure.
 
+**Closing a routed item does not settle the question it came from.** Before closing a carry-forward, check whether it derives from an `open_questions` entry of `kind: needs-runtime-test` that is still unresolved — the mechanical phase typically registers the question and routes one of its candidate explanations onward in the same handoff. If the question stands, the finding that addresses the carry-forward inherits its uncertainty: evidence `external-behavior claim` or `open question`, action `verify at runtime`, and a row in this report's Open Questions table naming the question's id. Asserting one of the question's candidates as `strong inference` / `fix before porting` while the question remains open is the contradiction this rule exists to prevent — a real run did exactly that, and runtime testing inverted the finding. Only runtime evidence (or the external system's own source at the pinned version) closes such a question; when you have it, list the question in `open_question_closures` and cite the evidence in the finding.
+
 ## Output
 
 Write findings to the primary output using `templates/semantic-defects.md`. Organize by pass, then by severity within each pass. End with a summary table covering only passes 3, 4, and 5.

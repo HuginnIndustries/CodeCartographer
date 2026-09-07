@@ -224,6 +224,8 @@ export function isPhaseRunning(phaseId: string): boolean {
 export interface AutoCompleteResult {
 	updatedState: WorkspaceState;
 	closeoutNotice?: string;
+	/** Non-gating closure-integrity notes from completion (#122). */
+	warnings: string[];
 }
 
 export async function autoCompletePhase(

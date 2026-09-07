@@ -35,7 +35,7 @@ Asking an LLM to "analyze this repo" loses context halfway through, hallucinates
 
 3. **The output is a spec, not a chat log.** The final `reimplementation-spec.md` is language-agnostic, module-inventoried, and carries acceptance scenarios plus known unknowns. Hand it to another agent to rebuild from.
 
-Every finding is tagged with an evidence level: `observed fact`, `strong inference`, `portability hazard`, or `open question`.
+Every finding is tagged with an evidence level: `observed fact`, `strong inference`, `portability hazard`, `external-behavior claim`, or `open question`.
 
 ---
 
@@ -228,7 +228,7 @@ The porting bundle is the final intentional compression boundary. It carries a s
 | **Porting bundle** | Everything synthesized into a porting-oriented view with priority rankings |
 | **Reimplementation spec** | Language-agnostic build plan with modules, acceptance scenarios, and known unknowns |
 
-Every finding is tagged with an evidence level: `observed fact`, `strong inference`, `portability hazard`, or `open question`. Every phase output is validated against explicit completion criteria before the pipeline advances.
+Every finding is tagged with an evidence level: `observed fact`, `strong inference`, `portability hazard`, `external-behavior claim`, or `open question`. Every phase output is validated against explicit completion criteria before the pipeline advances.
 
 ---
 
@@ -584,7 +584,7 @@ The MCP server does steps 1–3 directly; the Pi extension wraps them as slash c
 - **LLM-agnostic** — works with any model that can read and write files.
 - **Phase-gated** — one phase per session, validated before advancing.
 - **Single source of truth** — `status.yaml` tracks progress; no duplicated state.
-- **Evidence-classified** — every finding tagged as observed fact, strong inference, portability hazard, or open question.
+- **Evidence-classified** — every finding tagged as observed fact, strong inference, portability hazard, external-behavior claim, or open question.
 - **Template-driven** — consistent output structure across projects and sessions.
 - **Drop-in** — lives inside your repo as `.codecarto/`. No symlinks, no copying source code, no runtime daemon.
 

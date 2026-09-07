@@ -109,6 +109,12 @@ export type ValidationResult = {
 	 * but one that ends the phase absent and unaccounted-for is a silent drop.
 	 */
 	secondaryOutputs?: Array<{ path: string; exists: boolean }>;
+	/**
+	 * Non-gating observations from the findings cross-checks (issue #122):
+	 * contradictions worth the reader's attention that must not stop an
+	 * --auto run. Rendered as NOTE lines by buildValidationSummary.
+	 */
+	warnings?: string[];
 };
 
 /**

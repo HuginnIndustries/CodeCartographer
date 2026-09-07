@@ -50,7 +50,7 @@ For each finding, record:
 - **Defect**: what configuration or environment hazard exists.
 - **Evidence**: the specific hardcoded value, missing validation, or dangerous default.
 - **Severity**: critical (security exposure in default config, data loss on misconfiguration), high (production failure from missing validation), medium (hardcoded value that will break in a different environment), low (undocumented config behavior).
-- **Evidence level**: observed fact / strong inference / open question.
+- **Evidence level**: observed fact / strong inference / external-behavior claim / open question. A claim about what another system does with this code's output (a server, engine, driver, third-party API, OS) is an `external-behavior claim`, not a `strong inference` — see findings/defect-scan/SKILL.md §Evidence Classification.
 
 ## What to skip
 

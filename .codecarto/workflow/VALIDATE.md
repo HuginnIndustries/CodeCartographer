@@ -50,7 +50,7 @@ Below is what a real PASS WITH GAPS block looks like — useful when a phase fin
 | 2 | The layer map and dependency direction are documented. | PASS | §Layer Map; dependency direction in §Layer Map → "Dependency Direction." |
 | 3 | Public surfaces are identified. | PARTIAL | CLI commands and HTTP routes enumerated (§Public Surfaces). MCP server endpoints and the websocket subscription channel are listed by name only — schemas not extracted. Routed to `carry_forward` as `arch-CF2` with `target_phase: protocols`. |
 | 4 | Runtime lifecycle, concurrency model, and porting priorities are summarized. | PASS | §Runtime Lifecycle, §Concurrency Model, §Porting Priorities (table). |
-| 5 | Findings are marked with evidence levels. | PASS | All inferences marked `observed fact` / `strong inference` / `portability hazard` / `open question`. |
+| 5 | Findings are marked with evidence levels. | PASS | All inferences marked `observed fact` / `strong inference` / `portability hazard` / `external-behavior claim` / `open question`. |
 
 **Validated by:** 2026-05-02 (architecture phase, session 1)
 **Overall:** PASS WITH GAPS

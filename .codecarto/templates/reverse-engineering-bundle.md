@@ -86,7 +86,7 @@
 
 | Defect ID | Source Report | One-line Description | Severity | Disposition | Required design consequence |
 |-----------|---------------|----------------------|----------|-------------|-----------------------------|
-| | | | | fix before porting / port differently / leave behind | |
+| | | | | fix before porting / port differently / leave behind / verify at runtime | |
 
 ## Observed Facts vs. Inferred Structure
 
@@ -159,7 +159,7 @@
 | 1 | The system summary, layer map, contract table, protocol notes, and porting findings are synthesized. | PASS / PARTIAL / FAIL | |
 | 2 | Portability hazards and open questions are separated from facts. | PASS / PARTIAL / FAIL | |
 | 3 | Feature importance is sorted for porting. | PASS / PARTIAL / FAIL | |
-| 4 | Known defects are referenced in the Defect Synthesis with porting recommendations (fix before porting / port differently / leave behind), or the section explicitly notes that no defect scan ran. | PASS / PARTIAL / FAIL | |
+| 4 | Known defects are referenced in the Defect Synthesis with porting recommendations (fix before porting / port differently / leave behind / verify at runtime), or the section explicitly notes that no defect scan ran. | PASS / PARTIAL / FAIL | |
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
 | 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
 | 7 | The Source Index makes the bundle a self-contained compression boundary and identifies targeted deep-read triggers. | PASS / PARTIAL / FAIL | |
