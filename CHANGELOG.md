@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.17.1] — 2026-09-07
+
+The follow-through round. Every open bug the Broad-Side cycle left behind or surfaced, plus the one that mattered most: a run can no longer ship a claim as settled when its own record says the claim is not settlable from source (#122) — a new evidence level, a new action, and mechanical cross-checks that read what the findings' cells say. The library format document now describes the library the code writes, and the guarantees it promised but the code lacked are implemented (confidentiality guard, provenance-conflict reporting) or corrected (publish does not commit). Seven defects from the Broad-Side self-scan triage, the peer-dependency floor that stops consumers installing a vulnerable `undici`, provenance surviving a metadata-only publish, and the Pi `--no-incremental` flag round it out.
+
 ### Fixed
 
 - **Metadata-only publish keeps the version's `provenance`.** An identical re-publish — same spec bytes, new headline or tags — takes the content-hash branch of `publishEntry` and rewrites the version's `metadata.yaml` from the incoming input, but `buildMetadata` writes `provenance` only when the input carries it, and neither `codecarto_publish` nor `/codecarto-publish` sends one. So the second publish silently dropped the `{prior_version, mutation_source}` block the version's original publish recorded — the one field on the file that says where the version came from. The in-place branch now reads the block from the current `v<N>/metadata.yaml` and carries it forward; a publish that does supply `provenance` still wins, and the new-version branch, which already defaulted the block, is unchanged. Reproduced on a scratch library by the #172 doc-accuracy pass, which had documented the loss as current behavior; `docs/library-format.md` now describes the fix.
