@@ -2,9 +2,11 @@
 // reimplementation-spec artifacts.
 //
 // Covers: marker round-trips, discovery, publish v1 / v2 paths,
-// content-hash idempotence, force-new-version override, namespacing
+// content-hash idempotence (including the provenance carry-forward on a
+// metadata-only re-publish), force-new-version override, namespacing
 // (on and off), slug validation, readEntry (latest + specific version),
-// listEntries filters, reindex from a hand-edited tree, malformed
+// listEntries filters, reindex from a hand-edited tree, INDEX.md row links
+// and summary line, malformed
 // metadata graceful fallback, commitPublish in a non-git directory, the
 // source_repo collision guard that stops one project's spec landing in
 // another's version history, the confidentiality guard that stops an
@@ -193,6 +195,36 @@ test("publishEntry is content-hash idempotent — same bytes does not bump versi
 		// Metadata in v1 reflects the updated tags.
 		const metaRaw = await readFile(join(libraryRoot, ENTRIES_DIR, "james", "hexbridge", "v1", METADATA_FILE), "utf8");
 		assert.match(metaRaw, /redis/);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("metadata-only re-publish carries the version's recorded provenance forward", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishEntry(libraryRoot, "# v1 content\n", sampleInput());
+		const v2 = await publishEntry(libraryRoot, "# v2 content\n", sampleInput());
+		assert.equal(v2.version, 2);
+		const metaPath = join(libraryRoot, ENTRIES_DIR, "james", "hexbridge", "v2", METADATA_FILE);
+		assert.match(await readFile(metaPath, "utf8"), /prior_version: 1/, "the new-version publish records where v2 came from");
+
+		// Identical bytes, new tags, no provenance on the input — exactly what
+		// both surfaces send. The in-place rewrite must not drop the block.
+		const again = await publishEntry(libraryRoot, "# v2 content\n", sampleInput({ tags: ["retagged"] }));
+		assert.equal(again.version, 2);
+		assert.equal(again.isNewVersion, false);
+		const rewritten = await readFile(metaPath, "utf8");
+		assert.match(rewritten, /retagged/, "the metadata-only update still lands");
+		assert.match(rewritten, /prior_version: 1/);
+		assert.match(rewritten, /mutation_source: null/);
+		const { metadata } = await readEntry(libraryRoot, { slug: "hexbridge", namespace: "james" });
+		assert.deepEqual(metadata.provenance, { prior_version: 1, mutation_source: null });
+
+		// A publish that does supply provenance still wins over the recorded block.
+		await publishEntry(libraryRoot, "# v2 content\n", sampleInput({ provenance: { prior_version: 1, mutation_source: "manual-edit" } }));
+		const overridden = await readEntry(libraryRoot, { slug: "hexbridge", namespace: "james" });
+		assert.deepEqual(overridden.metadata.provenance, { prior_version: 1, mutation_source: "manual-edit" });
 	} finally {
 		await cleanup();
 	}
@@ -473,8 +505,44 @@ test("reindex generates index.yaml + INDEX.md from a hand-built tree", async () 
 		const indexYaml = await readFile(join(libraryRoot, LIBRARY_INDEX_FILE), "utf8");
 		assert.match(indexYaml, /slug: manual/);
 		const indexMd = await readFile(join(libraryRoot, LIBRARY_INDEX_MD_FILE), "utf8");
-		assert.match(indexMd, /\| \[manual\]/);
+		assert.match(indexMd, /\| \[manual\]\(entries\/james\/manual\/v1\/\) \| v1 \|/);
 		assert.match(indexMd, /Manually constructed entry/);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("INDEX.md rows link to the newest version directory, never to the latest pointer file", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishEntry(libraryRoot, "# v1\n", sampleInput());
+		await publishEntry(libraryRoot, "# v2\n", sampleInput());
+		await publishEntry(libraryRoot, "# only\n", sampleInput({ slug: "payment-router" }));
+
+		const indexMd = await readFile(join(libraryRoot, LIBRARY_INDEX_MD_FILE), "utf8");
+		// `latest` is a one-line regular file, so `entries/<ns>/<slug>/latest/`
+		// resolves to nothing on a forge; the row must point at v<latest_version>/.
+		assert.match(indexMd, /\| \[hexbridge\]\(entries\/james\/hexbridge\/v2\/\) \| v2 \|/);
+		assert.match(indexMd, /\| \[payment-router\]\(entries\/james\/payment-router\/v1\/\) \| v1 \|/);
+		assert.doesNotMatch(indexMd, /\/latest\//);
+		assert.match(indexMd, /^\*\*2 entries\*\* across 1 namespace\.$/m);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("INDEX.md for a single-tenant library links rows without a namespace segment and pluralizes from the shown count", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary({ namespaced: false });
+	try {
+		const input = sampleInput();
+		delete input.namespace;
+		await publishEntry(libraryRoot, "# spec\n", input);
+
+		const indexMd = await readFile(join(libraryRoot, LIBRARY_INDEX_MD_FILE), "utf8");
+		assert.match(indexMd, /\| \[hexbridge\]\(entries\/hexbridge\/v1\/\) \| v1 \|/);
+		// index.namespaces is empty here and the summary shows "1", so the noun
+		// must be singular — it used to read "across 1 namespaces".
+		assert.match(indexMd, /^\*\*1 entry\*\* across 1 namespace\.$/m);
 	} finally {
 		await cleanup();
 	}
