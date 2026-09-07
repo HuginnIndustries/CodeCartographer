@@ -137,7 +137,7 @@ Analysis turns repositories into reusable specifications. Synthesis runs the oth
    library:
      path: /absolute/path/to/codecarto-library
      namespace: your-namespace # omit for a single-tenant library
-     publish_confirm: true
+     publish_confirm: true # Pi asks before writing; MCP refuses a publish that lacks confirm: true
    ```
 
 2. Initialize a clean planning workspace and fill in its brief:

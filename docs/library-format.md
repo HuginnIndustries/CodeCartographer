@@ -73,15 +73,24 @@ You can also create one manually:
 library:
   path: ~/codecarto-library    # tilde-expanded and made absolute on load
   namespace: james             # optional; required to publish into a namespaced library
-  publish_confirm: true        # Pi only: show a yes/no dialog before writing (default true)
+  publish_confirm: true        # confirmation gate before writing — see below (default true)
 ```
 
 Configuration has two layers: the user-global file above, and
 `.codecarto/workflow/config.yaml` inside a workspace, which overrides
-individual keys. `publish_confirm` gates only the Pi confirmation
-dialog; the MCP server never prompts and ignores it. No config key
-controls git behavior, because publish never touches git (see "Git
-interaction").
+individual keys. `publish_confirm` gates the write on both executable
+surfaces, in the only way each can ask: the Pi command shows a yes/no
+preview dialog, and the MCP server — which cannot prompt — refuses a
+`codecarto_publish` call that lacks `confirm: true` and returns the
+preview as the error text instead (library, entry, whether a new
+version or a metadata-only update, `source_repo`, headline,
+confidentiality), writing nothing. The MCP gate applies only when the
+key is actually set in one of the two files; the loader's default
+(`true`) drives Pi's dialog alone, so a host that never configured the
+key is not gated. `codecarto_library_init` and
+`/codecarto-library-init` write the key, so a library initialized
+through the tooling has the gate on. No config key controls git
+behavior, because publish never touches git (see "Git interaction").
 
 ### Marker file format
 
@@ -167,9 +176,12 @@ by reindex.
 
 Slugs are derived from a repository reference by default: the MCP
 server derives from `source_repo` unless the host passes `slug`
-explicitly; the Pi command always derives from the analyzed directory's
-path and offers no override. Derivation drops a trailing `.git`, takes
-the last path segment, lowercases it, turns every run of characters
+explicitly; the Pi command derives from the value it records as
+`source_repo` — the analyzed directory's git remote when it has one,
+its path otherwise (see the field table) — and offers no override.
+Derivation drops a trailing `.git`, takes the last path segment
+(splitting on the colon of a slash-less `git@host:name` form),
+lowercases it, turns every run of characters
 outside `[a-z0-9-]` into one `-`, trims and collapses dashes, and cuts at
 64 characters. A result that is empty or does not start with a letter is
 prefixed with `entry-`; a result that is a reserved name gets `-entry`
@@ -301,7 +313,7 @@ ignored and are not preserved on rewrite.
 | `slug` | string | Matches the directory name. Redundant on purpose for readability. |
 | `namespace` | string | Present iff the library is namespaced. Same rules as a slug. |
 | `version` | integer | Matches the directory name (`v<N>`). Assigned by publish, never by the caller. |
-| `source_repo` | URL or path | Where the analyzed code lives. The Pi command records the absolute path of the analyzed directory; the MCP server records whatever the host passes. Compared, normalized, against every later publish to the same slug — see "Source repo conflicts". Local paths are permitted but discouraged for shared libraries. |
+| `source_repo` | URL or path | Where the analyzed code lives. The Pi command records the fetch URL of the analyzed directory's git remote, verbatim as git reports it — `origin`, else the remote the current branch tracks — when the directory is the root of a git work tree; when it is not a git repository, has no remote, or is a subdirectory of a work tree, it records the directory's absolute path. Entries Pi published before it resolved remotes hold the path, so the first publish after upgrading trips the source-repo check and asks whether the repository moved — see "Source repo conflicts". The MCP server records whatever the host passes. Compared, normalized, against every later publish to the same slug. Local paths are permitted but discouraged for shared libraries: they mean nothing on another machine. |
 | `source_commit` | string | Optional. Written only when the MCP host passes it; the Pi command does not record it. Intended as the commit SHA the analysis ran against. |
 | `source_branch` | string | Optional. Same provenance as `source_commit`. Informational only — no lookup is performed against it. |
 | `source_dirty` | boolean | Optional. Written only when the MCP host passes it; the Pi command does not record it. `true` means the analysis ran against a working tree with uncommitted changes, so `source_commit` names the parent commit rather than the analyzed state. |
@@ -354,11 +366,14 @@ quality") preserves interop with hand-written entries.
 
 Nothing prompts for these fields. With `publish_confirm: true` (the
 default) the Pi command shows a yes/no confirmation before writing —
-the target `<namespace>/<slug>` and library path, the source directory,
-the spec path, the derived headline, and a
-`Provenance: Pi / <vendor> / <model>` line — but there is no step that
-asks the user to fill in `unknown` values. The MCP server writes
-immediately. No display string is derived from the generation block in
+the target `<namespace>/<slug>` and library path, the source it will
+record (the git remote, or the directory), the spec path, the derived
+headline, and a `Provenance: Pi / <vendor> / <model>` line — but there
+is no step that asks the user to fill in `unknown` values. The MCP
+server, when `publish_confirm` is set in config, refuses a call that
+lacks `confirm: true` and returns an equivalent preview as text (see
+"Creating a library"); otherwise it writes immediately. No display
+string is derived from the generation block in
 dashboards or listings; `codecarto_library_list` shows
 `<namespace>/<slug> v<N> — <headline> [tags]`.
 
@@ -532,7 +547,8 @@ this order:
 
 `force_new_version` on `codecarto_publish` (`forceNewVersion` in
 `PublishOptions`) skips step 3 and always creates a version. The Pi
-command exposes neither this nor any other publish option.
+command exposes neither this nor any other publish option; the two
+guards below are answered through confirmation dialogs instead.
 
 ## Source repo conflicts
 
@@ -553,8 +569,9 @@ Case in an absolute POSIX path (or a `~` home reference) is *not*
 folded, because `/srv/Repos/tool` and `/srv/repos/tool` are two
 directories on a case-sensitive filesystem. Folding them would hide the
 collision the check exists to catch, and the Pi surface records the
-analyzed directory as `source_repo`, so local paths are the common shape
-there rather than an edge case.
+analyzed directory as `source_repo` whenever it has no git remote to
+record — and did so unconditionally before it resolved remotes — so
+local paths are a common shape there rather than an edge case.
 
 Normalization is deliberately conservative: it collapses only spellings
 that are unambiguously the same target. Host aliases (`ssh.github.com`
@@ -573,8 +590,20 @@ A repository that genuinely moved (rename, org transfer, host change) is
 the one legitimate case for changing the recorded value. Override it
 with `allow_source_repo_change` on `codecarto_publish`, or
 `allowSourceRepoChange` in `PublishOptions` when calling the core
-directly. The Pi command has no override; use MCP or the core API for a
-moved repository.
+directly. The refusal is a typed `SourceRepoMismatchError` carrying the
+recorded and incoming values, so a wrapper can ask from the values
+rather than by matching the message. The Pi command takes no flags;
+`/codecarto-publish` catches the refusal, shows both values, and asks
+whether the repository moved — yes retries with the change allowed, no
+writes nothing.
+
+Expect that question once after upgrading a Pi that recorded the
+analyzed directory to one that records the git remote (see the
+`source_repo` row): the entry's newest version holds the path, the
+publish carries the URL, and the check cannot tell a moved repository
+from a different one. Answering yes appends the new version with the
+URL recorded; every later publish from any clone of that remote then
+compares equal.
 
 ## Confidentiality conflicts
 

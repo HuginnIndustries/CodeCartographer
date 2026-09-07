@@ -79,6 +79,7 @@ import {
 	PIPELINE_ALIASES,
 	type PipelineFile,
 	type ProvenanceConflict,
+	previewPublishVersion,
 	publishEntry,
 	reindex as libraryReindex,
 	refreshScaffold,
@@ -100,7 +101,7 @@ import {
 import { applyAmendment } from "../core/amendment.ts";
 import { appendUsageRun } from "../core/usage.ts";
 import { initLibrary } from "../core/library.ts";
-import { loadUserConfig, resolveUserConfigPath } from "../core/orchestrator-config.ts";
+import { type CodecartoConfig, loadUserConfig, resolveUserConfigPath } from "../core/orchestrator-config.ts";
 import { writeDashboard } from "../extensions/codecarto/dashboard-writer.ts";
 
 // ---------- input helpers ----------
@@ -505,6 +506,18 @@ async function resolveLibraryPath(args: { library_path?: unknown; cwd?: unknown 
 	);
 }
 
+/**
+ * The configuration `codecarto_config` reports for the same `cwd`: workspace
+ * over user-global when a cwd is given, user-global alone otherwise. Publish
+ * reads its gate from here so the value the config tool displays is the value
+ * the publish tool enforces.
+ */
+async function loadEffectiveConfig(cwd: unknown): Promise<CodecartoConfig> {
+	return typeof cwd === "string" && cwd.trim() !== ""
+		? loadCodecartoConfig(join(cwd.trim(), ".codecarto"))
+		: loadUserConfig();
+}
+
 function asStringArray(value: unknown, fieldName: string): string[] {
 	if (!Array.isArray(value)) {
 		throw new McpError(ErrorCode.InvalidParams, `${fieldName} must be an array of strings`);
@@ -720,6 +733,55 @@ export async function handlePublish(args: Record<string, unknown>) {
 	const analyzedAt = typeof args.analyzed_at === "string" && args.analyzed_at !== ""
 		? args.analyzed_at
 		: new Date().toISOString();
+	const headline = args.headline.trim();
+	const forceNewVersion = args.force_new_version === true;
+
+	// publish_confirm gate (#162). Pi shows a preview and asks before writing.
+	// An MCP server has no one to ask, so — as codecarto_broadside does for its
+	// spend limit — it refuses with the preview and lets the caller re-invoke
+	// with confirm: true. The gate applies only when a config layer actually
+	// set the key: the loader's default (true) exists to make Pi's dialog
+	// opt-out, and a host that never configured the key keeps the behavior it
+	// had. Runs after every argument check so the preview names the resolved
+	// slug and namespace, and before publishEntry so nothing is written.
+	const config = await loadEffectiveConfig(args.cwd);
+	if (config.library.publish_confirm && config.library.publish_confirm_configured && args.confirm !== true) {
+		const preview = await previewPublishVersion(libraryPath, spec, { slug, namespace }, { forceNewVersion });
+		const label = `${namespace ? `${namespace}/` : ""}${slug}`;
+		const versionLine = preview.latestVersion === 0
+			? "v1 (first version of a new entry)"
+			: preview.isNewVersion
+				? `v${preview.version} (new content version; the newest is v${preview.latestVersion})`
+				: `v${preview.version} (metadata-only update; the content hash matches the newest version)`;
+		const specSource = typeof args.spec_path === "string" && args.spec_path.trim() !== ""
+			? args.spec_path.trim()
+			: `inline (${spec.length} characters)`;
+		throw new McpError(
+			ErrorCode.InvalidRequest,
+			[
+				"Publish not performed: library.publish_confirm is set and this call did not carry confirm: true. Nothing was written.",
+				`Would publish ${label} to ${libraryPath}`,
+				`  Version: ${versionLine}`,
+				`  Source repo: ${sourceRepo}`,
+				`  Headline: ${headline}`,
+				`  Confidentiality: ${confidentiality ?? "internal (the default; none declared)"}`,
+				`  Spec: ${specSource}`,
+				"Re-invoke codecarto_publish with the same arguments plus confirm: true to publish, or set library.publish_confirm: false in config to drop this gate.",
+			].join("\n"),
+			{
+				refused: "publish_confirm",
+				libraryPath,
+				namespace: namespace ?? null,
+				slug,
+				version: preview.version,
+				isNewVersion: preview.isNewVersion,
+				latestVersion: preview.latestVersion,
+				source_repo: sourceRepo,
+				headline,
+				confidentiality: confidentiality ?? null,
+			},
+		);
+	}
 
 	const result = await publishEntry(
 		libraryPath,
@@ -734,14 +796,14 @@ export async function handlePublish(args: Record<string, unknown>) {
 			analyzed_at: analyzedAt,
 			pipeline: defaults.pipeline,
 			codecarto_version: PACKAGE_VERSION,
-			headline: args.headline.trim(),
+			headline,
 			tags,
 			capabilities,
 			confidentiality,
 			generation,
 		},
 		{
-			forceNewVersion: args.force_new_version === true,
+			forceNewVersion,
 			allowSourceRepoChange: args.allow_source_repo_change === true,
 			allowConfidentialityMismatch: args.allow_confidentiality_mismatch === true,
 		},
@@ -1314,7 +1376,7 @@ const TOOLS = [
 	{
 		name: "codecarto_publish",
 		description:
-			"Publish a reimplementation-spec to a CodeCartographer library. Identified by library_path (absolute) or cwd's config.yaml. Content-hash idempotent — re-publishing identical spec bytes updates metadata in place rather than bumping the version. Required: source_repo, headline, and either spec (inline) or spec_path (absolute file). Slug derives from source_repo if not provided. If the library is namespaced, namespace is required (or pass cwd to inherit from config). Generation context (agent, model, vendor, reasoning) is passed via model_metadata so the host can record provenance; omitted fields default to 'unknown'.",
+			"Publish a reimplementation-spec to a CodeCartographer library. Identified by library_path (absolute) or cwd's config.yaml. Content-hash idempotent — re-publishing identical spec bytes updates metadata in place rather than bumping the version. Required: source_repo, headline, and either spec (inline) or spec_path (absolute file). Slug derives from source_repo if not provided. If the library is namespaced, namespace is required (or pass cwd to inherit from config). Generation context (agent, model, vendor, reasoning) is passed via model_metadata so the host can record provenance; omitted fields default to 'unknown'. When library.publish_confirm is set in config, a call without confirm: true is refused with a preview of what would be published (nothing is written); re-invoke with confirm: true to publish.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -1360,6 +1422,11 @@ const TOOLS = [
 					type: "boolean",
 					description:
 						"Permit publishing when the entry's confidentiality is more restricted than the library's visibility (internal < shared < public: an internal entry into a shared or public library, a shared entry into a public one). Off by default, because that direction exposes the spec to everyone the library reaches. An omitted confidentiality counts as internal. Set only when the exposure is intended; the recorded confidentiality is not changed.",
+				},
+				confirm: {
+					type: "boolean",
+					description:
+						"Acknowledge the publish_confirm gate. When library.publish_confirm is set in config (user-global ~/.codecarto/config.yaml, or the workspace's .codecarto/workflow/config.yaml when cwd is passed), a call without confirm: true is refused and the refusal previews what would be published — library, entry, whether a new version or a metadata-only update, source_repo, headline, confidentiality — so the caller can show it before committing to the write. Pass true to publish. No effect when publish_confirm is unset or false.",
 				},
 			},
 			required: ["source_repo", "headline"],

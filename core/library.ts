@@ -25,14 +25,15 @@
 //    files, entries whose versions disagree about source_repo — the shape
 //    a slug collision left behind before publish refused cross-project
 //    appends. Repair is manual; see the "Provenance conflicts" section.
-//  - Git operations (`commitPublish`) shell out to the `git` binary.
-//    Failures are non-fatal — the caller decides how to surface them.
+//  - Git operations (`commitPublish`, `resolvePublishSourceRepo`) shell out
+//    to the `git` binary. Failures are non-fatal — the caller decides how to
+//    surface them, and the resolver falls back to the directory itself.
 
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import { isPlainObject, pathExists } from "./utils.ts";
+import { canonicalPath, isPlainObject, normalizeForComparison, pathExists } from "./utils.ts";
 import { parseSimpleYaml, stringifySimpleYaml } from "./yaml.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -271,9 +272,18 @@ export function isValidSlug(slug: string): boolean {
  * Caller is responsible for collision handling — derived slugs may already
  * exist in the library and the calling UX (Pi or MCP) is the right place
  * to ask the user about it.
+ *
+ * A clone's remote URL and its checkout directory derive the same slug
+ * (`…/whisper.git`, `git@host:acme/whisper`, and `/path/whisper` all give
+ * `whisper`), which is what lets the Pi command switch from recording the
+ * directory to recording the remote without renaming anyone's entry.
  */
 export function deriveSlug(sourceRepo: string): string {
-	const cleaned = sourceRepo.replace(/\.git$/i, "").replace(/\\/g, "/");
+	let cleaned = sourceRepo.replace(/\.git$/i, "").replace(/\\/g, "/");
+	// SCP shorthand for a repository at the root of a host (`git@host:whisper`)
+	// has no slash at all, so the colon is the only separator to split on. Any
+	// form with a slash already yields the right trailing segment below.
+	if (!cleaned.includes("/")) cleaned = cleaned.replace(/^[^:]*:/, "");
 	const parts = cleaned.split("/").filter((p) => p.length > 0);
 	const last = parts[parts.length - 1] ?? "entry";
 	const slug = last
@@ -336,8 +346,10 @@ export function normalizeSourceRepo(sourceRepo: string): string {
 	// Windows drive paths. A POSIX absolute path is not: /srv/Repos/tool and
 	// /srv/repos/tool are two directories on Linux, and folding them together
 	// would hide exactly the cross-project collision this comparison exists to
-	// catch. Pi records the analyzed directory as source_repo, so local paths
-	// are a common case here rather than a curiosity.
+	// catch. Pi records the analyzed directory as source_repo whenever it has
+	// no git remote to record instead, and every entry Pi published before it
+	// resolved remotes holds one, so local paths are a common case here rather
+	// than a curiosity.
 	return isCaseSensitivePath(s) ? s : s.toLowerCase();
 }
 
@@ -513,6 +525,66 @@ export class ConfidentialityMismatchError extends Error {
 	}
 }
 
+/**
+ * Thrown by `publishEntry` when the target entry's newest version records a
+ * `source_repo` that denotes a different repository than the incoming one.
+ * Nothing has been written when this is raised. It carries both values so a
+ * wrapper with a user to ask (Pi) can pose "did the repository move?" from
+ * the values rather than by matching the message.
+ */
+export class SourceRepoMismatchError extends Error {
+	/** The `source_repo` the entry's newest version records. */
+	readonly recorded: string;
+	/** The `source_repo` this publish carries. */
+	readonly incoming: string;
+
+	constructor(message: string, recorded: string, incoming: string) {
+		super(message);
+		this.name = "SourceRepoMismatchError";
+		this.recorded = recorded;
+		this.incoming = incoming;
+	}
+}
+
+/** What `publishEntry` would do to an entry's version history, without doing it. */
+export interface PublishVersionPreview {
+	/** Highest version directory present, or 0 for a new entry. */
+	latestVersion: number;
+	/** The version the publish would write or update. */
+	version: number;
+	/** True when a new version directory would be created; false for a metadata-only update. */
+	isNewVersion: boolean;
+}
+
+/**
+ * Read-only preview of the version a publish would land on. This is the same
+ * content-hash decision `publishEntry` makes (it calls this), so a wrapper
+ * that has to describe a publish before performing it — the MCP server's
+ * `publish_confirm` refusal — shows what would actually happen. Neither the
+ * collision nor the confidentiality guard is evaluated here; those still run
+ * on the real publish.
+ */
+export async function previewPublishVersion(
+	libraryRoot: string,
+	spec: string,
+	ref: { slug: string; namespace?: string },
+	opts: Pick<PublishOptions, "forceNewVersion"> = {},
+): Promise<PublishVersionPreview> {
+	const entryDir = entryRoot(libraryRoot, ref.namespace, ref.slug);
+	const existingVersions = await listVersionDirs(entryDir);
+	const latestVersion = existingVersions.length === 0 ? 0 : existingVersions[existingVersions.length - 1]!;
+	if (latestVersion > 0 && !opts.forceNewVersion) {
+		const latestSpecPath = join(versionDir(libraryRoot, ref.namespace, ref.slug, latestVersion), SPEC_FILE);
+		if (await pathExists(latestSpecPath)) {
+			const existingSpec = await readFile(latestSpecPath, "utf8");
+			if (sha256(existingSpec) === sha256(spec)) {
+				return { latestVersion, version: latestVersion, isNewVersion: false };
+			}
+		}
+	}
+	return { latestVersion, version: latestVersion + 1, isNewVersion: true };
+}
+
 export async function publishEntry(
 	libraryRoot: string,
 	spec: string,
@@ -538,9 +610,8 @@ export async function publishEntry(
 
 	const namespace = input.namespace;
 	const entryDir = entryRoot(libraryRoot, namespace, input.slug);
-	const existingVersions = await listVersionDirs(entryDir);
-	const latestVersion = existingVersions.length === 0 ? 0 : existingVersions[existingVersions.length - 1]!;
-	const newSpecHash = sha256(spec);
+	const preview = await previewPublishVersion(libraryRoot, spec, { slug: input.slug, namespace }, opts);
+	const latestVersion = preview.latestVersion;
 
 	// Collision guard. Slugs derive from the trailing path segment of the source
 	// repo, so two unrelated projects (acme/whisper and openai/whisper) collapse
@@ -553,7 +624,7 @@ export async function publishEntry(
 		const recorded = await readRecordedSourceRepo(libraryRoot, namespace, input.slug, latestVersion);
 		if (recorded !== null && !sameSourceRepo(recorded, input.source_repo)) {
 			const label = namespace ? `${namespace}/${input.slug}` : input.slug;
-			throw new Error(
+			throw new SourceRepoMismatchError(
 				`Refusing to publish: entry "${label}" v${latestVersion} records source_repo ` +
 					`"${recorded}", but this publish carries "${input.source_repo}". Publishing would ` +
 					`append this spec to a different project's version history. Publish this project ` +
@@ -561,6 +632,8 @@ export async function publishEntry(
 					`moved (rename, org transfer, host change) — re-publish with the source-repo ` +
 					`change allowed: allow_source_repo_change on codecarto_publish, ` +
 					`allowSourceRepoChange in PublishOptions.`,
+				recorded,
+				input.source_repo,
 			);
 		}
 	}
@@ -593,34 +666,29 @@ export async function publishEntry(
 		);
 	}
 
-	// Content-hash idempotence: if the latest version's spec matches bytes-for-bytes,
-	// update metadata in place and return without bumping the version.
-	if (latestVersion > 0 && !opts.forceNewVersion) {
+	// Content-hash idempotence: if the latest version's spec matches bytes-for-bytes
+	// (decided by previewPublishVersion above), update metadata in place and
+	// return without bumping the version.
+	if (!preview.isNewVersion) {
 		const latestVersionDir = versionDir(libraryRoot, namespace, input.slug, latestVersion);
-		const latestSpecPath = join(latestVersionDir, SPEC_FILE);
-		if (await pathExists(latestSpecPath)) {
-			const existingSpec = await readFile(latestSpecPath, "utf8");
-			if (sha256(existingSpec) === newSpecHash) {
-				// buildMetadata writes provenance only when the input carries it, and
-				// neither surface sends it on publish — so without this the rewrite
-				// would drop the block the version's original publish recorded.
-				const provenance = input.provenance ?? (await readRecordedProvenance(libraryRoot, namespace, input.slug, latestVersion));
-				const metadata = buildMetadata({ ...input, provenance }, latestVersion);
-				await atomicWriteYaml(join(latestVersionDir, METADATA_FILE), metadata);
-				if (!opts.skipReindex) await reindex(libraryRoot);
-				return {
-					slug: input.slug,
-					namespace,
-					version: latestVersion,
-					isNewVersion: false,
-					entryDir,
-					versionDir: latestVersionDir,
-				};
-			}
-		}
+		// buildMetadata writes provenance only when the input carries it, and
+		// neither surface sends it on publish — so without this the rewrite
+		// would drop the block the version's original publish recorded.
+		const provenance = input.provenance ?? (await readRecordedProvenance(libraryRoot, namespace, input.slug, latestVersion));
+		const metadata = buildMetadata({ ...input, provenance }, latestVersion);
+		await atomicWriteYaml(join(latestVersionDir, METADATA_FILE), metadata);
+		if (!opts.skipReindex) await reindex(libraryRoot);
+		return {
+			slug: input.slug,
+			namespace,
+			version: latestVersion,
+			isNewVersion: false,
+			entryDir,
+			versionDir: latestVersionDir,
+		};
 	}
 
-	const nextVersion = latestVersion + 1;
+	const nextVersion = preview.version;
 	const finalVersionDir = versionDir(libraryRoot, namespace, input.slug, nextVersion);
 	const stagingDir = `${entryDir}.publish.${process.pid}.${Date.now()}`;
 
@@ -1149,6 +1217,64 @@ function sha256(content: string): string {
 }
 
 // ─── Git ────────────────────────────────────────────────────────────────────
+
+/** What a Pi publish records as `source_repo`, and where the value came from. */
+export interface ResolvedSourceRepo {
+	/** The value to record: a remote's fetch URL verbatim, or the directory itself. */
+	source_repo: string;
+	/**
+	 * The git remote the URL was read from (`origin`, or the current branch's
+	 * upstream remote), or null when the directory was recorded instead — it
+	 * is not a git work tree, is a subdirectory of one, or has no usable
+	 * remote.
+	 */
+	remote: string | null;
+}
+
+/**
+ * Resolve the repository reference a publish from `cwd` should record. The
+ * remote is preferred over the path because a path means nothing outside the
+ * machine that published it, and because a slug derived from the remote is
+ * stable across clones of one repository, which is what lets the collision
+ * guard compare something meaningful (#147).
+ *
+ * Resolution order: `origin`'s fetch URL, else the fetch URL of the remote
+ * the current branch tracks, else `cwd`. The remote is consulted only when
+ * `cwd` is the root of its work tree. A subdirectory keeps recording its
+ * path: every subdirectory of one repository would otherwise resolve to the
+ * same URL and the same slug, and the second one published would land as a
+ * new version of the first with no guard able to tell — exactly the
+ * cross-project append the guard exists to refuse.
+ *
+ * The URL is stored as git reports it. Spellings of one repository are
+ * reconciled at comparison time by `sameSourceRepo`, not here, so the
+ * recorded value stays human-readable. Never throws: a missing `git` binary
+ * or any git failure falls back to the path.
+ */
+export async function resolvePublishSourceRepo(cwd: string): Promise<ResolvedSourceRepo> {
+	const asPath: ResolvedSourceRepo = { source_repo: cwd, remote: null };
+	try {
+		const toplevel = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+		if (!toplevel.ok || toplevel.stdout.trim() === "") return asPath;
+		const [canonicalCwd, canonicalTop] = await Promise.all([canonicalPath(cwd), canonicalPath(toplevel.stdout.trim())]);
+		if (normalizeForComparison(canonicalCwd) !== normalizeForComparison(canonicalTop)) return asPath;
+
+		const origin = await runGit(cwd, ["remote", "get-url", "origin"]);
+		if (origin.ok && origin.stdout.trim() !== "") return { source_repo: origin.stdout.trim(), remote: "origin" };
+
+		const branch = await runGit(cwd, ["symbolic-ref", "--short", "HEAD"]);
+		if (!branch.ok || branch.stdout.trim() === "") return asPath;
+		const upstream = await runGit(cwd, ["config", "--get", `branch.${branch.stdout.trim()}.remote`]);
+		const remote = upstream.stdout.trim();
+		// `.` marks a branch tracking another local branch; there is no URL behind it.
+		if (!upstream.ok || remote === "" || remote === ".") return asPath;
+		const url = await runGit(cwd, ["remote", "get-url", remote]);
+		if (url.ok && url.stdout.trim() !== "") return { source_repo: url.stdout.trim(), remote };
+		return asPath;
+	} catch {
+		return asPath;
+	}
+}
 
 export interface CommitOptions {
 	addAll?: boolean;

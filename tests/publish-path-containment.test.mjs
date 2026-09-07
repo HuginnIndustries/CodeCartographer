@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { handlePublish, readSpecArg } from "../mcp-server/server.ts";
 
+// handlePublish reads the user-global config for its publish_confirm gate;
+// keep the developer's real ~/.codecarto/config.yaml out of these tests.
+process.env.CODECARTO_USER_CONFIG_PATH = join(tmpdir(), `cc-publish-test-no-user-config-${process.pid}`, "config.yaml");
+
 let tmpRoot;
 
 async function setup() {

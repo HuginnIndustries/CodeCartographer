@@ -40,6 +40,12 @@ export interface LibraryConfig {
 	/** Whether `codecarto publish` should display a confirmation prompt
 	 *  with slug + source + library path before writing. Default true. */
 	publish_confirm: boolean;
+	/** True when some config layer set `publish_confirm`; false when the
+	 *  default above supplied it. Pi confirms either way (a dialog costs
+	 *  nothing), but the MCP server's refuse-unless-confirmed gate on
+	 *  `codecarto_publish` costs every host a round trip, so it applies only
+	 *  to hosts that actually configured the key. */
+	publish_confirm_configured: boolean;
 }
 
 export interface CodecartoConfig {
@@ -69,6 +75,7 @@ const DEFAULT_CONFIG: CodecartoConfig = {
 		path: null,
 		namespace: null,
 		publish_confirm: true,
+		publish_confirm_configured: false,
 	},
 };
 
@@ -141,6 +148,7 @@ function applyRaw(base: CodecartoConfig, raw: RawConfig | null | undefined): Cod
 		}
 		if (typeof l.publish_confirm === "boolean") {
 			out.library.publish_confirm = l.publish_confirm;
+			out.library.publish_confirm_configured = true;
 		}
 	}
 
