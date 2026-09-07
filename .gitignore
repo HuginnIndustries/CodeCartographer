@@ -32,3 +32,6 @@ docs/visibility-roadmap.md
 
 # Pi / agent session exports
 pi-session-*.html
+
+# Agent worktrees created by Claude Code sessions (never source)
+.claude/worktrees/
