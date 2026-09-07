@@ -6,8 +6,8 @@
 // spec-delta sessions, spikes, and maintainer rulings no longer end with
 // "record for a later explicit amendment" that nothing can perform.
 
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 
 import { getNextEligiblePhase } from "./pipeline.ts";
 import { buildTerminalNextActions, ensureArray, normalizeStatus } from "./status.ts";
@@ -49,6 +49,24 @@ export type AmendmentResult = {
 export function assertSafeAmendmentSlug(slug: string): void {
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) {
 		throw new Error(`Invalid amendment name: ${slug}`);
+	}
+}
+
+/**
+ * Slugs of the amendment files staged under scratch/amendments/, sorted.
+ * Discovery only — nothing here is validated; {@link loadAmendmentFile} does that.
+ */
+export async function listAmendmentNames(workspaceDir: string): Promise<string[]> {
+	const amendmentsDir = join(workspaceDir, "scratch", "amendments");
+	if (!(await pathExists(amendmentsDir))) return [];
+	try {
+		const entries = await readdir(amendmentsDir, { withFileTypes: true });
+		return entries
+			.filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
+			.map((entry) => basename(entry.name).replace(/\.ya?ml$/i, ""))
+			.sort();
+	} catch {
+		return [];
 	}
 }
 

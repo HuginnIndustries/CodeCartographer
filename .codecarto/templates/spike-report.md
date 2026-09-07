@@ -12,8 +12,8 @@
   phase handoff. When a spike's findings change the reimplementation spec, write
   the deltas as Recommended Deltas below and apply them with the
   spec-delta-application skill; when a spike resolves an open question after the
-  pipeline completed, close it with an amendment (templates/amendment.yaml +
-  codecarto_amend), citing this report.
+  pipeline completed, close it with an amendment (templates/amendment.yaml, then
+  codecarto_amend on MCP or /codecarto-amend on Pi), citing this report.
 
   Keep it honest: a spike that failed to answer its question is a valid result —
   record what was tried and what blocked it.

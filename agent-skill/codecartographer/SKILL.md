@@ -117,7 +117,7 @@ A PARTIAL row's evidence must name what is missing and which `open_questions` or
 - `codecarto_next` returns a prompt. Something still has to *do* the phase.
 - Never hand-edit `workflow/status.yaml`, append `THREAD_LOG.md`, or write a second closeout. Propose through the handoff.
 - Do not force phases out of DAG order unless the user asked.
-- If `codecarto_status` reports a scaffold-staleness warning, refresh the workspace's framework-owned files before trusting anything written inside `.codecarto/`; a stale scaffold's `GUIDE.md` can contradict this contract.
+- If `codecarto_status` reports a scaffold-staleness warning, refresh the workspace's framework-owned files (`codecarto_refresh_scaffold`; `/codecarto-refresh-scaffold` on the Pi extension) before trusting anything written inside `.codecarto/`; a stale scaffold's `GUIDE.md` can contradict this contract. The refresh never touches project state, findings outputs, or session directories.
 - A delegated run that times out may still have written its artifact. Check for the file and validate before retrying.
 - The drop-in `.codecarto/` template works without MCP, but the server is preferred: it owns atomic state updates, validation parsing, and the completion gate.
 

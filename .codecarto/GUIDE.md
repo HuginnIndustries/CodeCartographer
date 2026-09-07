@@ -92,7 +92,7 @@ If you are uncertain whether a file should be modified, treat it as read-only.
 ### Two things named "backlog", and neither is the other
 
 - **`BACKLOG.md` in this workspace** is *this project's* deferrals: work the project chose not to do yet. `DECISIONS.md` records what the project decided to **do**; `BACKLOG.md` records what it decided to **defer**. Deferrals get no `D` number. When a deferred item is later picked up, remove its entry here and record the decision in `DECISIONS.md`.
-- **`status.yaml`'s `post_pipeline` list** is framework-owned lifecycle state, not this file. Items there are retired by `codecarto_amend`, never by hand.
+- **`status.yaml`'s `post_pipeline` list** is framework-owned lifecycle state, not this file. Items there are retired by an amendment (`codecarto_amend` on MCP, `/codecarto-amend` on Pi), never by hand.
 - **CodeCartographer's own backlog** — deferred improvements to the *framework* — lives in the CodeCartographer repository, not in your workspace. If a phase prompt misled you or a validation criterion did not fit, that is feedback to the framework; it does not belong in this file.
 
 ## Pipeline Selection
@@ -215,7 +215,7 @@ post_pipeline:
 
 `kind` is one of: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`, or a post-pipeline work kind such as `spike` or `amendment`. Every new `carry_forward.target_phase` must be an ID in the active pipeline. Every `post_pipeline` entry requires a stable ID. Open questions should carry a stable `id` (e.g. `q-loadconfig-ambiguity`); if omitted, the framework auto-assigns one. When a later phase resolves an open question, list its id in `open_question_closures` to remove it from all phases. The downstream phase records resolved carry-forward IDs in `carry_forward_closures`; completion removes those entries atomically.
 
-After the pipeline completes, the handoff channel closes with it. Post-pipeline resolutions — an open question answered on evidence, a finished `post_pipeline` backlog item — are applied with an **amendment**: write `scratch/amendments/<slug>.yaml` (see `templates/amendment.yaml`) and run `codecarto_amend`. It updates `workflow/status.yaml` under the same lock completion uses and writes an amendment closeout plus THREAD_LOG entry. Never hand-edit `status.yaml` for this; amendments are refused while the pipeline is still running, so the two channels cannot race.
+After the pipeline completes, the handoff channel closes with it. Post-pipeline resolutions — an open question answered on evidence, a finished `post_pipeline` backlog item — are applied with an **amendment**: write `scratch/amendments/<slug>.yaml` (see `templates/amendment.yaml`) and run `codecarto_amend` (MCP) or `/codecarto-amend <slug>` (Pi). It updates `workflow/status.yaml` under the same lock completion uses and writes an amendment closeout plus THREAD_LOG entry. Never hand-edit `status.yaml` for this; amendments are refused while the pipeline is still running, so the two channels cannot race.
 
 ## Phase Selection Logic
 

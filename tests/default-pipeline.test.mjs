@@ -61,7 +61,8 @@ test("every PIPELINE_ALIASES target resolves to a real file", async () => {
 
 test("Pi extension registers a command for every CodeCartographer operation", async () => {
 	// The set of operations the framework exposes; both wrappers must surface them.
-	const expected = ["init", "open", "vision", "switch-pipeline", "status", "next", "phase", "validate", "complete", "skill", "publish", "library-init", "config", "usage", "dashboard", "broadside"];
+	const expected = ["init", "open", "vision", "switch-pipeline", "status", "next", "phase", "validate", "complete", "skill", "list-skills", "guide", "publish", "library-init", "config", "usage", "dashboard", "broadside", "refresh-scaffold", "amend"];
+	assert.equal(expected.length, 20, "the operation set is pinned; add here when a new operation ships on both surfaces");
 	const indexSrc = await readFile(join(REPO_ROOT, "extensions", "codecarto", "index.ts"), "utf8");
 	const missing = expected.filter((op) => !indexSrc.includes(`pi.registerCommand("codecarto-${op}"`));
 	assert.deepEqual(
