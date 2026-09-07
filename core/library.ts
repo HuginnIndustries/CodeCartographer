@@ -170,6 +170,18 @@ function isVisibility(v: string): v is LibraryVisibility {
 	return v === "internal" || v === "shared" || v === "public";
 }
 
+/**
+ * The level a marker's `visibility` or an entry's `confidentiality` is taken
+ * to have when it declares none. It is the default `initLibrary` writes and
+ * the default docs/library-format.md gives the entry field.
+ */
+export const DEFAULT_VISIBILITY: LibraryVisibility = "internal";
+
+// Ordered from most to least restricted. An entry may sit in a library at or
+// below its own level; one above it would expose the entry to everyone the
+// library reaches.
+const VISIBILITY_RANK: Record<LibraryVisibility, number> = { internal: 0, shared: 1, public: 2 };
+
 // ─── Library initialization ────────────────────────────────────────────────
 
 export interface InitLibraryOptions {
@@ -205,7 +217,7 @@ export async function initLibrary(libraryPath: string, options: InitLibraryOptio
 		schema_version: MARKER_SCHEMA_VERSION,
 		name,
 		namespaced: options.namespaced ?? false,
-		visibility: options.visibility ?? "internal",
+		visibility: options.visibility ?? DEFAULT_VISIBILITY,
 		created_at: new Date().toISOString(),
 	};
 
@@ -406,6 +418,15 @@ export interface PublishOptions {
 	 * the repository genuinely moved (rename, org transfer, host change).
 	 */
 	allowSourceRepoChange?: boolean;
+	/**
+	 * Permit publishing when the entry's `confidentiality` is more restricted
+	 * than the library's `visibility` — an `internal` entry into a `shared` or
+	 * `public` library, a `shared` entry into a `public` one. Off by default:
+	 * that direction exposes the spec to everyone the library reaches. Set
+	 * this only when the exposure is intended. It does not change the
+	 * confidentiality recorded on the entry.
+	 */
+	allowConfidentialityMismatch?: boolean;
 }
 
 export interface PublishResult {
@@ -415,6 +436,24 @@ export interface PublishResult {
 	isNewVersion: boolean;
 	entryDir: string;
 	versionDir: string;
+}
+
+/**
+ * Thrown by `publishEntry` when the entry is more restricted than the library
+ * it is headed for. Nothing has been written when this is raised. It carries
+ * the two compared levels so a wrapper with a user to ask (Pi) can pose the
+ * question from the values rather than by matching the message.
+ */
+export class ConfidentialityMismatchError extends Error {
+	readonly entryConfidentiality: LibraryVisibility;
+	readonly libraryVisibility: LibraryVisibility;
+
+	constructor(message: string, entryConfidentiality: LibraryVisibility, libraryVisibility: LibraryVisibility) {
+		super(message);
+		this.name = "ConfidentialityMismatchError";
+		this.entryConfidentiality = entryConfidentiality;
+		this.libraryVisibility = libraryVisibility;
+	}
 }
 
 export async function publishEntry(
@@ -467,6 +506,34 @@ export async function publishEntry(
 					`allowSourceRepoChange in PublishOptions.`,
 			);
 		}
+	}
+
+	// Confidentiality guard. Levels are ordered internal < shared < public. An
+	// entry may sit in a library at or below its own level, but one more
+	// restricted than its library would be exposed to everyone the library
+	// reaches: an internal spec in a public library is a leak. Either side that
+	// declares nothing counts as internal — the marker default initLibrary
+	// writes, and the entry default docs/library-format.md documents — so a
+	// library with no visibility field accepts everything it did before. Like
+	// the collision guard this runs ahead of the idempotence branch, so a
+	// metadata-only update cannot reclassify an entry past it, and it fails
+	// before anything is written.
+	const entryConfidentiality = input.confidentiality ?? DEFAULT_VISIBILITY;
+	const libraryVisibility = marker.visibility ?? DEFAULT_VISIBILITY;
+	if (!opts.allowConfidentialityMismatch && VISIBILITY_RANK[entryConfidentiality] < VISIBILITY_RANK[libraryVisibility]) {
+		const label = namespace ? `${namespace}/${input.slug}` : input.slug;
+		const declared = input.confidentiality ? "" : " (the default when none is declared)";
+		throw new ConfidentialityMismatchError(
+			`Refusing to publish: entry "${label}" has confidentiality "${entryConfidentiality}"${declared}, ` +
+				`but library "${marker.name}" has visibility "${libraryVisibility}". Publishing would expose a ` +
+				`spec classified "${entryConfidentiality}" to everyone the "${libraryVisibility}" library reaches. ` +
+				`Publish it to a library whose visibility is "${entryConfidentiality}" or narrower, declare a ` +
+				`confidentiality of "${libraryVisibility}" or wider if the spec may travel that far, or — if ` +
+				`this exposure is intended — re-publish with the mismatch allowed: ` +
+				`allow_confidentiality_mismatch on codecarto_publish, allowConfidentialityMismatch in PublishOptions.`,
+			entryConfidentiality,
+			libraryVisibility,
+		);
 	}
 
 	// Content-hash idempotence: if the latest version's spec matches bytes-for-bytes,

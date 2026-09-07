@@ -76,7 +76,7 @@ library:
 |---|---|---|
 | `schema_version` | yes | Integer. Currently `1`. Bumped on breaking format changes. |
 | `name` | yes | Human-readable label. Surfaced in dashboards and listings. |
-| `visibility` | no | One of `internal`, `shared`, `public`. Defense-in-depth hint when CodeCartographer compares against per-entry `confidentiality`. |
+| `visibility` | no | One of `internal`, `shared`, `public`; absent means `internal`. Publish compares it against each entry's `confidentiality` and refuses an entry more restricted than the library — see "Confidentiality conflicts". |
 | `created_at` | no | ISO 8601 UTC timestamp. Informational only. |
 | `namespaced` | yes | Boolean. If `true`, entries live under `entries/<namespace>/<slug>/`. If `false`, entries live under `entries/<slug>/` and CodeCartographer refuses to publish with a non-empty namespace. |
 
@@ -223,7 +223,7 @@ provenance:
 | `tags` | string[] | Filtering hints. LLM-generated at publish, user-editable. |
 | `capabilities` | string[] | Higher-level than tags — what the system *does*. LLM-generated at publish, user-editable. |
 | `scope_tier_counts` | object | Counts of `p0`/`p1`/`p2` items from the spec's Scope Tiers section. |
-| `confidentiality` | string | `internal` (default), `shared`, or `public`. Compared against library `visibility` at publish time. |
+| `confidentiality` | string | `internal` (default), `shared`, or `public`, ordered `internal` < `shared` < `public`. Publish refuses an entry below the library's `visibility` — an `internal` entry into a `shared` or `public` library, a `shared` entry into a `public` one — unless `allow_confidentiality_mismatch` is set; an entry at or above it passes. See "Confidentiality conflicts". |
 | `generation.*` | mixed | Provenance of the LLM run. See "Generation capture matrix" below. |
 | `provenance.prior_version` | integer or null | The version this one was derived from. `null` for first version. |
 | `provenance.mutation_source` | path or null | If the version was produced by `spec-mutate`, the relative path to the deltas file. |
@@ -376,6 +376,33 @@ the one legitimate case for changing the recorded value. Override it
 with `allow_source_repo_change` on `codecarto_publish`, or
 `allowSourceRepoChange` in `PublishOptions` when calling the core
 directly.
+
+## Confidentiality conflicts
+
+Publish also compares the entry's `confidentiality` against the
+library marker's `visibility`. The levels are ordered
+`internal` < `shared` < `public`, and a side that declares nothing
+counts as `internal` — the default a newly initialized library's
+marker carries, and the default this document gives the entry field.
+
+An entry may sit in a library at or below its own level. An entry
+*more* restricted than its library may not: an `internal` spec in a
+`shared` or `public` library, or a `shared` spec in a `public` one,
+would be exposed to everyone the library reaches. That direction
+fails and writes nothing. A `public` entry in an `internal` library is
+fine, and a library with no `visibility` field accepts every entry it
+did before.
+
+Like the source-repo check, this runs ahead of the content-hash
+branch, so a metadata-only update cannot reclassify an entry past it,
+and `force_new_version` does not skip it. The Pi extension declares no
+`confidentiality`, so `/codecarto-publish` into a `shared` or `public`
+library asks whether to publish anyway and treats a yes as the
+override. On MCP, set `allow_confidentiality_mismatch` on
+`codecarto_publish`; when calling the core directly, set
+`allowConfidentialityMismatch` in `PublishOptions`. The override
+permits the placement — it does not change the recorded
+`confidentiality`.
 
 ## Git interaction
 

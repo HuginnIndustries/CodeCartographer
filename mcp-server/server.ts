@@ -706,6 +706,7 @@ export async function handlePublish(args: Record<string, unknown>) {
 		{
 			forceNewVersion: args.force_new_version === true,
 			allowSourceRepoChange: args.allow_source_repo_change === true,
+			allowConfidentialityMismatch: args.allow_confidentiality_mismatch === true,
 		},
 	);
 
@@ -1284,7 +1285,12 @@ const TOOLS = [
 				headline: { type: "string" },
 				tags: { type: "array", items: { type: "string" } },
 				capabilities: { type: "array", items: { type: "string" } },
-				confidentiality: { type: "string", enum: ["internal", "shared", "public"] },
+				confidentiality: {
+					type: "string",
+					enum: ["internal", "shared", "public"],
+					description:
+						"Classification of the entry. Defaults to internal. Ordered internal < shared < public; publish refuses an entry more restricted than the library's visibility unless allow_confidentiality_mismatch is set.",
+				},
 				model_metadata: {
 					type: "object",
 					properties: {
@@ -1301,6 +1307,11 @@ const TOOLS = [
 					type: "boolean",
 					description:
 						"Permit publishing when the target entry already records a different source_repo. Off by default, because a mismatch usually means two projects derived the same slug and the spec would land in the wrong version history. Set only when the repository itself moved.",
+				},
+				allow_confidentiality_mismatch: {
+					type: "boolean",
+					description:
+						"Permit publishing when the entry's confidentiality is more restricted than the library's visibility (internal < shared < public: an internal entry into a shared or public library, a shared entry into a public one). Off by default, because that direction exposes the spec to everyone the library reaches. An omitted confidentiality counts as internal. Set only when the exposure is intended; the recorded confidentiality is not changed.",
 				},
 			},
 			required: ["source_repo", "headline"],
