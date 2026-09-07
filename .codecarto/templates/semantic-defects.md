@@ -25,6 +25,12 @@
 <!-- For each finding: location, defect, evidence, severity, evidence level, action. -->
 <!-- Cite the protocol or state-machine entry that the finding violates, when relevant. -->
 <!-- If no findings, write "No defects found in this category." -->
+<!-- Evidence Level: observed fact / strong inference / external-behavior claim / open question.
+     Action: fix before porting / port differently / leave behind / verify at runtime.
+     Pairing rule (validated mechanically): open question or external-behavior claim ⇒
+     verify at runtime or port differently, never fix before porting; and list the finding
+     in ## Open Questions below. A finding that closes a routed carry-forward derived from a
+     still-open needs-runtime-test question inherits that uncertainty. -->
 
 | # | Location | Defect | Severity | Evidence Level | Action |
 |---|----------|--------|----------|----------------|--------|
@@ -45,6 +51,9 @@
 ## Pass 5: API Contract Violations
 
 <!-- Each finding should pair the source contract/protocol reference with the diverging code location. -->
+<!-- When the analyzed code is the CALLER of a contract another system implements, what that system
+     does with the payload is an external-behavior claim (action: verify at runtime) until a runtime
+     probe against the pinned version says otherwise — see passes/05 "Which side implements the contract". -->
 
 | # | Location | Defect | Severity | Evidence Level | Action | Spec Reference |
 |---|----------|--------|----------|----------------|--------|----------------|
@@ -95,6 +104,21 @@
 
 ---
 
+## Open Questions
+
+<!-- Every finding whose Evidence Level is open question or external-behavior claim gets a row
+     here, so the hedge travels with the finding into this document — not only into the handoff.
+     Include any still-open needs-runtime-test question a closed carry-forward derived from.
+     Mirror each row into your phase handoff's open_questions. Derived findings lists the finding
+     numbers (e.g. "5.2") that depend on this question; none of them may carry a settled action
+     while the question stands. -->
+
+| ID | Kind | Question | Why source cannot settle it | Derived findings |
+|----|------|----------|-----------------------------|------------------|
+| | | | | |
+
+---
+
 ## Coverage and limits
 
 - Inspected scope:
@@ -115,6 +139,8 @@
 | 4 | Findings are organized by pass and sorted by severity; summary tables match the detailed findings. | PASS / PARTIAL / FAIL | |
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
 | 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
+| 7 | Unsettled findings (evidence level open question or external-behavior claim) carry an unsettled action (verify at runtime or port differently on pre-porting pipelines; investigate on maintenance pipelines), never a settled one, and each appears in the Open Questions table. | PASS / PARTIAL / FAIL | |
+| 8 | Every quantitative specific in a finding (size, count, default, version, timeout) cites the file and line or command output it was read from, or is marked as an estimate. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

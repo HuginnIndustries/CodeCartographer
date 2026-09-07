@@ -69,7 +69,7 @@ End with a spike list:
 - risky performance assumptions
 - platform-sensitive areas that need targeted tests
 
-For every defect in the bundle, preserve its disposition (`fix before porting`, `port differently`, or `leave behind`) and convert it into an explicit design consequence or acceptance check.
+For every defect in the bundle, preserve its disposition (`fix before porting`, `port differently`, `leave behind`, or `verify at runtime`) and convert it into an explicit design consequence or acceptance check — except `verify at runtime`, which becomes a Spike List entry and a `post_pipeline` entry of `kind: spike` in your handoff, never a design consequence: the diagnosis has not been confirmed, and designing around it would build the unverified claim into the new system.
 
 Use the output template at `templates/reimplementation-spec.md`.
 

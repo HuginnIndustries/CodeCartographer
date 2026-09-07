@@ -385,7 +385,7 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 		);
 	}
 
-	const { updatedState, closeoutNotice, orchestratorCheckpoint } = await completeValidatedPhase(cwd, validation, "codecarto_complete").catch((error) => {
+	const { updatedState, closeoutNotice, orchestratorCheckpoint, warnings } = await completeValidatedPhase(cwd, validation, "codecarto_complete").catch((error) => {
 		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
 
@@ -425,6 +425,8 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 	if (closeoutNotice) lines.push(closeoutNotice);
 	if (orchestratorCheckpoint) lines.push(orchestratorCheckpoint);
 	if (dashboardPath) lines.push(`Dashboard refreshed: ${dashboardPath}`);
+	for (const warning of validation.warnings ?? []) lines.push(`NOTE: ${warning} Non-gating.`);
+	for (const warning of warnings) lines.push(`NOTE: ${warning} Non-gating.`);
 
 	return textResult(lines.join("\n"), {
 		completedPhase: validation.phaseId,
@@ -433,6 +435,7 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 		closeoutNotice,
 		orchestratorCheckpoint,
 		dashboardPath,
+		warnings: [...(validation.warnings ?? []), ...warnings],
 	});
 }
 

@@ -19,6 +19,7 @@ Keep four classes of findings separate throughout:
 - `observed fact`: direct statements from docs, tests, schemas, types, and code.
 - `strong inference`: architectural conclusions drawn from multiple facts.
 - `portability hazard`: assumptions tied to the source language, runtime, terminal, OS, or third-party SDKs.
+- `external-behavior claim`: a claim about what a system outside this source tree does (a server, engine, driver, third-party API, OS) — unverifiable at any read depth here; carry it forward as unsettled, never promote it to a fact.
 - `open question`: missing or conflicting behavior that still needs evidence.
 
 Prefer concept names over source names:
@@ -39,7 +40,7 @@ Sort features by porting importance:
 
 If the defect report is available, integrate defect findings into the porting bundle:
 - Reference relevant defects in the feature contract table.
-- Tag each referenced defect with a porting recommendation: `fix before porting` (the defect would carry into a new implementation), `port differently` (the new implementation should handle this case differently by design), or `leave behind` (the defect is specific to the source implementation and won't survive porting).
+- Tag each referenced defect with a porting recommendation: `fix before porting` (the defect would carry into a new implementation), `port differently` (the new implementation should handle this case differently by design), `leave behind` (the defect is specific to the source implementation and won't survive porting), or `verify at runtime` (the diagnosis is an `external-behavior claim` or `open question` — carry it as a spike for the spec, and do not design around an unverified diagnosis). Preserve `verify at runtime` as written: flattening it into one of the settled three is how a hedge stops traveling.
 - Consolidate defect-related portability hazards alongside hazards from other phases.
 
 Use the output template at `templates/reverse-engineering-bundle.md`. Produce:

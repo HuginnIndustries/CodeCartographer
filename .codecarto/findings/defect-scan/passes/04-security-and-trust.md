@@ -54,7 +54,7 @@ For each finding, record:
 - **Defect**: what security property is violated.
 - **Evidence**: the specific code path, missing check, or exposed secret.
 - **Severity**: critical (actively exploitable, data exposure, auth bypass), high (exploitable with some effort or preconditions), medium (defense-in-depth gap, hardcoded non-production secret), low (missing header, informational disclosure).
-- **Evidence level**: observed fact / strong inference / open question.
+- **Evidence level**: observed fact / strong inference / external-behavior claim / open question. A claim about what another system does with this code's output (a server, engine, driver, third-party API, OS) is an `external-behavior claim`, not a `strong inference` — see findings/defect-scan/SKILL.md §Evidence Classification.
 
 ## What to skip
 

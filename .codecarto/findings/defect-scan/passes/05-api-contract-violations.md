@@ -47,9 +47,10 @@ For each finding, record:
 - **Location**: file path and function/method name.
 - **Defect**: what contract is violated and how.
 - **Spec source**: where the expected behavior is documented (docstring, type signature, contracts phase, protocols phase, README).
+- **Which side implements the contract**: the analyzed code is often the *caller* of a contract another system implements (an HTTP API, an inference engine, a driver). A divergence between what this code sends and what the other side documents is only an `observed fact` about this code; what the other side actually does with it — accepts, ignores, rejects — is an `external-behavior claim` until a runtime probe against the pinned version says otherwise, and its action is `verify at runtime`, never `fix before porting`.
 - **Evidence**: the specific divergence between spec and implementation.
 - **Severity**: critical (public API returns wrong results), high (documented behavior incorrect in edge cases), medium (internal API inconsistency), low (stale docs, minor parameter mismatch).
-- **Evidence level**: observed fact / strong inference / open question.
+- **Evidence level**: observed fact / strong inference / external-behavior claim / open question. A claim about what another system does with this code's output (a server, engine, driver, third-party API, OS) is an `external-behavior claim`, not a `strong inference` — see findings/defect-scan/SKILL.md §Evidence Classification.
 
 ## What to skip
 

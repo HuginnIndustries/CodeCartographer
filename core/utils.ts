@@ -129,3 +129,22 @@ export function formatMillis(ms: number): string {
 	const seconds = Math.floor((ms % 60_000) / 1000);
 	return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
 }
+
+/**
+ * Compare two dotted `major.minor.patch` versions. Returns -1, 0, or 1, or
+ * null when either side is not a plain three-part version (pre-release tags,
+ * hand-edited markers) so callers can fall back to string equality.
+ */
+export function compareDottedVersions(a: string, b: string): number | null {
+	const parse = (version: string): number[] | null => {
+		const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+		return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+	};
+	const left = parse(a);
+	const right = parse(b);
+	if (!left || !right) return null;
+	for (let i = 0; i < 3; i++) {
+		if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
+	}
+	return 0;
+}

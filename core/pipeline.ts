@@ -9,6 +9,7 @@ import type {
 	WorkspaceState,
 } from "./types.ts";
 import { pathExists } from "./utils.ts";
+import { crossCheckFindings, findingsPairingGateActive } from "./findings.ts";
 
 export const PIPELINE_ALIASES: Record<string, string> = {
 	"full-with-audit": "workflow/pipeline-full-with-audit.yaml",
@@ -168,6 +169,18 @@ export async function validatePhaseOutput(state: WorkspaceState, phaseId?: strin
 		errors.push("One or more validation criteria are marked FAIL.");
 		overall = "FAIL";
 	}
+
+	// Findings cross-checks (#122): the validation table says whether criteria
+	// were met; these read what the findings' own evidence and action cells
+	// say. Deterministic on two cells the model wrote, so the pairing rule can
+	// gate — on a scaffold that offers `verify at runtime`. Older scaffolds warn.
+	const crossCheck = crossCheckFindings(content, { gate: findingsPairingGateActive(state.scaffoldVersion) });
+	if (crossCheck.errors.length > 0) {
+		errors.push(...crossCheck.errors);
+		overall = "FAIL";
+	}
+	const warnings = crossCheck.warnings;
+
 	if (overall === "FAIL" && errors.length === 0) {
 		errors.push("Validation overall result is FAIL.");
 	}
@@ -183,6 +196,7 @@ export async function validatePhaseOutput(state: WorkspaceState, phaseId?: strin
 		gaps,
 		errors,
 		secondaryOutputs,
+		...(warnings.length > 0 && { warnings }),
 	};
 }
 
@@ -198,6 +212,9 @@ export function buildValidationSummary(validation: ValidationResult): string[] {
 	}
 	if (validation.errors.length > 0) {
 		lines.push(...validation.errors.slice(0, 3));
+	}
+	for (const warning of validation.warnings ?? []) {
+		lines.push(`NOTE: ${warning} Non-gating.`);
 	}
 	const missingSecondary = (validation.secondaryOutputs ?? []).filter((output) => !output.exists);
 	if (missingSecondary.length > 0) {

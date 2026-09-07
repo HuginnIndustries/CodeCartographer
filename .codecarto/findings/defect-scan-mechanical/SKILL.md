@@ -39,9 +39,10 @@ Use the architecture map to decide emphasis:
 
 Use the same scheme as the legacy defect-scan SKILL:
 
-- **Evidence levels:** `observed fact`, `strong inference`, `open question`.
+- **Evidence levels:** `observed fact`, `strong inference`, `external-behavior claim`, `open question`.
 - **Severity:** `critical`, `high`, `medium`, `low`.
-- **Action (pre-porting pipelines):** `fix before porting`, `port differently`, `leave behind`.
+- **Action (pre-porting pipelines):** `fix before porting`, `port differently`, `leave behind`, `verify at runtime`.
+- **Pairing rule:** `open question` or `external-behavior claim` evidence takes `verify at runtime` or `port differently`, never `fix before porting`, and the finding also appears in the report's Open Questions table. Validation checks this on the findings tables.
 
 See `findings/defect-scan/SKILL.md` for the full criteria; this phase intentionally does not duplicate them.
 

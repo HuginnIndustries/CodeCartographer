@@ -46,7 +46,7 @@ For each finding, record:
 - **Defect**: what concurrent or resource scenario is mishandled.
 - **Evidence**: the specific shared state, missing synchronization, or unclosed resource.
 - **Severity**: critical (data corruption or deadlock in normal operation), high (race condition in common paths), medium (resource leak under error conditions), low (theoretical race in rarely-exercised path).
-- **Evidence level**: observed fact / strong inference / open question.
+- **Evidence level**: observed fact / strong inference / external-behavior claim / open question. A claim about what another system does with this code's output (a server, engine, driver, third-party API, OS) is an `external-behavior claim`, not a `strong inference` — see findings/defect-scan/SKILL.md §Evidence Classification.
 
 ## What to skip
 

@@ -90,6 +90,8 @@ phases:
       - Summary tables are complete and counts match the detailed findings.
       - Items spotted that are actually semantic in nature are routed onward via a carry_forward entry in the phase handoff targeting defect-scan-semantic.
       - Findings are marked with evidence levels.
+      - Unsettled findings (evidence level open question or external-behavior claim) carry an unsettled action (verify at runtime or port differently on pre-porting pipelines; investigate on maintenance pipelines), never a settled one, and each appears in the Open Questions table.
+      - Every quantitative specific in a finding (size, count, default, version, timeout) cites the file and line or command output it was read from, or is marked as an estimate.
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
@@ -194,6 +196,8 @@ phases:
       - Findings are organized by pass and sorted by severity; summary tables match the detailed findings.
       - Any carry_forward entries that targeted defect-scan-semantic have been resolved or explicitly re-routed.
       - Findings are marked with evidence levels.
+      - Unsettled findings (evidence level open question or external-behavior claim) carry an unsettled action (verify at runtime or port differently on pre-porting pipelines; investigate on maintenance pipelines), never a settled one, and each appears in the Open Questions table.
+      - Every quantitative specific in a finding (size, count, default, version, timeout) cites the file and line or command output it was read from, or is marked as an estimate.
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
@@ -236,7 +240,7 @@ phases:
       - The system summary, layer map, contract table, protocol notes, and porting findings are synthesized.
       - Portability hazards and open questions are separated from facts.
       - Feature importance is sorted for porting.
-      - Defect Synthesis consolidates mechanical-defects.md and semantic-defects.md with porting recommendations (fix before porting / port differently / leave behind).
+      - Defect Synthesis consolidates mechanical-defects.md and semantic-defects.md with porting recommendations (fix before porting / port differently / leave behind / verify at runtime).
       - Findings are marked with evidence levels.
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
       - The Source Index makes the bundle a self-contained compression boundary and identifies targeted deep-read triggers.

@@ -9,7 +9,7 @@ import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock, applyHandoff, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
 import type { PhaseHandoff, PipelineFile, StatusFile, WorkspaceState } from "./types.ts";
-import { newlineIfUnterminated, pathExists } from "./utils.ts";
+import { compareDottedVersions, newlineIfUnterminated, pathExists } from "./utils.ts";
 import { loadYamlFile, stringifySimpleYaml } from "./yaml.ts";
 
 // Walk up from the current file to find the package root. Needed because the
@@ -282,19 +282,6 @@ export async function refreshScaffold(cwd: string): Promise<RefreshScaffoldResul
 }
 
 // Numeric x.y.z comparison; null when either side is not a plain dotted triple.
-function compareDottedVersions(a: string, b: string): number | null {
-	const parse = (version: string): number[] | null => {
-		const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
-		return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
-	};
-	const left = parse(a);
-	const right = parse(b);
-	if (!left || !right) return null;
-	for (let i = 0; i < 3; i++) {
-		if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
-	}
-	return 0;
-}
 
 /**
  * Human-readable staleness notice for the workspace's .codecarto/ scaffold,

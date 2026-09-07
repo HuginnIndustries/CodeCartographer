@@ -114,7 +114,7 @@ test("the rewrite references carry the disposition vocabulary the porting phase 
 	// the template drift apart, a session produces a bundle the next phase
 	// cannot act on.
 	const synthesis = (await core.readGuide("deep-audit-synthesis")).content;
-	for (const disposition of ["fix before porting", "port differently", "leave behind"]) {
+	for (const disposition of ["fix before porting", "port differently", "leave behind", "verify at runtime"]) {
 		assert.ok(synthesis.includes(disposition), `deep-audit synthesis omits the "${disposition}" disposition`);
 	}
 	assert.match(synthesis, /acceptance[- ]test/i, "hazards must be tied to acceptance tests");

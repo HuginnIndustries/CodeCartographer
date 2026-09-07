@@ -183,6 +183,7 @@ Every finding in every output is tagged with one of four evidence levels:
 - **Observed fact** — directly stated in docs, tests, schemas, types, or code. Highest confidence.
 - **Strong inference** — conclusion drawn from multiple observed facts. High confidence but not directly stated.
 - **Portability hazard** — behavior tied to the source language, runtime, OS, or third-party SDK. Will likely need different handling in a port.
+- **External-behavior claim** — a claim about what a system outside the analyzed code does (a server, engine, driver, third-party API, OS): how it parses a payload, what it silently ignores. Unverifiable by reading this code; needs a runtime probe. Never pairs with a settled fix action.
 - **Open question** — missing or conflicting information. Needs investigation.
 
 When reading the outputs, pay special attention to **portability hazards** (if porting) and **open questions** (always). These are where surprises hide.
@@ -203,7 +204,7 @@ The defect-scan phase runs six sequential analysis passes, each focused on one c
 
 Each finding is tagged with a **severity** (critical / high / medium / low) and a recommended **action**:
 
-- Pre-porting pipelines: *fix before porting* / *port differently* / *leave behind*
+- Pre-porting pipelines: *fix before porting* / *port differently* / *leave behind* / *verify at runtime* (the diagnosis names behavior of a system the code only calls — confirm it at runtime before designing a fix)
 - Maintenance pipelines: *fix now* / *track* / *accept* / *investigate*
 
 ### Fixing Defects

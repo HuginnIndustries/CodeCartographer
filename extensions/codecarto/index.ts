@@ -722,7 +722,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const { updatedState, closeoutNotice } = await autoCompletePhase(ctx, validation);
+			const { updatedState, closeoutNotice, warnings } = await autoCompletePhase(ctx, validation);
 
 			lastFeedbackLines = [
 				`Completed phase: ${validation.phaseId}`,
@@ -730,9 +730,12 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				`Next phase: ${updatedState.status.current_phase}`,
 			];
 			if (closeoutNotice) lastFeedbackLines.push(closeoutNotice);
+			const notes = [...(validation.warnings ?? []), ...warnings];
+			for (const note of notes) lastFeedbackLines.push(`NOTE: ${note} Non-gating.`);
 			setUiState(ctx, updatedState, lastFeedbackLines);
-			ctx.ui.notify(`Marked ${validation.phaseId} complete`, validation.overall === "PASS WITH GAPS" ? "warning" : "info");
+			ctx.ui.notify(`Marked ${validation.phaseId} complete`, validation.overall === "PASS WITH GAPS" || notes.length > 0 ? "warning" : "info");
 			if (closeoutNotice) ctx.ui.notify(closeoutNotice, "info");
+			for (const note of notes) ctx.ui.notify(note, "warning");
 		},
 	});
 

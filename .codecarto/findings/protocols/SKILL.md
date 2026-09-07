@@ -77,6 +77,7 @@ Produce four outputs:
 Mark every finding with one of these evidence levels:
 - `observed fact`: direct statement from docs, tests, schemas, types, or code.
 - `strong inference`: protocol conclusion drawn from multiple facts.
+- `external-behavior claim`: a claim about what the peer or a system outside this source tree does with a message (how it parses, what it ignores, version-dependent behavior); unverifiable by reading this code, so it stays unsettled until a runtime capture or that system's own source confirms it.
 - `portability hazard`: assumption tied to the source language, runtime, terminal, OS, or third-party SDKs.
 - `open question`: missing or conflicting behavior that still needs evidence.
 

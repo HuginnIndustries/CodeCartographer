@@ -11,6 +11,11 @@ export type CompletionResult = {
 	updatedState: WorkspaceState;
 	closeoutNotice?: string;
 	/**
+	 * Non-gating closure-integrity observations (#122): closures the handoff
+	 * claims that the primary output never mentions. Empty when clean.
+	 */
+	warnings: string[];
+	/**
 	 * One-line phase-boundary reminder covering what completion just mechanized
 	 * (decisions appended, proposals staged) and what still needs orchestrator
 	 * judgment (pending proposals, open-question label re-triage). Undefined
@@ -328,6 +333,24 @@ export async function completeValidatedPhase(
 		}
 	}
 
+	// Closure integrity (#122, warning only): a handoff can close a carry-forward
+	// or open question the report never addressed — "closed in the handoff,
+	// resolved nowhere." The id of every claimed closure should appear somewhere
+	// in the primary output that claims to resolve it.
+	const warnings: string[] = [];
+	if (handoff && validation.outputPath) {
+		const closures = [...handoff.carry_forward_closures, ...handoff.open_question_closures].filter((id) => id?.trim());
+		if (closures.length > 0) {
+			const output = await readFile(validation.outputPath, "utf8").catch(() => "");
+			const unmentioned = closures.filter((id) => !output.includes(id));
+			if (unmentioned.length > 0) {
+				warnings.push(
+					`The handoff closes ${unmentioned.join(", ")} but .codecarto/${validation.primaryOutput} never mentions ${unmentioned.length === 1 ? "that id" : "those ids"} — a closure should be visible in the report that claims to resolve it, not only in the handoff.`,
+				);
+			}
+		}
+	}
+
 	const completionTimestamp = new Date().toISOString();
 	let closeoutPath: string | undefined;
 	let orchestratorCheckpoint: string | undefined;
@@ -407,5 +430,6 @@ export async function completeValidatedPhase(
 		updatedState,
 		closeoutNotice: closeoutPath ? `Closeout: ${closeoutPath}` : undefined,
 		orchestratorCheckpoint,
+		warnings,
 	};
 }

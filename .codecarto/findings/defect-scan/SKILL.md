@@ -45,7 +45,10 @@ Not every pass applies to every codebase. Use the architecture map to decide emp
 Mark every finding with one of these evidence levels:
 - `observed fact`: the defect is directly visible in the code.
 - `strong inference`: the defect is highly likely based on multiple code observations.
+- `external-behavior claim`: the claim is about a component outside the analyzed source tree — a server, engine, driver, third-party API, or OS — including how it parses a payload, what it silently ignores, and version-dependent behavior. Not obtainable at any read depth of this source: settling it needs a runtime probe against the pinned version, or that system's own source at that version. This is not a weaker `strong inference`; it is a claim about a different artifact. "The client sends a map where the server's API documents an array" is an `external-behavior claim` about the server, even when both halves of the sentence are observed facts.
 - `open question`: the code is suspicious but would need runtime testing to confirm.
+
+**Cite or hedge quantities.** Any number in a finding — a file size, a default value, a call-site count, a version, a timeout — cites the file and line or the command output it was read from, or is written as an explicit estimate ("~300 MB, not measured"). A plausible specific stated in the same register as a read one is how a 32.8 MB artifact gets recorded as ~300 MB and a default of -20 as -5.
 
 ## Severity Classification
 
@@ -59,10 +62,11 @@ Assign one severity per finding:
 
 Tag each finding with a recommended action. Use the set that matches your pipeline:
 
-**Pre-porting pipelines** (full-with-audit, full-with-deep-audit):
+**Pre-porting pipelines** (full-with-audit, full-with-deep-audit, scout-first):
 - `fix before porting`: the defect would carry into a new implementation if not addressed first.
 - `port differently`: the new implementation should handle this case differently by design.
 - `leave behind`: the defect is specific to the source implementation and won't survive porting.
+- `verify at runtime`: the diagnosis names behavior of a system outside the analyzed source, or otherwise cannot be settled by reading; a runtime probe must confirm it before any fix is designed. Its destination is the spec's Spike List plus a `post_pipeline` entry of `kind: spike` — not a design change.
 
 **Maintenance pipelines** (defect-scan):
 - `fix now`: the defect is actively causing or risking problems.
@@ -71,6 +75,16 @@ Tag each finding with a recommended action. Use the set that matches your pipeli
 - `investigate`: needs runtime testing or deeper analysis to confirm.
 
 Determine which action set to use by checking the `pipeline` field in `workflow/status.yaml`.
+
+### Pairing rules — the evidence level bounds the action
+
+A finding's action may not assert more certainty than its evidence level carries:
+
+- Evidence `open question` or `external-behavior claim` ⇒ action is `verify at runtime` or `port differently` (pre-porting), or `investigate` (maintenance). **Never `fix before porting` or `fix now`.** A fix designed from an unsettled diagnosis can convert working behavior into the one shape the external system ignores — a real run recommended exactly that reshape, and runtime testing inverted it.
+- Evidence `observed fact` ⇒ action is not `verify at runtime`. A settled label with an unsettled action contradicts itself; pick the one that is true.
+- Every finding whose evidence is `open question` or `external-behavior claim` also appears in the report's **Open Questions** table, so the hedge travels with the finding into every document a later phase or a human reads — not only into the handoff.
+
+Validation checks the first rule mechanically on the findings tables; on a current scaffold a violation fails the phase. If a routed `carry_forward` item derives from an open question of `kind: needs-runtime-test` that is still unresolved, the finding that addresses it inherits that uncertainty: it closes the carry-forward with `verify at runtime`, not with a settled action, unless the question itself is closed with runtime evidence in the same handoff.
 
 ## Output
 

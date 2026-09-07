@@ -47,7 +47,7 @@ For each finding, record:
 - **Defect**: what error scenario is mishandled.
 - **Evidence**: the specific code pattern or path that demonstrates the gap.
 - **Severity**: critical (data loss or corruption on failure), high (silent failure in normal operations), medium (poor error messages or missing cleanup), low (observability gap).
-- **Evidence level**: observed fact / strong inference / open question.
+- **Evidence level**: observed fact / strong inference / external-behavior claim / open question. A claim about what another system does with this code's output (a server, engine, driver, third-party API, OS) is an `external-behavior claim`, not a `strong inference` — see findings/defect-scan/SKILL.md §Evidence Classification.
 
 ## What to skip
 
