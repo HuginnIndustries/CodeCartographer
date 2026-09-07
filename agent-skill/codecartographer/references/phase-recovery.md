@@ -39,7 +39,7 @@ If two reduced-scope attempts fail, the problem is usually scope, not the execut
 
 - Split the reading. Use scoped pre-passes over individual subsystems, save the notes under `.codecarto/scratch/`, and give the retry those notes as evidence.
 - Consider whether the pipeline variant is right. A repository too large for one `architecture` pass may want `architecture-only` first, reviewed, then a switch.
-- Check for a scaffold-staleness warning in `codecarto_status`. A workspace whose framework-owned files predate the running version can carry instructions that contradict the current contract, which produces artifacts that fail validation for reasons the executor cannot see.
+- Check for a scaffold-staleness warning in `codecarto_status`. A workspace whose framework-owned files predate the running version can carry instructions that contradict the current contract, which produces artifacts that fail validation for reasons the executor cannot see. `codecarto_refresh_scaffold` (`/codecarto-refresh-scaffold` on the Pi extension) refreshes those files without touching project state.
 
 ## What not to do
 

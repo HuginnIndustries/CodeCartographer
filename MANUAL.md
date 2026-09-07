@@ -128,6 +128,8 @@ Read .codecarto/GUIDE.md in this workspace and follow its instructions.
 
 The LLM will read GUIDE.md, then read `.codecarto/workflow/status.yaml` to figure out which phase to work on, then read the phase's SKILL.md for detailed instructions, and start analyzing the source code.
 
+On Pi or MCP there is also a packaged *agent* guide — the drive loop, the handoff contract, executor choice, recovery patterns, and how to read a Broad-Side run — separate from the workspace's GUIDE.md. Read it with `/codecarto-guide [topic]` (Pi, tab-completes the topics) or the `codecarto_guide` tool (MCP). Neither needs a workspace.
+
 
 ## Step 4: Let It Work
 
@@ -174,6 +176,11 @@ Each output ends with a **validation block** showing which completion criteria p
 **Secondary outputs** (in `findings/public-surfaces/`, `findings/runtime-lifecycle/`, etc.) contain overflow notes that accumulated across multiple phases. Check these if the primary outputs reference them.
 
 **`.codecarto/THREAD_LOG.md`** has a summary of every session — what was analyzed, what was produced, and what questions were left behind.
+
+**After the pipeline (Pi or MCP):**
+
+- `/codecarto-list-skills` (Pi) or `codecarto_list_skills` (MCP) lists the post-pipeline skills — currently `spec-delta-application` — and the ungated `broadside` reading guide. Run one with `/codecarto-skill <name>` or `codecarto_skill`.
+- An open question you later answer on evidence, or a `post_pipeline` item you finish, is closed with an **amendment**: copy `templates/amendment.yaml` to `scratch/amendments/<name>.yaml`, list the ids, then run `/codecarto-amend <name>` (Pi previews exactly which questions and items it will close and asks first) or `codecarto_amend` (MCP applies on call). Both write an amendment closeout and a THREAD_LOG entry and refresh the dashboard. Never hand-edit `status.yaml` for this. In drop-in mode there is no executable to apply it; stage the file and note it in your closeout for a Pi or MCP session.
 
 
 ## Evidence Levels
@@ -263,6 +270,9 @@ Your environment doesn't support file access. See the Environment Setup section.
 
 **I want to re-run a phase.**
 Reset the phase's status in `status.yaml` back to `pending`, set `current_phase` to that phase, delete the existing output file in `findings/<phase>/`, and start a new LLM session.
+
+**The status widget (or `codecarto_status`) says the scaffold is stale.**
+Your `.codecarto/` was copied from an older release, so its GUIDE.md, templates, and pipelines may contradict the running framework. Run `/codecarto-refresh-scaffold` (Pi — it lists the exact files it will overwrite and asks first) or `codecarto_refresh_scaffold` (MCP). Only framework-owned files are rewritten; `status.yaml`, `config.yaml`, findings outputs, BACKLOG/THREAD_LOG/CONVENTIONS/DECISIONS, `scratch/`, `inputs/`, `closeouts/`, and `broadside/` are never touched. In drop-in mode, copy the packaged `.codecarto/` over yours by hand, skipping those same paths.
 
 
 ## Tips

@@ -92,7 +92,7 @@ Use this when your coding agent isn't Pi — Claude Code, Codex, opencode, Curso
 
 > **30-second setup for Claude Code, Cursor, Codex, and Claude Desktop: see the [MCP quickstart](docs/mcp-quickstart.md).**
 
-> **Teaching an agent to drive it:** call the `codecarto_guide` tool — the server returns the full drive loop, the phase-handoff contract, executor selection, and recovery patterns, with nothing to install. The same content ships as an installable skill at `agent-skill/codecartographer/` for agents that load skills from disk.
+> **Teaching an agent to drive it:** call the `codecarto_guide` tool — the server returns the full drive loop, the phase-handoff contract, executor selection, and recovery patterns, with nothing to install. The same content ships as an installable skill at `agent-skill/codecartographer/` for agents that load skills from disk, and `/codecarto-guide [topic]` reads it into a Pi session.
 
 ```bash
 npm install --global codecartographer-pi
@@ -321,12 +321,16 @@ Beyond the slash commands, the Pi extension layers on:
 | `/codecarto-validate [phase]` | Validate a phase output against completion criteria |
 | `/codecarto-complete [phase]` | Validate and atomically apply the phase handoff, canonical status, closeout, and log entry |
 | `/codecarto-skill <name>` | Run a post-pipeline skill once all phases are complete (or `broadside` any time, for the scout reading guide) |
+| `/codecarto-list-skills` | List the installed post-pipeline skills and the ungated `broadside` reading guide, and say when the gated ones unlock |
+| `/codecarto-guide [topic]` | Read the packaged agent guide — drive loop, handoff contract, executors, recovery, Broad-Side — into the session; tab-completes topics; needs no workspace |
 | `/codecarto-broadside [action] [lenses…]` | Batch reconnaissance (Broad-Side). Actions: `submit`, `collect`, `status`, `models`. Prices the run and asks before spending; works with or without a workspace |
 | `/codecarto-publish` | Publish the reimplementation spec to the configured library after reviewing an explicit confirmation preview |
 | `/codecarto-library-init <path> [--namespace <name>]` | Create a library directory with marker and write the config — fixes the first-publish dead end |
 | `/codecarto-config` | Show the effective merged configuration (global + workspace) and library marker status |
 | `/codecarto-usage` | Cumulative + per-phase token usage |
 | `/codecarto-dashboard [--narrate]` | Regenerate `.codecarto/dashboard.html`; `--narrate` for the LLM executive summary |
+| `/codecarto-refresh-scaffold` | Refresh the framework-owned `.codecarto/` files (GUIDE.md, templates/, workflow/ pipelines and VALIDATE.md) from the packaged template after a confirmation that lists the exact file set; project state, config, findings outputs, scratch, closeouts, and `broadside/` are never touched |
+| `/codecarto-amend <name>` | Apply a post-pipeline amendment from `scratch/amendments/<name>.yaml` after a confirmation that previews which open questions and post-pipeline items it closes; refused while the pipeline is incomplete |
 
 ### End-to-end auto mode (0.8.0+)
 
@@ -360,7 +364,7 @@ Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/spec
 | `codecarto_validate` | `/codecarto-validate` |
 | `codecarto_complete` | `/codecarto-complete` |
 | `codecarto_skill` | `/codecarto-skill` |
-| `codecarto_list_skills` | MCP-only ([#161](https://github.com/HuginnIndustries/CodeCartographer/issues/161)); Pi lists skills when `/codecarto-skill` runs with no argument |
+| `codecarto_list_skills` | `/codecarto-list-skills` |
 | `codecarto_publish` | `/codecarto-publish` |
 | `codecarto_library_init` | `/codecarto-library-init` |
 | `codecarto_library_list` | MCP-only library listing |
@@ -368,9 +372,9 @@ Implements MCP spec revision [`2025-11-25`](https://modelcontextprotocol.io/spec
 | `codecarto_config` | `/codecarto-config` |
 | `codecarto_usage` | `/codecarto-usage` |
 | `codecarto_dashboard` | `/codecarto-dashboard` |
-| `codecarto_guide` | MCP-only ([#160](https://github.com/HuginnIndustries/CodeCartographer/issues/160)) |
-| `codecarto_amend` | MCP-only ([#157](https://github.com/HuginnIndustries/CodeCartographer/issues/157)) |
-| `codecarto_refresh_scaffold` | MCP-only ([#159](https://github.com/HuginnIndustries/CodeCartographer/issues/159)) |
+| `codecarto_guide` | `/codecarto-guide` |
+| `codecarto_amend` | `/codecarto-amend` (Pi previews the closures and asks first) |
+| `codecarto_refresh_scaffold` | `/codecarto-refresh-scaffold` (Pi lists the file set and asks first) |
 | `codecarto_broadside` | `/codecarto-broadside` |
 
 Each workflow tool accepts an absolute `cwd` for the target repository. `codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation). The library tools accept an explicit absolute `library_path` or resolve `library.path` from `.codecarto/workflow/config.yaml` / `~/.codecarto/config.yaml`. `codecarto_library_reindex` and `codecarto_library_list` also report entries whose versions disagree about `source_repo` — the shape a slug collision left behind before v0.17.0's publish guard — and leave the repair manual, since splitting an entry changes paths the library format treats as ABI. The library schema is experimental and may break before v2.

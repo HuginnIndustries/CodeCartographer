@@ -1,6 +1,6 @@
 import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { autoCompletePhase, buildAutoSummary, isPhaseRunning, runAuto, runSinglePhase } from "./auto-runner.ts";
@@ -13,6 +13,8 @@ import { parseNextFlags } from "./next-flags.ts";
 import { phaseCompactionExtension } from "./phase-compaction.ts";
 
 import {
+	type Amendment,
+	applyAmendment,
 	buildPhasePrompt,
 	buildSkillPrompt,
 	buildValidationSummary,
@@ -40,8 +42,13 @@ import {
 	collectResultText,
 	estimateSubmitText,
 	getLens,
+	type GuideDocument,
+	listAmendmentNames,
 	listBatchModels,
+	listGuideTopics,
+	listScaffoldRefreshFiles,
 	listSkillNames,
+	loadAmendmentFile,
 	loadBroadsideConfig,
 	modelsText,
 	runBroadsideCollect,
@@ -52,10 +59,13 @@ import {
 	loadUsage,
 	loadYamlFile,
 	normalizeForComparison,
+	type OpenQuestionEntry,
 	packagedWorkspaceDir,
 	pathExists,
 	PACKAGE_VERSION,
 	readBroadsideSkill,
+	readGuide,
+	refreshScaffold,
 	PhasePreflightError,
 	type PhasePreflightResult,
 	PIPELINE_ALIASES,
@@ -66,6 +76,7 @@ import {
 	resolvePhase,
 	resolvePipelineChoice,
 	runPhasePreflight,
+	SCAFFOLD_REFRESH_PROTECTED,
 	seedOrchestratorFiles,
 	type StatusFile,
 	stringifySimpleYaml,
@@ -210,12 +221,134 @@ function describeBroadsideEstimate(estimate: BroadsideEstimate): string {
 	return lines.join("\n");
 }
 
+/**
+ * Resolve the argument of /codecarto-amend to the slug applyAmendment takes.
+ * Accepts the slug, `slug.yaml`, or a path to the file — but a path only when
+ * it lands inside .codecarto/scratch/amendments/, the one place an amendment
+ * is read from. The path names the file; the read always goes through the slug.
+ */
+function resolveAmendmentName(rawArg: string, cwd: string): string | null {
+	const trimmed = rawArg.trim().replace(/^@/, "");
+	if (!trimmed) return null;
+	if (!/[\\/]/.test(trimmed)) return trimmed;
+	const amendmentsDir = resolve(cwd, ".codecarto", "scratch", "amendments");
+	for (const candidate of [resolve(cwd, trimmed), resolve(cwd, ".codecarto", trimmed)]) {
+		if (dirname(candidate) === amendmentsDir) return basename(candidate);
+	}
+	return null;
+}
+
+function clipDescription(text: string | undefined, max = 140): string {
+	if (!text) return "";
+	const oneLine = text.replace(/\s+/g, " ").trim();
+	return `: ${oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine}`;
+}
+
+/**
+ * What an amendment will do to canonical state, rendered for a human about to
+ * approve it: each closure resolved against status.yaml so an id that matches
+ * nothing is visible before the write, not only in the result.
+ */
+function describeAmendmentPreview(amendment: Amendment, state: WorkspaceState): string {
+	const openQuestions = new Map<string, { phaseId: string; entry: OpenQuestionEntry }[]>();
+	for (const [phaseId, phase] of Object.entries(state.status.phases)) {
+		for (const entry of phase.open_questions ?? []) {
+			if (!entry.id) continue;
+			openQuestions.set(entry.id, [...(openQuestions.get(entry.id) ?? []), { phaseId, entry }]);
+		}
+	}
+	const unmatched = " — matches nothing (already closed or unknown; reported, not fatal)";
+	const lines = [`Amendment file: .codecarto/scratch/amendments/${amendment.slug}.yaml`];
+
+	if (amendment.open_question_closures.length > 0) {
+		lines.push("", `Closes ${amendment.open_question_closures.length} open question(s):`);
+		for (const id of amendment.open_question_closures) {
+			const matches = openQuestions.get(id);
+			if (!matches) {
+				lines.push(`  - ${id}${unmatched}`);
+				continue;
+			}
+			const { entry } = matches[0];
+			const where = [matches.map((match) => match.phaseId).join(", "), entry.kind].filter(Boolean).join(", ");
+			lines.push(`  - ${id} (${where})${clipDescription(entry.description)}`);
+		}
+	}
+	if (amendment.post_pipeline_closures.length > 0) {
+		lines.push("", `Retires ${amendment.post_pipeline_closures.length} post-pipeline item(s):`);
+		for (const id of amendment.post_pipeline_closures) {
+			const entry = state.status.post_pipeline.find((item) => item.id === id);
+			if (!entry) {
+				lines.push(`  - ${id}${unmatched}`);
+				continue;
+			}
+			const where = [entry.kind, entry.source_phase ? `from ${entry.source_phase}` : ""].filter(Boolean).join(", ");
+			lines.push(`  - ${id}${where ? ` (${where})` : ""}${clipDescription(entry.description)}`);
+		}
+	}
+	if (amendment.notes.length > 0) {
+		lines.push("", `Records ${amendment.notes.length} note(s) in the closeout:`, ...amendment.notes.map((note) => `  - ${note}`));
+	}
+
+	const summary = amendment.closeout_summary.trim();
+	lines.push(
+		"",
+		`Writes .codecarto/closeouts/<date>-amendment-${amendment.slug}.md, appends one THREAD_LOG entry${summary ? ` ("${summary}")` : ""}, updates workflow/status.yaml under the completion lock, and refreshes the dashboard.`,
+	);
+	return lines.join("\n");
+}
+
+/**
+ * What a scaffold refresh will overwrite, rendered for a human about to approve
+ * it. The file set is the one refreshScaffold writes; the protected set is the
+ * one it skips — both come from core, so the preview cannot drift from the write.
+ */
+function describeScaffoldRefreshPreview(files: string[], scaffoldVersionBefore: string | undefined): string {
+	const topLevel: string[] = [];
+	const byDir = new Map<string, string[]>();
+	for (const file of files) {
+		const slash = file.indexOf("/");
+		if (slash === -1) {
+			topLevel.push(file);
+			continue;
+		}
+		const dir = file.slice(0, slash);
+		byDir.set(dir, [...(byDir.get(dir) ?? []), file.slice(slash + 1)]);
+	}
+	const from = scaffoldVersionBefore ?? "unversioned";
+	const lines = [
+		from === PACKAGE_VERSION
+			? `Scaffold version: ${from} (already current — the files are re-copied from the packaged template byte-for-byte).`
+			: `Scaffold version: ${from} → ${PACKAGE_VERSION}.`,
+		"",
+		`Overwrites ${files.length} framework-owned file(s) in .codecarto/ with the packaged template:`,
+	];
+	if (topLevel.length > 0) lines.push(`  ${topLevel.join(", ")}`);
+	for (const [dir, entries] of [...byDir.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+		// workflow/ is where the pipelines live, and the version marker: name them.
+		lines.push(dir === "workflow" ? `  workflow/: ${entries.join(", ")}` : `  ${dir}/: ${entries.length} file(s)`);
+	}
+	if (byDir.has("findings")) {
+		lines.push("  (findings/ refreshes only the packaged SKILL.md, README.md, and pass files — the findings outputs beside them stay.)");
+	}
+	const protectedPaths = [
+		...SCAFFOLD_REFRESH_PROTECTED.workflowFiles.map((file) => `workflow/${file}`),
+		...SCAFFOLD_REFRESH_PROTECTED.topLevel,
+		...SCAFFOLD_REFRESH_PROTECTED.dirs.map((dir) => `${dir}/`),
+	];
+	lines.push("", `Never touched: ${protectedPaths.join(", ")}.`, "One THREAD_LOG entry records the refresh. Continue?");
+	return lines.join("\n");
+}
+
 export default function codeCartographerExtension(pi: ExtensionAPI) {
 	phaseCompactionExtension(pi);
 	let lastFeedbackLines: string[] = [];
 	let codecartoModeActive = false;
+	// Argument completers receive only the prefix, so the session's cwd is
+	// remembered here for the completers that list files under .codecarto/.
+	let sessionCwd: string | undefined;
 
 	const readWorkspaceState = async (ctx: ExtensionContext | ExtensionCommandContext, notifyOnError: boolean = true): Promise<WorkspaceState | null> => {
+		sessionCwd = ctx.cwd;
 		try {
 			return await getWorkspaceState(ctx.cwd);
 		} catch (error) {
@@ -257,6 +390,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		codecartoModeActive = false;
 		lastFeedbackLines = [];
+		sessionCwd = ctx.cwd;
 		setUiState(ctx, null);
 	});
 
@@ -810,6 +944,88 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("codecarto-list-skills", {
+		description: "List the post-pipeline skills installed in .codecarto/skills/ (and the ungated Broad-Side reading guide)",
+		handler: async (_args, ctx) => {
+			// Same gate as /codecarto-skill: the listing reads the workspace's
+			// skills directory, so it needs a workspace — mirrors handleListSkills.
+			const state = await ensureWorkspaceState(ctx);
+			if (!state) return;
+
+			const skills = await listSkillNames(state.workspaceDir);
+			const lines = skills.length > 0
+				? [`Available skills (${skills.length}):`, ...skills.map((name) => `  - ${name}`)]
+				: ["No skills installed."];
+
+			const nextPhase = getNextEligiblePhase(state);
+			if (skills.length > 0) {
+				lines.push(
+					nextPhase
+						? `Post-pipeline skills unlock when the pipeline completes (next phase: ${nextPhase.id}).`
+						: "Run one with /codecarto-skill <name>.",
+				);
+			}
+
+			// Broad-Side is listed apart from the post-pipeline set because it
+			// answers to /codecarto-skill without the completion gate.
+			const broadsideAvailable = await readBroadsideSkill(ctx.cwd).then(() => true, () => false);
+			if (broadsideAvailable) {
+				lines.push(
+					"",
+					`Also served by /codecarto-skill (not pipeline-gated): ${BROADSIDE_SKILL_NAME} — how to read a Broad-Side batch reconnaissance run.`,
+				);
+			}
+
+			lastFeedbackLines = lines;
+			setUiState(ctx, state, lastFeedbackLines);
+			ctx.ui.notify(
+				skills.length > 0
+					? `${skills.length} post-pipeline skill${skills.length === 1 ? "" : "s"}: ${skills.join(", ")}`
+					: "No post-pipeline skills installed.",
+				"info",
+			);
+		},
+	});
+
+	pi.registerCommand("codecarto-guide", {
+		description: "Read the packaged CodeCartographer agent guide into the session: /codecarto-guide [topic]",
+		getArgumentCompletions: async (prefix) => {
+			const topics = await listGuideTopics().catch(() => ["overview"]);
+			const items = topics
+				.filter((value) => value.startsWith(prefix))
+				.map((value) => ({ value, label: value }));
+			return items.length > 0 ? items : null;
+		},
+		handler: async (args, ctx) => {
+			// The guide is packaged with the extension, not copied into a
+			// workspace, so — like codecarto_guide — this needs no workspace.
+			let document: GuideDocument;
+			let topics: string[];
+			try {
+				topics = await listGuideTopics();
+				document = await readGuide(args.trim() || undefined);
+			} catch (error) {
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				return;
+			}
+
+			const other = topics.filter((name) => name !== document.topic);
+			const footer = other.length > 0
+				? `\n\n---\nOther guide topics: ${other.join(", ")} (run /codecarto-guide <topic>).`
+				: "";
+			const message = `${document.content}${footer}`;
+			if (ctx.isIdle()) {
+				pi.sendUserMessage(message);
+			} else {
+				pi.sendUserMessage(message, { deliverAs: "followUp" });
+			}
+
+			lastFeedbackLines = [`Queued the CodeCartographer guide: ${document.topic}`];
+			if (codecartoModeActive) void refreshWorkspaceUi(ctx, lastFeedbackLines);
+			ctx.ui.notify(`Queued the CodeCartographer guide (${document.topic})`, "info");
+		},
+	});
+
 	pi.registerCommand("codecarto-broadside", {
 		description: "Batch reconnaissance (Broad-Side): /codecarto-broadside [submit|collect|status|models] [lenses…] [flags]",
 		getArgumentCompletions: (prefix) => {
@@ -1219,6 +1435,142 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			lastFeedbackLines = ["Dashboard regenerated: .codecarto/dashboard.html"];
 			setUiState(ctx, state, lastFeedbackLines);
 			ctx.ui.notify("Dashboard regenerated: .codecarto/dashboard.html", "info");
+		},
+	});
+
+	pi.registerCommand("codecarto-refresh-scaffold", {
+		description: "Refresh the framework-owned .codecarto/ files (GUIDE.md, templates/, workflow/ pipelines and VALIDATE.md) from the packaged template, after confirming; project state is untouched",
+		handler: async (_args, ctx) => {
+			const state = await ensureWorkspaceState(ctx);
+			if (!state) return;
+
+			// Pi can ask, so it shows the exact file set before overwriting
+			// anything — MCP's codecarto_refresh_scaffold writes on call.
+			let files: string[];
+			try {
+				files = await listScaffoldRefreshFiles();
+			} catch (error) {
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				return;
+			}
+			const approved = await ctx.ui.confirm(
+				"Refresh the .codecarto/ scaffold from the packaged template?",
+				describeScaffoldRefreshPreview(files, state.scaffoldVersion),
+			);
+			if (!approved) {
+				ctx.ui.notify("Scaffold refresh cancelled. Nothing was written.", "info");
+				return;
+			}
+
+			try {
+				const result = await refreshScaffold(ctx.cwd);
+				const transition = `${result.scaffoldVersionBefore ?? "unversioned"} → ${result.scaffoldVersionAfter}`;
+				lastFeedbackLines = [
+					`Refreshed ${result.written.length} framework-owned file(s) from the packaged template (${transition}).`,
+					"Project state, user config, findings outputs, scratch, closeouts, and orchestrator files were not touched.",
+					"THREAD_LOG.md: one scaffold-refresh entry appended.",
+				];
+				// Re-read state so the widget's staleness line clears with the marker.
+				await refreshWorkspaceUi(ctx, lastFeedbackLines);
+				ctx.ui.notify(`Refreshed ${result.written.length} framework-owned file(s) (${transition}).`, "info");
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				lastFeedbackLines = [message];
+				setUiState(ctx, state, lastFeedbackLines);
+				ctx.ui.notify(`Scaffold refresh failed: ${message}`, "error");
+			}
+		},
+	});
+
+	pi.registerCommand("codecarto-amend", {
+		description: "Apply a post-pipeline amendment from .codecarto/scratch/amendments/, after a preview: /codecarto-amend <name | scratch/amendments/name.yaml>",
+		getArgumentCompletions: async (prefix) => {
+			const names = await listAmendmentNames(join(sessionCwd ?? process.cwd(), ".codecarto"));
+			const items = names
+				.filter((value) => value.startsWith(prefix))
+				.map((value) => ({ value, label: value }));
+			return items.length > 0 ? items : null;
+		},
+		handler: async (args, ctx) => {
+			const state = await ensureWorkspaceState(ctx);
+			if (!state) return;
+
+			if (!args.trim()) {
+				const staged = await listAmendmentNames(state.workspaceDir);
+				const hint = staged.length > 0
+					? ` (staged: ${staged.join(", ")})`
+					: " — write .codecarto/scratch/amendments/<name>.yaml first (see templates/amendment.yaml)";
+				ctx.ui.notify(`Usage: /codecarto-amend <name>${hint}`, "warning");
+				return;
+			}
+			const name = resolveAmendmentName(args, ctx.cwd);
+			if (!name) {
+				ctx.ui.notify(
+					`Amendments are read from .codecarto/scratch/amendments/ only; pass the amendment name or a path inside that directory, not ${args.trim()}.`,
+					"error",
+				);
+				return;
+			}
+
+			// The same refusals codecarto_amend surfaces, raised before the
+			// confirmation so nobody approves an amendment that cannot apply.
+			let amendment: Amendment;
+			try {
+				amendment = await loadAmendmentFile(name, state.workspaceDir);
+			} catch (error) {
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				return;
+			}
+			const nextPhase = getNextEligiblePhase(state);
+			if (nextPhase) {
+				ctx.ui.notify(
+					`Cannot amend: the pipeline is not complete (next phase: ${nextPhase.id}). `
+						+ "Resolve open questions and routed items through that phase's handoff (open_question_closures / carry_forward_closures) instead.",
+					"error",
+				);
+				return;
+			}
+
+			// Pi can ask, so the amendment is previewed against status.yaml
+			// before anything is written — MCP's codecarto_amend applies on call.
+			const approved = await ctx.ui.confirm(
+				`Apply amendment "${amendment.slug}"?`,
+				describeAmendmentPreview(amendment, state),
+			);
+			if (!approved) {
+				ctx.ui.notify(`Amendment ${amendment.slug} cancelled. Nothing was written.`, "info");
+				return;
+			}
+
+			try {
+				const { applied, closeoutNotice } = await applyAmendment(ctx.cwd, name);
+				// An amendment exists precisely to change the numbers the dashboard
+				// shows; refresh it, reporting only a render that actually landed.
+				const dashboardWritten = await writeDashboard(ctx.cwd, PACKAGE_VERSION);
+
+				const lines = [
+					`Amendment applied: ${amendment.slug}`,
+					`Open questions closed: ${applied.openQuestionsClosed.length > 0 ? applied.openQuestionsClosed.join(", ") : "none"}`,
+					`Post-pipeline items closed: ${applied.postPipelineClosed.length > 0 ? applied.postPipelineClosed.join(", ") : "none"}`,
+				];
+				if (applied.unknownIds.length > 0) lines.push(`Ids that matched nothing (already closed or unknown): ${applied.unknownIds.join(", ")}`);
+				lines.push(closeoutNotice);
+				if (dashboardWritten) lines.push("Dashboard refreshed: .codecarto/dashboard.html");
+
+				lastFeedbackLines = lines;
+				await refreshWorkspaceUi(ctx, lastFeedbackLines);
+				const closed = applied.openQuestionsClosed.length + applied.postPipelineClosed.length;
+				ctx.ui.notify(
+					`Amendment ${amendment.slug} applied: ${applied.openQuestionsClosed.length} open question(s) and ${applied.postPipelineClosed.length} post-pipeline item(s) closed`
+						+ `${applied.unknownIds.length > 0 ? `; ${applied.unknownIds.length} id(s) matched nothing` : ""}.`,
+					closed === 0 || applied.unknownIds.length > 0 ? "warning" : "info",
+				);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				lastFeedbackLines = [message];
+				setUiState(ctx, state, lastFeedbackLines);
+				ctx.ui.notify(`Amendment failed: ${message}`, "error");
+			}
 		},
 	});
 }
