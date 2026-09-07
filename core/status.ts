@@ -140,25 +140,40 @@ export function createEmptyStatus(projectName: string, pipelinePath: string, pip
 }
 
 /**
+ * Spell a tool for both executable surfaces — the shape the scaffold
+ * staleness notice adopted (#177). next_actions is canonical state rendered
+ * by codecarto_status on MCP and as the Pi widget's "Next:" line alike, and a
+ * Pi user handed only the MCP tool name has nothing to run. Several tools
+ * join with "then" so a sequence reads as one per surface. No backticks:
+ * these lines render in a plain TUI line and in the HTML dashboard.
+ */
+function onBothSurfaces(...tools: string[]): string {
+	const mcp = tools.map((tool) => `codecarto_${tool}`).join(" then ");
+	const pi = tools.map((tool) => `/codecarto-${tool.replace(/_/g, "-")}`).join(" then ");
+	return `${mcp} on MCP, ${pi} on Pi`;
+}
+
+/**
  * Route the terminal boundary to the post-pipeline surfaces (issue #114). The
  * moment every phase completes is exactly when skills, amendments, publishing,
  * and the dashboard apply; the prior static sentence left them undiscovered —
  * the 0.15.0 field test finished two full runs with every one of them unused.
- * Amendment recomputes this list so closure counts never go stale.
+ * Amendment recomputes this list so closure counts never go stale. Every tool
+ * named here is spelled for both surfaces (see onBothSurfaces).
  */
 export function buildTerminalNextActions(status: NormalizedStatus): string[] {
 	const openQuestions = Object.values(status.phases).reduce((sum, phase) => sum + (phase.open_questions?.length ?? 0), 0);
 	const postPipeline = status.post_pipeline.length;
 	const actions = [
-		"All phases complete. Review findings; post-pipeline skills: codecarto_list_skills / codecarto_skill.",
+		`All phases complete. Review findings; post-pipeline skills: ${onBothSurfaces("list_skills", "skill")}.`,
 	];
 	if (openQuestions > 0 || postPipeline > 0) {
-		actions.push(`${openQuestions} open question(s) and ${postPipeline} post-pipeline item(s) remain — apply resolutions with codecarto_amend (write scratch/amendments/<slug>.yaml from templates/amendment.yaml).`);
+		actions.push(`${openQuestions} open question(s) and ${postPipeline} post-pipeline item(s) remain — apply resolutions with ${onBothSurfaces("amend")} (write scratch/amendments/<slug>.yaml from templates/amendment.yaml).`);
 	}
 	if ("reimplementation-spec" in status.phases) {
-		actions.push("Publish the finished spec to a library: codecarto_publish (create one with codecarto_library_init; see the library guide topic).");
+		actions.push(`Publish the finished spec to a library: ${onBothSurfaces("publish")} (create one with ${onBothSurfaces("library_init")}; see the library guide topic).`);
 	}
-	actions.push("Dashboard: .codecarto/dashboard.html (refreshed on completion and amendment; codecarto_dashboard re-renders on demand). Usage totals: codecarto_usage.");
+	actions.push(`Dashboard: .codecarto/dashboard.html (refreshed on completion and amendment; re-render on demand with ${onBothSurfaces("dashboard")}). Usage totals: ${onBothSurfaces("usage")}.`);
 	return actions;
 }
 
