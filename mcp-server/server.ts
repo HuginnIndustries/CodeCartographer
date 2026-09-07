@@ -787,6 +787,12 @@ export async function handleLibraryInit(args: { library_path: string; name?: str
 	if (!args.library_path || typeof args.library_path !== "string") {
 		throw new McpError(ErrorCode.InvalidParams, "library_path is required.");
 	}
+	// Same rule as resolveLibraryPath for the other library tools: a relative
+	// path would resolve against the MCP server process's cwd and then be
+	// persisted verbatim into the user-global config (#134).
+	if (!isAbsolute(args.library_path)) {
+		throw new McpError(ErrorCode.InvalidParams, `library_path must be absolute, got: ${args.library_path}`);
+	}
 
 	const libraryPath = args.library_path;
 	const namespaced = !!args.namespace;

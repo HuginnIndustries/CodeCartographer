@@ -80,6 +80,17 @@ export function dateOnly(timestamp: string): string {
 }
 
 /**
+ * The separator to put before a line appended to file content `current` so
+ * the line starts at column 0. A file whose last line lacks a trailing newline
+ * (a hand-edited THREAD_LOG.md, an editor that strips final newlines) would
+ * otherwise have the appended entry glued onto that line (#134). Empty or
+ * absent content needs no separator.
+ */
+export function newlineIfUnterminated(current: string): string {
+	return current === "" || current.endsWith("\n") ? "" : "\n";
+}
+
+/**
  * Expand a leading `~` or `~/` to the user's home directory. Node's `path`
  * module deliberately doesn't do this (it's a shell convention, not a path
  * primitive), so callers that accept user-typed paths (config files,
