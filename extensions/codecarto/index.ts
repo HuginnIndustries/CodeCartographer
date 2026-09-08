@@ -911,7 +911,24 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const { updatedState, closeoutNotice, warnings } = await autoCompletePhase(ctx.cwd, validation);
+			// Completion refuses for reasons the framework words carefully — a
+			// missing phase handoff, a carry-forward without `derives_from`, a
+			// closure lacking runtime evidence. Those messages are the whole
+			// point of the refusal, and this was the one call in this file that
+			// let them escape as a rejection instead of showing them. The
+			// irony was sharp: /codecarto-next catches this same throw and tells
+			// the user to run /codecarto-complete manually, which then threw.
+			let completion: Awaited<ReturnType<typeof autoCompletePhase>>;
+			try {
+				completion = await autoCompletePhase(ctx.cwd, validation);
+			} catch (error: unknown) {
+				const message = error instanceof Error ? error.message : String(error);
+				lastFeedbackLines = [`Completion refused: ${message}`];
+				setUiState(ctx, currentState, lastFeedbackLines);
+				ctx.ui.notify(message, "error");
+				return;
+			}
+			const { updatedState, closeoutNotice, warnings } = completion;
 
 			lastFeedbackLines = [
 				`Completed phase: ${validation.phaseId}`,

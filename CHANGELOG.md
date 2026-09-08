@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- **`/codecarto-complete` threw its refusals instead of showing them.** Completion refuses for reasons the framework words carefully — a missing phase handoff names the file to write and every field it needs; a carry-forward without `derives_from` and a closure lacking runtime evidence explain what is missing and why. That guidance is the entire point of the refusal. Every other failure in this handler was caught and notified, but the `autoCompletePhase` call was not, so those messages escaped as a rejection and the user never saw them. It was the only unguarded call of its kind in the extension; `switch-pipeline`, `refresh-scaffold`, `amend` and the post-phase path all wrap theirs. The irony was sharp: `/codecarto-next` catches this same throw and advises running `/codecarto-complete` manually, which then threw. Found by writing the first tests that invoke these handlers at all.
+
+
 ## [0.19.1] — 2026-09-08
 
 ### Changed
