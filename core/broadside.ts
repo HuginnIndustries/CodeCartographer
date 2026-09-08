@@ -120,7 +120,13 @@ export type CodingBenchmarks = {
 export type BroadsideCatalogResult = {
 	model: string;
 	source: "built-in" | "config" | "live" | "cache";
-	entry: CatalogEntry | null;
+	/**
+	 * Always resolved. `resolveCatalogEntry` either returns an entry — from
+	 * config, cache, the live catalog, or the compile-time fallback — or throws
+	 * naming the model it could not price. This was declared nullable, which is
+	 * the only reason the single consumer needed a non-null assertion to read it.
+	 */
+	entry: CatalogEntry;
 	benchmarks?: CodingBenchmarks;
 };
 
@@ -2108,7 +2114,7 @@ export async function runBroadsideSubmit(
 	>();
 	for (const candidate of new Set([model, ...lensIds.map(modelForLens)])) {
 		const catalog = await resolveCatalogEntry(broadsideDir, config, candidate, apiKey, opts.fetcher);
-		const entry = catalog.entry!;
+		const entry = catalog.entry;
 		const supportsStructuredOutputs =
 			entry.supportedParameters.length === 0 ||
 			entry.supportedParameters.some((p) =>
