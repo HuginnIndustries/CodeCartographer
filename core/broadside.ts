@@ -54,8 +54,14 @@ export const BROADSIDE_CONFIG_FILE = "config.yaml";
 export const BROADSIDE_STATE_SCHEMA_VERSION = 1;
 
 // Per-token pricing in USD (OpenRouter, google/gemini-3.7-flash:batch).
-export const BROADSIDE_INPUT_PRICE_PER_M = 0.1875;
-export const BROADSIDE_OUTPUT_PRICE_PER_M = 0.9375;
+// OpenRouter's listed rates for the `:batch` variant, which already carry the
+// batch discount — the sync model is $0.75/$3.75. These were half these values
+// until a live run compared them against the catalog: the batch discount had
+// been applied a second time by hand, so every estimate for the default model
+// came out at half its true cost and `max_cost` bound at twice what the user
+// asked for. They are the offline fallback only; the live catalog wins.
+export const BROADSIDE_INPUT_PRICE_PER_M = 0.375;
+export const BROADSIDE_OUTPUT_PRICE_PER_M = 1.875;
 
 // OpenRouter's public model catalog; pricing, context, and capabilities live
 // per model id. The benchmarks endpoint adds coding/intelligence indices.
@@ -1708,10 +1714,11 @@ export async function resolveCatalogEntry(
 		};
 	}
 
-	const builtIn = builtInCatalogEntry(model);
-	if (builtIn) return { model, source: "built-in", entry: builtIn };
-
-	// Unknown model: on-disk cache first, then the live catalog.
+	// On-disk cache first, then the live catalog — for the default model too.
+	// Hardcoded rates used to short-circuit here, which meant a stale constant
+	// could never self-correct even though the catalog was already being
+	// fetched for every other model. The authoritative source wins; the
+	// constants below are what we fall back to when the network is unavailable.
 	const cache = await readCatalogCache(broadsideDir);
 	const cached = cache?.models[model];
 	if (cached && Date.now() - new Date(cache!.fetched_at).getTime() < BROADSIDE_CATALOG_CACHE_TTL_MS) {
@@ -1742,6 +1749,11 @@ export async function resolveCatalogEntry(
 		await writeCatalogCache(broadsideDir, updated);
 		return { model, source: "live", entry: live };
 	}
+
+	// Offline fallback: the default model's rates and capabilities are known at
+	// compile time, so a network failure does not have to stop a run.
+	const builtIn = builtInCatalogEntry(model);
+	if (builtIn) return { model, source: "built-in", entry: builtIn };
 
 	throw new Error(
 		`Could not resolve per-token pricing for batch model "${model}". ` +
