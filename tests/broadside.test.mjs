@@ -245,12 +245,39 @@ test("estimateCost matches the documented per-token pricing", () => {
 		{ moduleName: "a", content: "x".repeat(4000), fileCount: 1, chars: 4000 },
 		{ moduleName: "b", content: "y".repeat(4000), fileCount: 1, chars: 4000 },
 	];
-	const pricing = { inputPerM: 0.1875, outputPerM: 0.9375, source: "built-in" };
+	const pricing = { inputPerM: 0.375, outputPerM: 1.875, source: "built-in" };
 	const { inputTokens, outputTokens, cost } = estimateCost(lens, slices, pricing);
 	assert.equal(inputTokens, 2000); // 8000 chars / 4
-	assert.equal(outputTokens, 4500); // maxTokens 6000 * 0.75
-	const expected = (2000 / 1e6) * 0.1875 + (4500 / 1e6) * 0.9375;
+	// Both halves scale with the slice count, because every slice is its own
+	// batch request. This assertion used to read 4500 — one request's output
+	// for a two-request lens — which is the shape that let a 13-slice run come
+	// in at roughly 3x its estimate while max_cost was bound to the low number.
+	assert.equal(outputTokens, 9000); // 2 requests * maxTokens 6000 * 0.75
+	const expected = (2000 / 1e6) * 0.375 + (9000 / 1e6) * 1.875;
 	assert.ok(Math.abs(cost - expected) < 1e-12);
+});
+
+test("estimateCost scales the output budget with the number of requests", () => {
+	const lens = getLens("defect");
+	const pricing = { inputPerM: 0.375, outputPerM: 1.875, source: "built-in" };
+	const slice = (name) => ({ moduleName: name, content: "x".repeat(4000), fileCount: 1, chars: 4000 });
+	const one = estimateCost(lens, [slice("a")], pricing);
+	const thirteen = estimateCost(lens, Array.from({ length: 13 }, (_, i) => slice(`m${i}`)), pricing);
+	assert.equal(thirteen.outputTokens, one.outputTokens * 13);
+	assert.equal(estimateCost(lens, [], pricing).outputTokens, 0, "a lens with nothing to scan budgets no output");
+});
+
+test("estimateCost counts the system prompt and schema each request carries when given repo info", () => {
+	const lens = getLens("defect");
+	const pricing = { inputPerM: 0.375, outputPerM: 1.875, source: "built-in" };
+	const slices = [
+		{ moduleName: "a", content: "x".repeat(4000), fileCount: 1, chars: 4000 },
+		{ moduleName: "b", content: "y".repeat(4000), fileCount: 1, chars: 4000 },
+	];
+	const info = { languages: ["TypeScript"], fileCount: 2, root: "/tmp/x", manifests: [], tree: "" };
+	const withInfo = estimateCost(lens, slices, pricing, undefined, info);
+	const without = estimateCost(lens, slices, pricing);
+	assert.ok(withInfo.inputTokens > without.inputTokens, "the per-request prompt and schema are not free");
 });
 
 test("estimateCost scales with the pricing table, not the default model", () => {
