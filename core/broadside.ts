@@ -35,7 +35,7 @@
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { pathExists, sleep } from "./utils.ts";
 import { acquireLock } from "./status.ts";
 import { loadYamlFile } from "./yaml.ts";
@@ -120,7 +120,13 @@ export type CodingBenchmarks = {
 export type BroadsideCatalogResult = {
 	model: string;
 	source: "built-in" | "config" | "live" | "cache";
-	entry: CatalogEntry | null;
+	/**
+	 * Always resolved. `resolveCatalogEntry` either returns an entry — from
+	 * config, cache, the live catalog, or the compile-time fallback — or throws
+	 * naming the model it could not price. This was declared nullable, which is
+	 * the only reason the single consumer needed a non-null assertion to read it.
+	 */
+	entry: CatalogEntry;
 	benchmarks?: CodingBenchmarks;
 };
 
@@ -184,6 +190,8 @@ export type BroadsideSynthesisEntry = {
 	batchId?: string;
 	status: "pending" | "submitted" | "completed" | "failed";
 	cost?: number;
+	/** Why the pass was retired, when the batch reported one. */
+	error?: string;
 };
 
 /** One triage item — a scouting lead turned into a work-order entry. */
@@ -292,6 +300,8 @@ export type BroadsideEstimate = {
 	/** Set when incremental scouting found a baseline to diff against. */
 	baseHead: string | null;
 	sourceDirty: boolean;
+	/** Whether a requested incremental run actually narrowed this estimate. */
+	incremental: BroadsideIncrementalOutcome;
 	/** The provider's completion ceiling, when the catalog advertises one. */
 	outputCap?: number;
 };
@@ -303,6 +313,23 @@ export class BroadsideCancelledError extends Error {
 		this.name = "BroadsideCancelledError";
 	}
 }
+
+/**
+ * Whether incremental scouting actually narrowed the run.
+ *
+ * A request for incremental falls back to a full scan whenever there is nothing
+ * to diff against, and that fallback costs real money — the caller asked for the
+ * cheap mode and gets the expensive one. It must be reported, not inferred from
+ * the request counts.
+ */
+export type BroadsideIncrementalOutcome = {
+	requested: boolean;
+	applied: boolean;
+	/** The commit the run diffed against, when one was found. */
+	baseHead: string | null;
+	/** Why a requested incremental run did not apply. */
+	reason?: "dirty-worktree" | "no-baseline" | "diff-failed";
+};
 
 export type BroadsideSubmitResult = {
 	runId: string;
@@ -319,6 +346,7 @@ export type BroadsideSubmitResult = {
 		supportsStructuredOutputs?: boolean;
 		expirationDate?: string | null;
 	};
+	incremental: BroadsideIncrementalOutcome;
 };
 
 export type BroadsideCollectResult = {
@@ -1180,7 +1208,10 @@ async function walkFiles(
 			const children = await walkFiles(rootDir, join(dir, entry.name), depth + 1, remaining - out.length);
 			out = out.concat(children);
 		} else if (entry.isFile()) {
-			const rel = join(dir, entry.name).slice(rootDir.length + 1).split("\\").join("/");
+			// relative() rather than slice(rootDir.length + 1): the hand-rolled
+			// slice cut one character too many whenever rootDir carried a trailing
+			// separator, and mangled every path outright when rootDir was "/".
+			const rel = relative(rootDir, join(dir, entry.name)).split("\\").join("/");
 			out.push(rel);
 		}
 	}
@@ -1982,6 +2013,15 @@ export async function fetchBatch(
 	return data;
 }
 
+/**
+ * Batch statuses that will never produce a result.
+ *
+ * Deliberately excludes the synthetic `timeout` this module returns when a poll
+ * budget expires: that batch is still running server-side and has already been
+ * charged, so callers must come back for it rather than retire it.
+ */
+export const BROADSIDE_DEAD_BATCH_STATUSES: string[] = ["failed", "expired", "cancelled", "auth-failed"];
+
 export async function pollBatchUntilTerminal(
 	batchId: string,
 	apiKey: string,
@@ -2011,7 +2051,7 @@ export async function pollBatchUntilTerminal(
 		const status = String(batch.status ?? "unknown");
 		const counts = (batch.request_counts ?? {}) as Record<string, unknown>;
 		opts.onStatus?.(status, counts);
-		if (["completed", "failed", "expired", "cancelled", "auth-failed"].includes(status)) return batch;
+		if (status === "completed" || BROADSIDE_DEAD_BATCH_STATUSES.includes(status)) return batch;
 		if (Date.now() >= deadline) return { id: batchId, status: "timeout" };
 		await sleep(intervalMs);
 	}
@@ -2094,7 +2134,7 @@ export async function runBroadsideSubmit(
 	>();
 	for (const candidate of new Set([model, ...lensIds.map(modelForLens)])) {
 		const catalog = await resolveCatalogEntry(broadsideDir, config, candidate, apiKey, opts.fetcher);
-		const entry = catalog.entry!;
+		const entry = catalog.entry;
 		const supportsStructuredOutputs =
 			entry.supportedParameters.length === 0 ||
 			entry.supportedParameters.some((p) =>
@@ -2129,14 +2169,26 @@ export async function runBroadsideSubmit(
 	const sourceDirty = await gitDirty(cwd);
 	let baseHead: string | null = null;
 	let changed: Set<string> | null = null;
+	const incrementalOutcome: BroadsideIncrementalOutcome = {
+		requested: opts.incremental === true,
+		applied: false,
+		baseHead: null,
+	};
 	if (opts.incremental) {
 		const state = await loadBroadsideState(broadsideDir);
 		// The baseline is the most recent run that recorded a HEAD — a
 		// submit-only run (never collected) is still a valid committed base.
 		const previous = [...state.runs].reverse().find((r) => r.sourceHead);
-		if (previous?.sourceHead && !sourceDirty) {
+		if (sourceDirty) {
+			incrementalOutcome.reason = "dirty-worktree";
+		} else if (!previous?.sourceHead) {
+			incrementalOutcome.reason = "no-baseline";
+		} else {
 			baseHead = previous.sourceHead;
 			changed = await changedFilesSince(cwd, baseHead);
+			incrementalOutcome.baseHead = baseHead;
+			if (changed) incrementalOutcome.applied = true;
+			else incrementalOutcome.reason = "diff-failed";
 		}
 	}
 
@@ -2202,6 +2254,7 @@ export async function runBroadsideSubmit(
 			exceedsLimit,
 			baseHead,
 			sourceDirty,
+			incremental: incrementalOutcome,
 			...(outputCap !== undefined && { outputCap }),
 		});
 		if (!approved) throw new BroadsideCancelledError();
@@ -2318,6 +2371,7 @@ export async function runBroadsideSubmit(
 				: resolved.get(model)!.supportsStructuredOutputs,
 			expirationDate: defaultEntry.expirationDate ?? null,
 		},
+		incremental: incrementalOutcome,
 	};
 }
 
@@ -2619,8 +2673,15 @@ export async function runBroadsideCollect(
 				"utf8",
 			);
 			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount, truncated };
-		} else if (batch.error) {
-			entry.error = batch.error;
+		} else {
+			// Every non-completed outcome still has to reach the report.
+			// `lensOutcomes` is what the caller renders, and this branch used to
+			// require `batch.error` — but the commonest failure here is the
+			// synthetic `{ status: "timeout" }` the poll returns when its budget
+			// expires with the batch still in flight, and that carries no error.
+			// A lens that never came back was therefore omitted entirely,
+			// indistinguishable in the output from one that was never requested.
+			if (batch.error) entry.error = batch.error;
 			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount };
 		}
 		await persistBroadsideRun(broadsideDir, run);
@@ -2654,7 +2715,11 @@ export async function runBroadsideCollect(
 				const { batchId, error } = await submitBatch([bumped], apiKey, opts.fetcher, lensModel);
 				if (error) continue;
 				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
-					deadlineMs: BROADSIDE_DEFAULT_POLL_BUDGET_MS,
+					// Share the caller's deadline. Each of these polls used to
+					// start a fresh 25-minute budget, so `wait_seconds` bounded
+					// only the lens poll and a collect could run for the caller's
+					// budget plus fifty minutes.
+					deadlineMs: Math.max(0, deadline - Date.now()),
 					onStatus: (status, counts) => opts.onStatus?.(`${stored.lensId}:retry`, status, counts),
 					fetcher: opts.fetcher,
 				});
@@ -2787,7 +2852,10 @@ export async function runBroadsideCollect(
 
 			for (const { batchId, pass } of submitted.values()) {
 				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
-					deadlineMs: BROADSIDE_DEFAULT_POLL_BUDGET_MS,
+					// Shares the caller's deadline, as the retry poll above does.
+					// A pass whose poll runs out stays `submitted`, so the batch
+					// is already paid for and a later collect claims its result.
+					deadlineMs: Math.max(0, deadline - Date.now()),
 					onStatus: (status, counts) => opts.onStatus?.(pass.kind, status, counts),
 					fetcher: opts.fetcher,
 				});
@@ -2808,9 +2876,18 @@ export async function runBroadsideCollect(
 							topTriageItems = parseTriageItems(content);
 						}
 					}
-				} else if (batch.error) {
+				} else if (BROADSIDE_DEAD_BATCH_STATUSES.includes(String(batch.status))) {
+					// The batch will never produce a result, so retire the pass.
+					// This used to require `batch.error`, leaving an expired or
+					// cancelled batch parked at "submitted" forever — and since a
+					// resumed collect re-polls anything still "submitted", it
+					// would re-poll a dead batch on every future run.
 					pass.entry.status = "failed";
+					if (batch.error) pass.entry.error = batch.error instanceof Error ? batch.error.message : String(batch.error);
 				}
+				// A "timeout" is deliberately left at "submitted": the batch is
+				// still running server-side and has already been paid for, so a
+				// later collect should claim its result rather than discard it.
 				await persistBroadsideRun(broadsideDir, run);
 			}
 		}
@@ -2943,9 +3020,32 @@ function parseSynthesisTopFindings(
 
 // ---------- formatting helpers for tool output ----------
 
+function describeIncrementalFallback(reason: BroadsideIncrementalOutcome["reason"]): string {
+	switch (reason) {
+		case "dirty-worktree":
+			return "the working tree has uncommitted changes, so there is no committed state to diff against";
+		case "no-baseline":
+			return "no earlier run recorded a commit to diff against";
+		case "diff-failed":
+			return "the diff against the previous run's commit could not be read";
+		default:
+			return "no baseline was available";
+	}
+}
+
 export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDefinition[]): string {
+	// Count the lenses that actually got a batch, not every lens considered. A
+	// lens with nothing to scan is reported as `skipped (0 request(s))` two
+	// lines below, so counting it here made the header contradict its own body:
+	// a Rust CLI with no server surface reported "submitted 6 batch(es)" over a
+	// list showing four batches and two skips.
+	const entries = Object.values(result.batches ?? {});
+	const submittedCount = entries.filter((entry) => entry.batchId).length;
+	const withoutBatch = entries.length - submittedCount;
 	const lines = [
-		`Broad-Side submitted ${result.batches ? Object.keys(result.batches).length : 0} batch(es).`,
+		withoutBatch > 0
+			? `Broad-Side submitted ${submittedCount} batch(es); ${withoutBatch} lens(es) produced none (see below).`
+			: `Broad-Side submitted ${submittedCount} batch(es).`,
 	];
 	for (const lens of lenses) {
 		const entry = result.batches[lens.id];
@@ -2953,6 +3053,14 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		const status = entry.batchId ? `batch ${entry.batchId}` : entry.status;
 		const override = entry.model ? ` on ${entry.model}` : "";
 		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})${override}`);
+	}
+	const incremental = result.incremental;
+	if (incremental?.requested) {
+		lines.push(
+			incremental.applied
+				? `Incremental: scanning only what changed since ${(incremental.baseHead ?? "").slice(0, 8)}.`
+				: `Incremental: requested but NOT applied — ${describeIncrementalFallback(incremental.reason)}. Every module was scanned, at full cost.`,
+		);
 	}
 	lines.push(
 		`Estimated total: ~$${result.estimatedTotalCost.toFixed(4)}`,

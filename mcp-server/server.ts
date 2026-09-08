@@ -274,7 +274,7 @@ export async function handleStatus(args: { cwd: string }) {
 		0,
 	);
 	const currentOpenQuestions =
-		currentPhase === "complete" ? 0 : state.status.phases[currentPhase]?.open_questions.length ?? 0;
+		currentPhase === "complete" ? 0 : state.status.phases[currentPhase]?.open_questions?.length ?? 0;
 	const terminalOpenQuestions = Object.values(state.status.phases).reduce(
 		(sum, phase) => sum + (phase.open_questions?.length ?? 0),
 		0,
@@ -1254,6 +1254,11 @@ export async function handleBroadside(args: {
 				retryTruncated,
 				onStatus: (lensId, status, counts) =>
 					lines.push(`  ${lensId}: ${status} (${counts.completed ?? 0}/${counts.total ?? "?"})`),
+			}).catch((error) => {
+				// The `collect` action normalizes this same call; without it here,
+				// a failure during submit-with-wait reached the client as an
+				// opaque InternalError instead of naming its cause.
+				throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 			});
 			lines.push("", collectResultText(collect));
 		}

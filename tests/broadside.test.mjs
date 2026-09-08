@@ -47,6 +47,8 @@ const {
 	runBroadsideCollect,
 	runBroadsideStatus,
 	runBroadsideSubmit,
+	BROADSIDE_DEAD_BATCH_STATUSES,
+	estimateSubmitText,
 	persistBroadsideRun,
 	saveBroadsideState,
 	submitBatch,
@@ -1738,6 +1740,287 @@ test("saveLensResults marks truncated content and writes parsed JSON cleanly", a
 
 		const written = JSON.parse(await readFile(join(dir, "defect-core-1.json"), "utf8"));
 		assert.equal(written.module, "core", "fenced JSON must be saved parsed, not verbatim");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+
+// ---------- outcomes reported for non-completed batches ----------
+//
+// Leads from the second live Broad-Side scan of this repository, each verified
+// against the source before being fixed.
+
+test("a lens whose batch never came back is still reported, not omitted", async () => {
+	const dir = await makeFixture();
+	try {
+		// A batch still in flight when the poll budget expires yields the
+		// synthetic `{ status: "timeout" }`, which carries no `error`. The
+		// outcome map used to require an error, so this lens disappeared from
+		// the report entirely — indistinguishable from one never requested.
+		const fetcher = async (url, init) =>
+			init.method === "POST"
+				? fakeResponse(202, { id: "batch-stuck", status: "validating" })
+				: fakeResponse(200, { id: "batch-stuck", status: "in_progress" });
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const collect = await runBroadsideCollect(dir, "sk-fake", {
+			fetcher,
+			waitMs: 0,
+			includeSynthesis: false,
+			includeTriage: false,
+		});
+
+		assert.ok(collect.lensOutcomes.architecture, "a timed-out lens must appear in the outcome map");
+		assert.equal(collect.lensOutcomes.architecture.status, "timeout");
+		assert.notEqual(collect.status, "completed", "a run with an unreturned lens is not complete");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a post-pass whose batch dies without an error is retired, not left submitted", async () => {
+	const dir = await makeFixture();
+	try {
+		const finding = JSON.stringify({ module: "root", findings: [], patterns_checked: [], files_scanned: 1 });
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				const payload = JSON.parse(init.body);
+				const isPostPass = payload.requests.some((r) => String(r.custom_id).startsWith("synthesis") || String(r.custom_id).startsWith("triage"));
+				return fakeResponse(202, { id: isPostPass ? "batch-postpass" : "batch-lens", status: "validating" });
+			}
+			if (String(url).includes("batch-postpass")) {
+				// Terminal, dead, and carrying no error object.
+				return fakeResponse(200, { id: "batch-postpass", status: "expired" });
+			}
+			return fakeResponse(200, {
+				id: "batch-lens",
+				status: "completed",
+				results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: finding } }] } }, error: null }],
+				usage: { cost: 0.001 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		await runBroadsideCollect(dir, "sk-fake", { fetcher, includeTriage: false });
+
+		const run = (await loadBroadsideState(join(dir, ".codecarto", "broadside"))).runs.at(-1);
+		assert.equal(
+			run.synthesis.status,
+			"failed",
+			"an expired post-pass batch must be retired; leaving it 'submitted' makes every later collect re-poll a dead batch",
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a timeout is not a dead batch status", () => {
+	// The distinction is load-bearing: a dead status retires the work, while a
+	// timeout means the batch is still running server-side and has already been
+	// paid for, so a later collect must be able to claim its result.
+	assert.ok(!BROADSIDE_DEAD_BATCH_STATUSES.includes("timeout"));
+	assert.ok(!BROADSIDE_DEAD_BATCH_STATUSES.includes("completed"));
+	assert.deepEqual(BROADSIDE_DEAD_BATCH_STATUSES, ["failed", "expired", "cancelled", "auth-failed"]);
+});
+
+test("a trailing separator on the target directory does not corrupt slice paths", async () => {
+	const dir = await makeFixture();
+	try {
+		const info = await collectRepoInfo(dir);
+		const lens = getLens("defect");
+		const plain = await gatherSlices(dir, lens, info);
+		const trailing = await gatherSlices(`${dir}/`, lens, info);
+
+		const filesOf = (slices) => slices.flatMap((s) => s.files).sort();
+		assert.deepEqual(
+			filesOf(trailing),
+			filesOf(plain),
+			"paths were sliced at a hardcoded rootDir.length + 1, so a trailing separator cut one character too many",
+		);
+		assert.ok(filesOf(plain).length > 0, "the fixture must yield files for this to prove anything");
+		assert.ok(
+			filesOf(trailing).every((f) => !f.startsWith("/")),
+			"no slice path may be absolute",
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("the submit header counts batches sent, not lenses considered", async () => {
+	// A lens with nothing to scan is listed as skipped with 0 requests, so
+	// counting it in the header made that line contradict the body directly
+	// below it. Seen on a live scan of a Rust CLI with no server surface:
+	// "submitted 6 batch(es)" over a list of four batches and two skips.
+	const dir = await mkdtemp(join(tmpdir(), "broadside-noserver-"));
+	try {
+		// No server/, no auth*, no middleware/, no SECURITY.md — so the security
+		// lens gathers nothing, while architecture always has the repo info.
+		await writeFile(join(dir, "go.mod"), "module example.com/cli\n\ngo 1.26.0\n");
+		await writeFile(join(dir, "main.go"), "package main\n\nfunc main() {}\n");
+
+		const fetcher = async (url, init) =>
+			init.method === "POST"
+				? fakeResponse(202, { id: "batch-x", status: "validating" })
+				: fakeResponse(200, { id: "batch-x", status: "in_progress" });
+		const lenses = ["architecture", "security"];
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses, fetcher });
+
+		const skipped = Object.values(result.batches).filter((b) => !b.batchId);
+		assert.equal(skipped.length, 1, "the fixture must produce exactly one lens with nothing to scan");
+
+		const text = estimateSubmitText(result, lenses.map(getLens));
+		assert.match(text, /submitted 1 batch\(es\); 1 lens\(es\) produced none/);
+		assert.ok(!/submitted 2 batch\(es\)/.test(text), "the header must not count the skipped lens");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("wait_seconds bounds the whole collect, not just the lens poll", async () => {
+	// The truncation-retry and post-pass polls each started a fresh 25-minute
+	// budget, so `wait_seconds` bounded only the first of three phases: a
+	// collect could block for the caller's budget plus fifty minutes. Counting
+	// polls rather than measuring elapsed time keeps this test fast and lets it
+	// fail cleanly — an earlier version of it hung the suite for 25 minutes when
+	// the bug was present, because Promise.race does not cancel the loser.
+	const dir = await makeFixture();
+	try {
+		const finding = JSON.stringify({ module: "root", findings: [], patterns_checked: [], files_scanned: 1 });
+		let postPassPolls = 0;
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				const payload = JSON.parse(init.body);
+				const isPostPass = payload.requests.some((r) =>
+					String(r.custom_id).startsWith("synthesis") || String(r.custom_id).startsWith("triage"),
+				);
+				return fakeResponse(202, { id: isPostPass ? "batch-postpass" : "batch-lens", status: "validating" });
+			}
+			if (String(url).includes("batch-postpass")) {
+				postPassPolls += 1;
+				// Terminal on the second poll, so a collect that ignores the
+				// deadline still finishes and fails on the assertion below
+				// rather than hanging the suite.
+				return fakeResponse(200, { id: "batch-postpass", status: postPassPolls >= 2 ? "completed" : "in_progress", results: [], usage: { cost: 0 } });
+			}
+			return fakeResponse(200, {
+				id: "batch-lens",
+				status: "completed",
+				results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: finding } }] } }, error: null }],
+				usage: { cost: 0.001 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, waitMs: 0, includeTriage: false });
+
+		assert.equal(collect.lensOutcomes.architecture.status, "completed", "the lens itself still completed");
+		assert.equal(
+			postPassPolls,
+			1,
+			"with no budget left the post-pass must be polled once and abandoned, not retried on a fresh 25-minute deadline",
+		);
+
+		const run = (await loadBroadsideState(join(dir, ".codecarto", "broadside"))).runs.at(-1);
+		assert.equal(
+			run.synthesis.status,
+			"submitted",
+			"a pass whose poll ran out stays claimable: the batch is paid for and a later collect must be able to claim it",
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+// ---------- incremental fallback is reported, not silent ----------
+//
+// A request for incremental scouting falls back to a full scan whenever there
+// is nothing to diff against. That fallback costs real money — the caller asked
+// for the cheap mode and pays for the expensive one — so it has to be stated.
+// Found live: an incremental scan of a Rust repository submitted all 31
+// requests at full price because the earlier run predated the repo being a git
+// checkout, and the output said nothing about it.
+
+const acceptingFetcher = async (url, init) =>
+	init.method === "POST"
+		? fakeResponse(202, { id: "batch-x", status: "validating" })
+		: fakeResponse(200, { id: "batch-x", status: "in_progress" });
+
+test("an incremental run with no baseline says so instead of quietly scanning everything", async () => {
+	const dir = await makeGitRepo();
+	try {
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["architecture"],
+			fetcher: acceptingFetcher,
+			incremental: true,
+		});
+		assert.equal(result.incremental.requested, true);
+		assert.equal(result.incremental.applied, false);
+		assert.equal(result.incremental.reason, "no-baseline");
+
+		const text = estimateSubmitText(result, [getLens("architecture")]);
+		assert.match(text, /Incremental: requested but NOT applied/);
+		assert.match(text, /no earlier run recorded a commit/);
+		assert.match(text, /at full cost/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("an incremental run against a dirty worktree names that as the reason", async () => {
+	const dir = await makeGitRepo();
+	try {
+		// A first run records the commit a later run would diff against.
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher: acceptingFetcher });
+		await writeFile(join(dir, "main.go"), "package main\n// uncommitted\n");
+
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["architecture"],
+			fetcher: acceptingFetcher,
+			incremental: true,
+		});
+		assert.equal(result.incremental.applied, false);
+		assert.equal(result.incremental.reason, "dirty-worktree");
+		assert.match(estimateSubmitText(result, [getLens("architecture")]), /uncommitted changes/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("an incremental run that finds a baseline reports the commit it diffed against", async () => {
+	const dir = await makeGitRepo();
+	try {
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher: acceptingFetcher });
+		await writeFile(join(dir, "main.go"), "package main\n// committed change\n");
+		await git(dir, "add", "-A");
+		await git(dir, "commit", "-q", "-m", "change");
+
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["architecture"],
+			fetcher: acceptingFetcher,
+			incremental: true,
+		});
+		assert.equal(result.incremental.applied, true, "a committed change on top of a recorded run must diff cleanly");
+		assert.ok(result.incremental.baseHead, "the base commit must be recorded");
+
+		const text = estimateSubmitText(result, [getLens("architecture")]);
+		assert.match(text, /Incremental: scanning only what changed since/);
+		assert.match(text, new RegExp(result.incremental.baseHead.slice(0, 8)));
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a run that never asked for incremental says nothing about it", async () => {
+	const dir = await makeGitRepo();
+	try {
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher: acceptingFetcher });
+		assert.equal(result.incremental.requested, false);
+		assert.ok(
+			!/Incremental:/.test(estimateSubmitText(result, [getLens("architecture")])),
+			"an unrequested mode must not add noise to the summary",
+		);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
