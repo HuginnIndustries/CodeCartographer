@@ -24,7 +24,8 @@ carry_forward_closures: []
 #   - id: q-logit-bias-root-cause
 #     evidence: <the spike report or runtime observation that answered it>
 # A question of kind needs-runtime-test requires non-empty evidence — it closes
-# on runtime evidence, not on another read of the same source.
+# on runtime evidence, not on another read of the same source. Refused from
+# scaffold version 0.19.0; older scaffolds get a non-gating note instead.
 open_question_closures: []
 # Work after the active pipeline: spikes, amendments, deltas, maintainer rulings,
 # or opinionated reruns. Every entry requires a stable id.

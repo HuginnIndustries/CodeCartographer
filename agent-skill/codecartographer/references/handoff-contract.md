@@ -103,7 +103,9 @@ open_question_closures:
     evidence: scratch/spikes/logit-bias.md — probe against llama-server b4321
 ```
 
-Non-empty `evidence` is required when the question's `kind` is `needs-runtime-test`; completion refuses the closure otherwise, whether it was written as a bare id or as an object. It is checked for presence, not judged — a spike report or an observation against the running system is what belongs there, and another read of the same source is not. Questions of every other kind close on a bare id exactly as before.
+Non-empty `evidence` is required when the question's `kind` is `needs-runtime-test`, whether the closure is written as a bare id or as an object. It is checked for presence, not judged — a spike report or an observation against the running system is what belongs there, and another read of the same source is not. Questions of every other kind close on a bare id exactly as before.
+
+The requirement is scoped to the scaffold that documents it. A workspace whose `workflow/scaffold-version.yaml` is 0.19.0 or newer has completion refuse such a closure; an older or unversioned scaffold — whose own templates never stated the rule — gets a non-gating `NOTE:` instead, so an in-flight run written against the older contract cannot be stopped by a rule it was never told. Refreshing the scaffold (`codecarto_refresh_scaffold` on MCP, `/codecarto-refresh-scaffold` on Pi) opts a workspace in.
 
 Upstream coverage gaps travel the same way, without gating: the `Skipped scope` and `Known blind spots` bullets of every completed phase's `## Coverage and limits` section appear in your phase prompt's orchestrator duties. A finding of yours inside one of those gaps must either close it with cited new evidence or inherit its uncertainty.
 

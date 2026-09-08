@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { getNextEligiblePhase, resolvePhase, validatePhaseOutput } from "./pipeline.ts";
 import { applyHandoff, autoAssignIds, buildTerminalNextActions, loadHandoffFile, normalizeStatus } from "./status.ts";
 import type { NormalizedStatus, OpenQuestionEntry, PhaseHandoff, ProposedConventionEntry, ValidationResult, WorkspaceState } from "./types.ts";
-import { dateOnly, newlineIfUnterminated, pathExists, uniqueStrings } from "./utils.ts";
+import { compareDottedVersions, dateOnly, newlineIfUnterminated, pathExists, uniqueStrings } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
 
 export type CompletionResult = {
@@ -293,6 +293,27 @@ async function writeCompletionArtifacts(
 	return { closeoutPath: `.codecarto/closeouts/${closeoutFile}`, decisionsAppended, totalPendingProposals };
 }
 
+/**
+ * First scaffold version whose handoff template documents the `{id, evidence}`
+ * closure shape and the runtime-evidence rule (#122, #186).
+ *
+ * A workspace scaffolded before it was never told that closing a
+ * `needs-runtime-test` question requires evidence, so refusing its completion
+ * would apply a rule its own templates do not carry — and could stop an
+ * in-flight `--auto` run on a handoff written against the older contract.
+ * Those workspaces get a warning instead; refreshing the scaffold
+ * (`codecarto_refresh_scaffold` on MCP, `/codecarto-refresh-scaffold` on Pi)
+ * opts them in. Same treatment Stage 2's findings pairing check uses.
+ */
+export const CLOSURE_EVIDENCE_GATE_SCAFFOLD_VERSION = "0.19.0";
+
+/** Whether the runtime-evidence requirement refuses (current scaffold) or warns (older). */
+export function closureEvidenceGateActive(scaffoldVersion: string | undefined | null): boolean {
+	if (!scaffoldVersion) return false;
+	const comparison = compareDottedVersions(scaffoldVersion, CLOSURE_EVIDENCE_GATE_SCAFFOLD_VERSION);
+	return comparison !== null && comparison >= 0;
+}
+
 export async function completeValidatedPhase(
 	cwd: string,
 	validation: ValidationResult,
@@ -319,6 +340,7 @@ export async function completeValidatedPhase(
 			);
 		}
 	}
+	const warnings: string[] = [];
 	if (handoff) {
 		const activePhases = new Set(initialState.pipeline.phase_order);
 		const sourceIndex = initialState.pipeline.phase_order.indexOf(validation.phaseId);
@@ -368,13 +390,25 @@ export async function completeValidatedPhase(
 		// D3: a `needs-runtime-test` question closes on runtime evidence, not on
 		// another source read. Requiring the evidence string to be non-empty is
 		// the whole gate — judging what it says stays prose guidance.
+		//
+		// Unlike D1, this one can fire on a handoff that uses none of the new
+		// fields: a bare-string closure was the only shape before this release.
+		// Gating it unconditionally would apply a rule to workspaces whose own
+		// templates never state it, so it is version-gated exactly like Stage
+		// 2's pairing check — refuse on a scaffold that documents the rule, warn
+		// on one that predates it.
+		const evidenceGateActive = closureEvidenceGateActive(initialState.scaffoldVersion);
 		for (const closure of handoff.open_question_closures) {
 			if (questionsById.get(closure.id)?.kind !== "needs-runtime-test") continue;
 			if (closure.evidence?.trim()) continue;
-			throw new Error(
-				`Refusing to complete ${validation.phaseId}: open_question_closures closes ${closure.id}, whose kind is needs-runtime-test, without evidence. `
+			const detail =
+				`open_question_closures closes ${closure.id}, whose kind is needs-runtime-test, without evidence. `
 				+ `A runtime question closes on runtime evidence — a spike report or an observation against the running system — not on a source read. `
-				+ `Write the closure as an object: { id: ${closure.id}, evidence: <where that evidence lives> }. If you do not have it, leave the question open.`,
+				+ `Write the closure as an object: { id: ${closure.id}, evidence: <where that evidence lives> }. If you do not have it, leave the question open.`;
+			if (evidenceGateActive) throw new Error(`Refusing to complete ${validation.phaseId}: ${detail}`);
+			warnings.push(
+				`${detail} Warning only: this workspace's scaffold predates the requirement — refresh it `
+				+ `(codecarto_refresh_scaffold on MCP, /codecarto-refresh-scaffold on Pi) to make this gating.`,
 			);
 		}
 	}
@@ -383,7 +417,6 @@ export async function completeValidatedPhase(
 	// or open question the report never addressed — "closed in the handoff,
 	// resolved nowhere." The id of every claimed closure should appear somewhere
 	// in the primary output that claims to resolve it.
-	const warnings: string[] = [];
 	if (handoff && validation.outputPath) {
 		const closures = [...handoff.carry_forward_closures, ...handoff.open_question_closures.map((closure) => closure.id)].filter((id) => id?.trim());
 		if (closures.length > 0) {

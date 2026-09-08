@@ -20,7 +20,7 @@ const { loadYamlFile, stringifySimpleYaml } = await import(pathToFileURL(`${REPO
 const { parseHandoff, applyHandoff, ensureClosureArray } = await import(pathToFileURL(`${REPO_ROOT}/core/status.ts`).href);
 const { getWorkspaceState } = await import(pathToFileURL(`${REPO_ROOT}/core/workspace.ts`).href);
 const { validatePhaseOutput } = await import(pathToFileURL(`${REPO_ROOT}/core/pipeline.ts`).href);
-const { completeValidatedPhase } = await import(pathToFileURL(`${REPO_ROOT}/core/completion.ts`).href);
+const { completeValidatedPhase, CLOSURE_EVIDENCE_GATE_SCAFFOLD_VERSION } = await import(pathToFileURL(`${REPO_ROOT}/core/completion.ts`).href);
 const { buildPhasePrompt } = await import(pathToFileURL(`${REPO_ROOT}/core/prompts.ts`).href);
 const { parseCoverageAndLimits, collectCoverageGaps } = await import(pathToFileURL(`${REPO_ROOT}/core/coverage.ts`).href);
 
@@ -65,6 +65,21 @@ async function writeHandoff(cwd, phaseId, lines) {
 	const handoffPath = join(cwd, ".codecarto", "scratch", "handoffs", `${phaseId}.yaml`);
 	await mkdir(dirname(handoffPath), { recursive: true });
 	await writeFile(handoffPath, [`schema_version: 1`, `phase_id: ${phaseId}`, ...lines, ""].join("\n"), "utf8");
+}
+
+/**
+ * Pin the workspace's scaffold version. The runtime-evidence gate refuses only
+ * from the scaffold that documents the rule, so a test asserting the refusal
+ * must say which era it is in rather than inherit whatever the packaged
+ * template happens to carry today.
+ */
+async function setScaffoldVersion(cwd, version) {
+	const path = join(cwd, ".codecarto", "workflow", "scaffold-version.yaml");
+	if (version === null) {
+		await rm(path, { force: true });
+		return;
+	}
+	await writeFile(path, `scaffold_version: ${version}\n`, "utf8");
 }
 
 async function complete(cwd, phaseId) {
@@ -264,6 +279,7 @@ test("D3: back-compat — a bare-string closure still resolves a question", asyn
 test("D3: completion refuses an evidence-free closure of a needs-runtime-test question", async () => {
 	const cwd = await workspaceWithRoutedCandidate({ derivesFrom: false });
 	try {
+		await setScaffoldVersion(cwd, CLOSURE_EVIDENCE_GATE_SCAFFOLD_VERSION);
 		await writePassingOutput(cwd, "contracts", "\nq-logit-bias-root-cause closed by re-reading the client.\n");
 		await writeHandoff(cwd, "contracts", [
 			"open_question_closures:",
@@ -291,6 +307,7 @@ test("D3: completion refuses an evidence-free closure of a needs-runtime-test qu
 test("D3: an empty evidence string does not satisfy the gate", async () => {
 	const cwd = await workspaceWithRoutedCandidate({ derivesFrom: false });
 	try {
+		await setScaffoldVersion(cwd, CLOSURE_EVIDENCE_GATE_SCAFFOLD_VERSION);
 		await writePassingOutput(cwd, "contracts", "\nq-logit-bias-root-cause.\n");
 		await writeHandoff(cwd, "contracts", [
 			"open_question_closures:",
@@ -334,6 +351,53 @@ test("D3: a question of any other kind still closes without evidence", async () 
 		const result = await complete(cwd, "contracts");
 		const questions = Object.values(result.updatedState.status.phases).flatMap((phase) => phase.open_questions);
 		assert.equal(questions.some((entry) => entry.id === "q-logit-bias-root-cause"), false, "the gate is narrow to needs-runtime-test");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("D3: an older scaffold gets a warning instead of a refusal", async () => {
+	// The rule can bind a handoff that uses none of the new fields, because a
+	// bare-string closure was the only shape before it existed. A workspace
+	// scaffolded before the templates documented the rule must not have an
+	// in-flight run stopped by it — Stage 2's pairing check draws the same line.
+	const cwd = await workspaceWithRoutedCandidate({ derivesFrom: false });
+	try {
+		await setScaffoldVersion(cwd, "0.18.0");
+		await writePassingOutput(cwd, "contracts", "\nq-logit-bias-root-cause closed by re-reading the client.\n");
+		await writeHandoff(cwd, "contracts", [
+			"open_question_closures:",
+			"  - q-logit-bias-root-cause",
+			"closeout_summary: Contracts documented.",
+		]);
+		const result = await complete(cwd, "contracts");
+		assert.equal(result.updatedState.status.phases.contracts.status, "complete", "the older era completes");
+		assert.ok(
+			result.warnings.some((warning) => /q-logit-bias-root-cause/.test(warning) && /Warning only/.test(warning)),
+			`expected a non-gating note naming the question, got: ${JSON.stringify(result.warnings)}`,
+		);
+		assert.ok(
+			result.warnings.some((warning) => /refresh/i.test(warning)),
+			"the note must say how to opt in",
+		);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("D3: an unversioned scaffold warns rather than refusing", async () => {
+	const cwd = await workspaceWithRoutedCandidate({ derivesFrom: false });
+	try {
+		await setScaffoldVersion(cwd, null);
+		await writePassingOutput(cwd, "contracts", "\nq-logit-bias-root-cause closed by re-reading the client.\n");
+		await writeHandoff(cwd, "contracts", [
+			"open_question_closures:",
+			"  - q-logit-bias-root-cause",
+			"closeout_summary: Contracts documented.",
+		]);
+		const result = await complete(cwd, "contracts");
+		assert.equal(result.updatedState.status.phases.contracts.status, "complete");
+		assert.ok(result.warnings.some((warning) => /q-logit-bias-root-cause/.test(warning)));
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}
