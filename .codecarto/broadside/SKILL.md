@@ -90,6 +90,17 @@ Collect runs two cross-lens post-passes by default: **synthesis** (the
 executive report) and **triage** (the prioritized work order). Pass
 `include_synthesis: false` or `include_triage: false` on collect to skip one.
 
+Two caveats apply to any model you pick. The `models` action lists every id
+OpenRouter advertises a `:batch` variant for, and many of those variants do not
+exist — submitting one returns `does not have a :batch endpoint`, with nothing in
+the catalog to distinguish it beforehand. A rejected batch costs nothing, so
+probe a candidate on a single lens first. And reasoning competes with the answer for
+`max_tokens`: Broad-Side caps thinking at a quarter of each lens's output budget
+so three quarters remain for the JSON, which is the split the cost estimate
+already assumes. It caps rather than disables because some endpoints refuse to
+be switched off entirely. Override with `reasoning:` in `config.yaml` only
+alongside a raised output budget.
+
 Lenses do not all have to run on the same model. `lens_models` in `config.yaml`
 routes individual lenses to their own batch model — the usual reason being that
 a stronger model changes security and defect findings more than it changes an

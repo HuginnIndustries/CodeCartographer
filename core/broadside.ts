@@ -158,6 +158,47 @@ export type FileSlice = {
 	files: string[];
 };
 
+/**
+ * OpenRouter's unified `reasoning` control, as sent on a lens request.
+ *
+ * Left unsent, each model applies its own default — which is how a
+ * reasoning-capable model came to spend 5,758 of a 6,000-token output budget
+ * thinking, leaving ~230 tokens for JSON that then truncated mid-structure. The
+ * thinking is billed at the full *output* rate, so the run paid for roughly
+ * 6,000 output tokens per slice to receive 230 usable ones.
+ */
+export type BroadsideReasoning = { enabled?: boolean; effort?: "minimal" | "low" | "medium" | "high"; max_tokens?: number };
+
+/**
+ * The share of a lens's output budget reasoning may spend.
+ *
+ * `estimateCost` already budgets output at 75% of `maxTokens`; capping thinking
+ * at the remaining quarter makes that assumption true by construction and
+ * guarantees the answer has room. A floor keeps the cap sane for a small lens.
+ */
+export const BROADSIDE_REASONING_BUDGET_FRACTION = 0.25;
+export const BROADSIDE_MIN_REASONING_TOKENS = 512;
+
+/**
+ * Cap reasoning for a lens request — deliberately a cap, not an off switch.
+ *
+ * Disabling outright is not portable: `google/gemini-3.8-flash:batch` refuses
+ * the whole batch with *"Reasoning is mandatory for this endpoint and cannot be
+ * disabled"*, turning a partial result into none at all. Capping works whether
+ * or not a provider allows reasoning to be switched off.
+ *
+ * The failure this prevents is the budget being spent thinking rather than
+ * answering. Measured on one run: 5,758 of a 6,000-token budget went to
+ * reasoning, leaving ~230 tokens for JSON that truncated mid-structure — and
+ * those tokens bill at the full output rate. The shipped default model does the
+ * same thing less consistently (reasoning tokens from 0 to 5,757 across 13
+ * slices, three of them cut off at `finish_reason: length`), so this is not a
+ * multi-model concern.
+ */
+export function defaultReasoningFor(maxTokens: number): BroadsideReasoning {
+	return { max_tokens: Math.max(BROADSIDE_MIN_REASONING_TOKENS, Math.floor(maxTokens * BROADSIDE_REASONING_BUDGET_FRACTION)) };
+}
+
 export type BatchRequest = {
 	custom_id: string;
 	body: {
@@ -165,6 +206,7 @@ export type BatchRequest = {
 		messages: { role: "system" | "user"; content: string }[];
 		response_format: { type: "json_schema"; json_schema: JsonSchemaDef };
 		max_tokens: number;
+		reasoning?: BroadsideReasoning;
 	};
 };
 
@@ -256,6 +298,8 @@ export type BroadsideConfig = {
 	 * trade-off is not the same for every lens.
 	 */
 	lensModels: Partial<Record<BroadsideLensId, string>>;
+	/** Overrides every lens's reasoning setting when present. */
+	reasoning: BroadsideReasoning | null;
 	/**
 	 * Repo defaults for the per-call run knobs. Each mirrors a tool parameter
 	 * of the same name; an explicit parameter always wins. They live here so a
@@ -846,6 +890,9 @@ type LensDefinition = {
 	sliceBy: "none" | "directory" | "auto";
 	maxChars: number;
 	maxTokens: number;
+	// Omitted means BROADSIDE_DEFAULT_REASONING (off). Set this only for a lens
+	// that genuinely needs to think, and raise its maxTokens to cover both.
+	reasoning?: BroadsideReasoning;
 	// Test files rarely carry the surface a lens audits — they bulk up the
 	// batch and the bill. Convention extraction is the exception: it exists
 	// partly to catalog test patterns.
@@ -1509,6 +1556,7 @@ export function buildBatchRequest(
 	sliceCount: number,
 	model: string = BROADSIDE_MODEL,
 	maxTokensOverride?: number,
+	reasoningOverride?: BroadsideReasoning,
 ): BatchRequest {
 	const moduleTag = sanitizeId(slice.moduleName);
 	const customId = sliceCount > 1 ? `${lens.id}-${moduleTag}-${index + 1}` : `${lens.id}-${moduleTag}`;
@@ -1522,6 +1570,9 @@ export function buildBatchRequest(
 			],
 			response_format: { type: "json_schema", json_schema: SCHEMAS[lens.schemaName] },
 			max_tokens: maxTokensOverride ?? lens.maxTokens,
+			// Always sent, never inherited: an absent field means the model's
+			// own default, and that default is what truncated the JSON.
+			reasoning: reasoningOverride ?? lens.reasoning ?? defaultReasoningFor(maxTokensOverride ?? lens.maxTokens),
 		},
 	};
 }
@@ -1689,6 +1740,19 @@ export async function persistBroadsideRun(broadsideDir: string, run: BroadsideRu
 	});
 }
 
+/** Read a `reasoning:` block from config.yaml, ignoring anything malformed. */
+function parseReasoningConfig(raw: unknown): BroadsideReasoning | null {
+	if (raw === false) return { enabled: false };
+	if (raw === true) return { enabled: true };
+	if (!raw || typeof raw !== "object") return null;
+	const value = raw as Record<string, unknown>;
+	const out: BroadsideReasoning = {};
+	if (typeof value.enabled === "boolean") out.enabled = value.enabled;
+	if (value.effort === "minimal" || value.effort === "low" || value.effort === "medium" || value.effort === "high") out.effort = value.effort;
+	if (typeof value.max_tokens === "number" && value.max_tokens > 0) out.max_tokens = value.max_tokens;
+	return Object.keys(out).length > 0 ? out : null;
+}
+
 export async function loadBroadsideConfig(broadsideDir: string): Promise<BroadsideConfig> {
 	const configPath = join(broadsideDir, BROADSIDE_CONFIG_FILE);
 	let raw: Record<string, unknown> = {};
@@ -1729,6 +1793,10 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 				? { inputPerM: inputOverride, outputPerM: outputOverride }
 				: null,
 		lensModels,
+		// An escape hatch, not a knob to reach for: a model whose reasoning is
+		// worth paying for needs its lens maxTokens raised to cover both the
+		// thinking and the answer, or the JSON truncates exactly as before.
+		reasoning: parseReasoningConfig(raw.reasoning),
 		incremental: flag("incremental", false),
 		retryTruncated: flag("retry_truncated", true),
 		includeSynthesis: flag("include_synthesis", true),
@@ -2301,7 +2369,7 @@ export async function runBroadsideSubmit(
 		const { lens, maxTokens, lensModel, lensOutputCap } = priced;
 		const lensId = lens.id;
 		const slices = slicesByLens.get(lensId) ?? [];
-		const requests = slices.map((sl, i) => buildBatchRequest(lens, info, sl, i, slices.length, lensModel, maxTokens));
+		const requests = slices.map((sl, i) => buildBatchRequest(lens, info, sl, i, slices.length, lensModel, maxTokens, config.reasoning ?? undefined));
 		for (const request of requests) requestsByCustomId[request.custom_id] = request;
 
 		const entry: BroadsideBatchEntry = {

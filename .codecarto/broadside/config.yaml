@@ -46,9 +46,48 @@
 # and picking one for you would spend your money on our guess. Compare
 # candidates with the `models` action first.
 #
+# Two things to check before committing to a model, both learned the hard way:
+#
+#   1. The `models` action lists whatever OpenRouter advertises a `:batch`
+#      variant for, and a good number of those variants do not actually exist —
+#      submitting one comes back `Model '<id>' does not have a :batch endpoint.`
+#      Nothing in the catalog distinguishes them. Every Anthropic and OpenAI
+#      batch id tried so far is rejected this way; Google and DeepSeek work.
+#      A rejected batch costs nothing, so probe a candidate on one lens before
+#      relying on it.
+#   2. A reasoning-capable model spends its output budget thinking, and the
+#      thinking is billed at the full output rate. See `reasoning:` below.
+#
 # lens_models:
-#   security: anthropic/claude-opus-4.5:batch
-#   defect: anthropic/claude-opus-4.5:batch
+#   security: deepseek/deepseek-v4-pro-0813:batch
+#   defect: deepseek/deepseek-v4-pro-0813:batch
+
+# Reasoning control, sent on every lens request.
+#
+# By default Broad-Side caps thinking at a quarter of the lens's output budget,
+# leaving the other three quarters for the answer — which is exactly the split
+# the cost estimate already assumes.
+#
+# The cap exists because reasoning competes with the answer for `max_tokens`.
+# One measured run spent 5,758 of a 6,000-token budget thinking and left ~230
+# tokens for the JSON, which truncated mid-structure on 11 of 13 slices; those
+# tokens bill at the full output rate, so it paid for ~6,000 output tokens per
+# slice to receive ~230 usable ones. The shipped default model does the same
+# thing less consistently — reasoning from 0 to 5,757 tokens across 13 slices,
+# three of them cut off — so this is not something only exotic models do.
+#
+# It is a cap rather than an off switch on purpose. Some endpoints refuse to be
+# switched off: `google/gemini-3.8-flash:batch` rejects the entire batch with
+# "Reasoning is mandatory for this endpoint and cannot be disabled", which turns
+# a partial result into none at all. Capping works either way.
+#
+# Override only with a raised lens output budget, or the JSON truncates exactly
+# as above.
+#
+# reasoning:
+#   effort: low        # minimal | low | medium | high
+#   max_tokens: 2000   # or set the thinking budget directly
+#   enabled: false     # only where the provider allows it
 
 # Approximate run expense limit in USD (0 = no limit). Before submitting,
 # Broad-Side estimates the run cost from the collected file sizes and the
