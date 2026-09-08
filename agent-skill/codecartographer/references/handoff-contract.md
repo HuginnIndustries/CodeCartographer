@@ -17,7 +17,7 @@ owner_notes: []                 # 2-3 durable observations; appended to the phas
 open_questions: []              # genuinely unknown, no later phase will close them
 carry_forward: []               # deferred to a specific later phase in this pipeline
 carry_forward_closures: []      # ids of carry_forward entries this phase resolved
-open_question_closures: []      # ids of open questions this phase resolved, removed everywhere
+open_question_closures: []      # open questions this phase resolved, removed everywhere; bare id or {id, evidence}
 post_pipeline: []               # work after the pipeline; every entry needs a stable id
 decisions: []                   # choices made beyond what the prompt specified; completion appends them to DECISIONS.md
 proposed_conventions: []        # patterns proposed for promotion; completion stages them in CONVENTIONS.md
@@ -41,7 +41,7 @@ Omitted arrays default to empty. A malformed collection fails completion without
   deferred_reason: Distinguishing them needs a runtime probe this phase cannot run.
 ```
 
-`carry_forward` entries add `target_phase`:
+`carry_forward` entries add `target_phase`, and optionally `derives_from`:
 
 ```yaml
 - id: arch-CF2
@@ -49,9 +49,17 @@ Omitted arrays default to empty. A malformed collection fails completion without
   target_phase: protocols
   description: MCP endpoints listed by name only; schemas not extracted.
   deferred_reason: Wire-format extraction is the protocols phase's rubric.
+
+- id: mech-CF3
+  kind: defer-to-phase
+  target_phase: defect-scan-semantic
+  derives_from: q-logit-bias-root-cause   # optional: the open question this is one candidate answer to
+  description: The client sends logit_bias as a map; the documented shape is an array.
 ```
 
 Allowed `kind` values: `needs-runtime-test`, `needs-maintainer-decision`, `needs-spec-ruling`, `defer-to-phase`, `needs-fixture-capture`.
+
+`derives_from` names an `open_questions` id. Fill it in the handoff that registers the question — a phase that routes a candidate answer onward usually writes both entries at once, which is the one moment both are in front of you. It is optional and additive: a handoff that omits it behaves exactly as before.
 
 `proposed_conventions` entries (optional; omitted defaults to empty):
 
@@ -80,6 +88,26 @@ A later phase receives routed items in its phase prompt. To close one:
 Completion then removes the entry atomically. Resolving an open question works the same way through `open_question_closures`, which removes the id from every phase that raised it.
 
 Re-deferring instead of closing means writing a fresh `carry_forward` entry naming a later `target_phase`.
+
+### Closing a routed item does not settle the question it came from
+
+Addressing what was routed to you is not the same as answering the question that produced it. Two rules make that enforceable:
+
+- **A closure whose `derives_from` question is still open is refused.** If the item you are closing declares `derives_from: <question-id>`, that question is still in `status.yaml`, and this same handoff does not close it, completion refuses and names both ids. Either close the question here with the evidence that settles it, or leave the item routed and give the finding an unsettled action (`verify at runtime`) so it inherits the question's uncertainty. This rule is entirely opt-in — an entry without `derives_from` closes as it always has.
+- **A `needs-runtime-test` question closes on runtime evidence.** Write the closure as an object and say where that evidence lives:
+
+```yaml
+open_question_closures:
+  - q-loadconfig-ambiguity                   # bare id: still valid for any other kind
+  - id: q-logit-bias-root-cause
+    evidence: scratch/spikes/logit-bias.md — probe against llama-server b4321
+```
+
+Non-empty `evidence` is required when the question's `kind` is `needs-runtime-test`, whether the closure is written as a bare id or as an object. It is checked for presence, not judged — a spike report or an observation against the running system is what belongs there, and another read of the same source is not. Questions of every other kind close on a bare id exactly as before.
+
+The requirement is scoped to the scaffold that documents it. A workspace whose `workflow/scaffold-version.yaml` is 0.19.0 or newer has completion refuse such a closure; an older or unversioned scaffold — whose own templates never stated the rule — gets a non-gating `NOTE:` instead, so an in-flight run written against the older contract cannot be stopped by a rule it was never told. Refreshing the scaffold (`codecarto_refresh_scaffold` on MCP, `/codecarto-refresh-scaffold` on Pi) opts a workspace in.
+
+Upstream coverage gaps travel the same way, without gating: the `Skipped scope` and `Known blind spots` bullets of every completed phase's `## Coverage and limits` section appear in your phase prompt's orchestrator duties. A finding of yours inside one of those gaps must either close it with cited new evidence or inherit its uncertainty.
 
 ## The failure this prevents
 

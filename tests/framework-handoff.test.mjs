@@ -463,6 +463,33 @@ test("parseHandoff parses proposed_conventions and defaults omission to empty", 
 	assert.deepEqual(omitted.proposed_conventions, []);
 });
 
+// Stage 3 of #122 (#186) added two optional fields to this schema. They are
+// additive: a handoff written before them parses to exactly what it always did.
+// Behavior lives in tests/closure-integrity.test.mjs; what is pinned here is
+// the parse contract, next to the collections it joined.
+test("parseHandoff's closure-integrity fields are additive (#186)", async () => {
+	const { parseHandoff } = await import(pathToFileURL(`${REPO_ROOT}/core/status.ts`).href);
+
+	const legacy = parseHandoff({
+		phase_id: "contracts",
+		carry_forward: [{ id: "cf1", target_phase: "protocols", description: "D" }],
+		open_question_closures: ["q-one", "  q-two  "],
+	});
+	assert.equal(legacy.carry_forward[0].derives_from, undefined, "an entry without derives_from gains nothing");
+	assert.deepEqual(legacy.open_question_closures, [{ id: "q-one" }, { id: "q-two" }], "bare ids normalize to {id}");
+
+	const current = parseHandoff({
+		phase_id: "contracts",
+		carry_forward: [{ id: "cf1", target_phase: "protocols", derives_from: "q-one", description: "D" }],
+		open_question_closures: [{ id: "q-one", evidence: "spike report" }],
+	});
+	assert.equal(current.carry_forward[0].derives_from, "q-one");
+	assert.deepEqual(current.open_question_closures, [{ id: "q-one", evidence: "spike report" }]);
+
+	assert.deepEqual(parseHandoff({ phase_id: "contracts" }).open_question_closures, [], "omission still defaults to empty");
+	assert.throws(() => parseHandoff({ phase_id: "contracts", open_question_closures: "q-one" }), /open_question_closures must be an array/);
+});
+
 test("parseHandoff rejects malformed proposed_conventions loudly", async () => {
 	const { parseHandoff } = await import(pathToFileURL(`${REPO_ROOT}/core/status.ts`).href);
 	assert.throws(() => parseHandoff({ phase_id: "architecture", proposed_conventions: "not-an-array" }), /must be an array/);

@@ -4,9 +4,28 @@ schema_version: 1
 phase_id: <phase-id>
 owner_notes: []
 open_questions: []
+# Items a specific later phase closes. Every entry needs a target_phase naming a
+# downstream phase in the active pipeline. Optional derives_from names the
+# open_questions id this item is one candidate answer to:
+#   - id: mech-CF3
+#     kind: defer-to-phase
+#     target_phase: defect-scan-semantic
+#     derives_from: q-logit-bias-root-cause
+#     description: <the routed item>
+# Fill derives_from in the handoff that registers the question — that is the one
+# moment both entries are in front of you. Closing the routed item later does not
+# settle the question it came from, and completion refuses such a closure while
+# the question is still open and unclosed by the same handoff.
 carry_forward: []
 carry_forward_closures: []
-# Resolved open questions: their IDs are removed from all phases.
+# Resolved open questions: their IDs are removed from all phases. Either a bare
+# id, or an object naming the evidence that settled it:
+#   - q-loadconfig-ambiguity
+#   - id: q-logit-bias-root-cause
+#     evidence: <the spike report or runtime observation that answered it>
+# A question of kind needs-runtime-test requires non-empty evidence — it closes
+# on runtime evidence, not on another read of the same source. Refused from
+# scaffold version 0.19.0; older scaffolds get a non-gating note instead.
 open_question_closures: []
 # Work after the active pipeline: spikes, amendments, deltas, maintainer rulings,
 # or opinionated reruns. Every entry requires a stable id.
