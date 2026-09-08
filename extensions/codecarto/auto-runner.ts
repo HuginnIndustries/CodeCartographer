@@ -229,11 +229,14 @@ export interface AutoCompleteResult {
 }
 
 export async function autoCompletePhase(
-	ctx: ExtensionContext,
+	// A directory, not a ctx: this only ever needed `ctx.cwd`, and its callers
+	// run after a sub-agent has invalidated the ctx they captured, where every
+	// property access throws.
+	cwd: string,
 	validation: ValidationResult,
 ): Promise<AutoCompleteResult> {
-	const result = await completeValidatedPhase(ctx.cwd, validation, "/codecarto-complete");
-	void writeDashboard(ctx.cwd, PACKAGE_VERSION);
+	const result = await completeValidatedPhase(cwd, validation, "/codecarto-complete");
+	void writeDashboard(cwd, PACKAGE_VERSION);
 	return result;
 }
 
@@ -319,6 +322,9 @@ export async function runAuto(
 	options: AutoRunOptions,
 ): Promise<AutoRunResult> {
 	const startedAt = Date.now();
+	// Captured once: the loop below spawns a sub-agent per phase, and each one
+	// invalidates this ctx, after which reading `ctx.cwd` throws.
+	const autoCwd = ctx.cwd;
 	const phasesRun: string[] = [];
 	const totalTokens = { input: 0, output: 0, cacheWrite: 0 };
 	const totalPhases = initialState.pipeline.phase_order.length;
@@ -407,7 +413,7 @@ export async function runAuto(
 		// decision.action === "continue" → auto-complete and loop.
 		// validation is guaranteed non-null on the continue branch.
 		try {
-			const { updatedState } = await autoCompletePhase(ctx, validation!);
+			const { updatedState } = await autoCompletePhase(autoCwd, validation!);
 			state = updatedState;
 			phasesRun.push(phase.id);
 			options.onPhaseAdvanced?.(state);

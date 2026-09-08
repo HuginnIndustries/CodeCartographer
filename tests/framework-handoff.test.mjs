@@ -380,7 +380,7 @@ test("MCP and Pi completion surfaces both delegate to framework-owned handoff co
 			} else {
 				const { autoCompletePhase } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/auto-runner.ts`).href);
 				const validation = { phaseId: "architecture", primaryOutput: "findings/architecture/architecture-map.md", outputPath: "", exists: true, hasValidationBlock: true, overall: "PASS", rows: [], gaps: [], errors: [] };
-				await autoCompletePhase({ cwd }, validation);
+				await autoCompletePhase(cwd, validation);
 			}
 			const state = await getWorkspaceState(cwd);
 			assert.ok(state.status.phases.architecture.owner_notes.includes(`${surface}-handoff`));

@@ -167,3 +167,57 @@ test("/codecarto-publish publishes the reimplementation spec and allows configur
 		}
 	});
 });
+
+// A phase runs as a sub-agent, which replaces the session and invalidates the
+// ctx the command captured. From then on Pi throws on *every* property access,
+// `ctx.cwd` and `ctx.hasUI` included — so the usual `if (ctx.hasUI)` guard was
+// itself a throw site. Post-phase work fires without being awaited, so those
+// throws became unhandled rejections that killed the process: a real
+// `/codecarto-next` run crashed Pi and left every phase pending.
+
+/** A ctx Pi has invalidated: reading any property throws, exactly as Pi does. */
+function staleCtx() {
+	return new Proxy(
+		{},
+		{
+			get(_target, prop) {
+				throw new Error(
+					`This extension ctx is stale after session replacement or reload. Tried to read ${String(prop)}.`,
+				);
+			},
+		},
+	);
+}
+
+test("a stale ctx throws on every property access, as the real one does", () => {
+	const ctx = staleCtx();
+	assert.throws(() => ctx.cwd, /stale after session replacement/);
+	assert.throws(() => ctx.hasUI, /stale after session replacement/);
+});
+
+test("commands handed a stale ctx return quietly instead of throwing", async () => {
+	await withTempRepo(async (cwd) => {
+		const { commands, ctx } = createHarness(cwd);
+		await commands.get("codecarto-init").handler("lite", ctx);
+
+		// Every command below goes through ensureWorkspaceState → readWorkspaceState
+		// → setUiState, each of which touches the ctx.
+		for (const name of ["codecarto-status", "codecarto-next", "codecarto-validate", "codecarto-dashboard", "codecarto-usage"]) {
+			const command = commands.get(name);
+			if (!command) continue;
+			await assert.doesNotReject(
+				async () => command.handler("", staleCtx()),
+				`/${name} must not throw when the session it captured is gone`,
+			);
+		}
+	});
+});
+
+test("a stale ctx before init is refused without throwing", async () => {
+	await withTempRepo(async (cwd) => {
+		const { commands } = createHarness(cwd);
+		// codecartoModeActive is false here, which is the branch that used to
+		// call ctx.ui.notify directly on whatever ctx it was handed.
+		await assert.doesNotReject(async () => commands.get("codecarto-status").handler("", staleCtx()));
+	});
+});

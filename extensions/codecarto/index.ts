@@ -167,8 +167,46 @@ function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): str
 	return lines;
 }
 
+/**
+ * Whether `ctx` still belongs to the live session.
+ *
+ * Pi invalidates an extension ctx when the session is replaced, and from then
+ * on *every* property access on it throws — `ctx.cwd` and `ctx.hasUI` included.
+ * A phase runs as a sub-agent, so by the time post-phase work fires, the ctx
+ * captured when the command started may already be dead. That is an ordinary
+ * outcome rather than an error: the UI it would have refreshed is gone with the
+ * session. Callers skip their UI work instead of throwing into a `void` call
+ * that nothing is waiting on.
+ */
+function isCtxLive(ctx: ExtensionContext | ExtensionCommandContext): boolean {
+	try {
+		return typeof ctx.cwd === "string";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Notify through `ctx`, dropping the message if the session it belonged to is
+ * gone.
+ *
+ * `ctx.hasUI` throws on a stale ctx rather than returning false, so the usual
+ * `if (ctx.hasUI) ctx.ui.notify(...)` guard was itself a throw site. Inside a
+ * promise chain that was worse than a lost message: the `.catch` handler threw
+ * while reporting the original failure, and that second rejection had nothing
+ * left to catch it.
+ */
+function notifyCtx(
+	ctx: ExtensionContext | ExtensionCommandContext,
+	message: string,
+	level: "info" | "warning" | "error",
+): void {
+	if (!isCtxLive(ctx) || !ctx.hasUI) return;
+	ctx.ui.notify(message, level);
+}
+
 function setUiState(ctx: ExtensionContext | ExtensionCommandContext, state: WorkspaceState | null, extraLines: string[] = []): void {
-	if (!ctx.hasUI) return;
+	if (!isCtxLive(ctx) || !ctx.hasUI) return;
 	if (!state) {
 		ctx.ui.setStatus(STATUS_LINE_ID, undefined);
 		ctx.ui.setWidget(STATUS_WIDGET_ID, undefined);
@@ -351,6 +389,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	let sessionCwd: string | undefined;
 
 	const readWorkspaceState = async (ctx: ExtensionContext | ExtensionCommandContext, notifyOnError: boolean = true): Promise<WorkspaceState | null> => {
+		// `ctx.cwd` was read before the try, so a stale ctx made this reject
+		// rather than return null as its signature promises — and the callers
+		// that fire it without awaiting turned that into an unhandled rejection.
+		if (!isCtxLive(ctx)) return null;
 		sessionCwd = ctx.cwd;
 		try {
 			return await getWorkspaceState(ctx.cwd);
@@ -358,12 +400,15 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const message = error instanceof Error ? error.message : String(error);
 			lastFeedbackLines = [message];
 			setUiState(ctx, null);
-			if (notifyOnError && ctx.hasUI) ctx.ui.notify(message, "error");
+			// The ctx can die between the read above and here, so the error
+			// path must not assume it is still usable either.
+			if (notifyOnError && isCtxLive(ctx) && ctx.hasUI) ctx.ui.notify(message, "error");
 			return null;
 		}
 	};
 
 	const refreshWorkspaceUi = async (ctx: ExtensionContext | ExtensionCommandContext, extraLines?: string[]): Promise<WorkspaceState | null> => {
+		if (!isCtxLive(ctx)) return null;
 		if (!codecartoModeActive) {
 			setUiState(ctx, null);
 			return null;
@@ -380,13 +425,16 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	const ensureWorkspaceState = async (ctx: ExtensionCommandContext): Promise<WorkspaceState | null> => {
 		if (!codecartoModeActive) {
 			setUiState(ctx, null);
-			ctx.ui.notify("CodeCartographer is not active in this session. Run /codecarto-init first.", "warning");
+			notifyCtx(ctx, "CodeCartographer is not active in this session. Run /codecarto-init first.", "warning");
 			return null;
 		}
 		const state = await readWorkspaceState(ctx);
 		if (state) return state;
+		// Reached when the ctx is stale as well as when there is no workspace,
+		// so neither `ctx.cwd` nor the notify below may assume a live ctx.
+		if (!isCtxLive(ctx)) return null;
 		const hasWorkspace = await pathExists(join(ctx.cwd, ".codecarto", "workflow", "status.yaml"));
-		if (!hasWorkspace) ctx.ui.notify("No .codecarto/ workspace found. Run /codecarto-init first.", "warning");
+		if (!hasWorkspace) notifyCtx(ctx, "No .codecarto/ workspace found. Run /codecarto-init first.", "warning");
 		return null;
 	};
 
@@ -724,36 +772,40 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			// phase so status.yaml advances without requiring the user to manually
 			// run /codecarto-validate then /codecarto-complete. This mirrors what
 			// the auto loop (runAuto) does after each phase.
+			// The sub-agent replaces the session, which invalidates this ctx —
+			// every later property access on it throws. Capture the directory
+			// now so the post-phase work below does not depend on the ctx
+			// surviving, and route UI updates through notifyCtx, which drops
+			// them if it has not.
+			const phaseCwd = ctx.cwd;
 			void runSinglePhase(ctx, pi, state, phase, { llmSteerEnabled, signal: ctx.signal, preflight })
 				.then(async (result) => {
 					if (result.status !== "completed") return;
 
 					// Refresh state from disk — the sub-agent may have written
 					// findings that the validator needs to read.
-					const stateForValidation = (await getWorkspaceState(ctx.cwd)) ?? state;
+					const stateForValidation = (await getWorkspaceState(phaseCwd)) ?? state;
 					const validation = await validatePhaseOutput(stateForValidation, phase.id).catch(
 						(error: unknown) => (error instanceof Error ? error : new Error(String(error))),
 					);
 
 					if (validation instanceof Error) {
-						if (ctx.hasUI) ctx.ui.notify(`Auto-validation error for ${phase.id}: ${validation.message}`, "warning");
+						notifyCtx(ctx, `Auto-validation error for ${phase.id}: ${validation.message}`, "warning");
 						lastFeedbackLines = [`Validation error: ${validation.message}`, "Run `/codecarto-validate` then `/codecarto-complete` manually."];
 						return;
 					}
 
 					if (validation.overall === "FAIL" || validation.overall === "MISSING") {
-						if (ctx.hasUI) ctx.ui.notify(`Phase ${phase.id} validation: ${validation.overall}. Fix the output, then re-run /codecarto-next.`, "warning");
+						notifyCtx(ctx, `Phase ${phase.id} validation: ${validation.overall}. Fix the output, then re-run /codecarto-next.`, "warning");
 						lastFeedbackLines = buildValidationSummary(validation);
 						return;
 					}
 
 					// PASS or PASS WITH GAPS — auto-complete the phase.
 					try {
-						const { updatedState, closeoutNotice } = await autoCompletePhase(ctx, validation);
-						if (ctx.hasUI) {
-							ctx.ui.notify(`Phase ${phase.id} auto-completed (validation: ${validation.overall}).`, validation.overall === "PASS WITH GAPS" ? "warning" : "info");
-							if (closeoutNotice) ctx.ui.notify(closeoutNotice, "info");
-						}
+						const { updatedState, closeoutNotice } = await autoCompletePhase(phaseCwd, validation);
+						notifyCtx(ctx, `Phase ${phase.id} auto-completed (validation: ${validation.overall}).`, validation.overall === "PASS WITH GAPS" ? "warning" : "info");
+						if (closeoutNotice) notifyCtx(ctx, closeoutNotice, "info");
 						lastFeedbackLines = [
 							`Completed phase: ${validation.phaseId}`,
 							`Validation: ${validation.overall}`,
@@ -762,20 +814,20 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						if (closeoutNotice) lastFeedbackLines.push(closeoutNotice);
 					} catch (error: unknown) {
 						const message = error instanceof Error ? error.message : String(error);
-						if (ctx.hasUI) ctx.ui.notify(`Auto-completion failed for ${phase.id}: ${message}. Run /codecarto-complete manually.`, "warning");
+						notifyCtx(ctx, `Auto-completion failed for ${phase.id}: ${message}. Run /codecarto-complete manually.`, "warning");
 						lastFeedbackLines = [`Auto-completion failed: ${message}`, "Run `/codecarto-complete` manually."];
 					}
 				})
 				.catch((error: unknown) => {
 					const message = error instanceof Error ? error.message : String(error);
-					if (ctx.hasUI) ctx.ui.notify(`Post-phase processing error for ${phase.id}: ${message}`, "warning");
+					notifyCtx(ctx, `Post-phase processing error for ${phase.id}: ${message}`, "warning");
 					lastFeedbackLines = [`Post-phase error: ${message}`];
 				})
 				.finally(() => {
 					// Refresh the status widget after the phase resolves so the
 					// "Open questions / Carry-forward / Next" lines reflect any
 					// owner_notes the sub-agent wrote to status.yaml.
-					void refreshWorkspaceUi(ctx);
+					void refreshWorkspaceUi(ctx).catch(() => undefined);
 				});
 		},
 	});
@@ -859,7 +911,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const { updatedState, closeoutNotice, warnings } = await autoCompletePhase(ctx, validation);
+			const { updatedState, closeoutNotice, warnings } = await autoCompletePhase(ctx.cwd, validation);
 
 			lastFeedbackLines = [
 				`Completed phase: ${validation.phaseId}`,
@@ -1024,7 +1076,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			}
 
 			lastFeedbackLines = [`Queued the CodeCartographer guide: ${document.topic}`];
-			if (codecartoModeActive) void refreshWorkspaceUi(ctx, lastFeedbackLines);
+			if (codecartoModeActive) void refreshWorkspaceUi(ctx, lastFeedbackLines).catch(() => undefined);
 			ctx.ui.notify(`Queued the CodeCartographer guide (${document.topic})`, "info");
 		},
 	});
@@ -1062,7 +1114,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				if (codecartoModeActive) {
 					// A workspace session already has a widget; fold the result into it.
 					if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
-					void refreshWorkspaceUi(ctx, lines);
+					void refreshWorkspaceUi(ctx, lines).catch(() => undefined);
 				} else if (ctx.hasUI) {
 					// Scout-only repository: the Broad-Side widget is the only place
 					// the result can live, so it holds it instead of being cleared.
