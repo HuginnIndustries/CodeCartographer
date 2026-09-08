@@ -101,6 +101,31 @@ At least one full round trip — init → next → write the artifact and handof
 
 If a surface is unavailable (no credits, no install), say so explicitly in the PR rather than omitting the row. An unverified surface is a known risk; a silently skipped one is not.
 
+#### Driving the surfaces headlessly
+
+Two things make a headless run look like a broken build when it is not. Both cost real time to rediscover, so they are written down here.
+
+**`pi -p` requires a TTY.** Without one it hangs forever — not slowly, not intermittently. Reproduced with no extension loaded at all: `timeout 60 pi -p 'reply with the single word OK'` exits 124 having printed nothing, while the same command under a pseudo-terminal finishes in two seconds. Wrap every headless Pi invocation:
+
+```bash
+script -qec "pi -e /abs/path/to/extensions/codecarto/index.ts -p '/codecarto-init lite' '/codecarto-next --auto'" /dev/null
+```
+
+**Chain commands in one session, led by `/codecarto-init` or `/codecarto-open`.** `codecartoModeActive` is process-local and `session_start` resets it to `false`, so a one-shot `pi -e <ext> -p '/codecarto-status'` exits 0 having silently refused — the refusal goes through `ctx.ui.notify`, which renders nothing under `-p`. Only those two commands set the flag.
+
+Use `--auto` for a round trip. Plain `/codecarto-next` fires the phase without awaiting it, so a one-shot process exits before the sub-agent starts and writes nothing; `runAuto` is awaited, so `/codecarto-next --auto` blocks until the phases finish. Commands whose only output is `ctx.ui.notify` (`status`, `usage`, `list-skills`, `guide`) print nothing under `-p` even when they work — verify those through a side effect, such as a deleted `dashboard.html` reappearing.
+
+If `pi auth check --provider <name>` reports `not_ready`, that is a separate and duller cause of a hang; supply a key before concluding anything else.
+
+**For the MCP surfaces, verify the artifact rather than the checkout.** `npm pack` then point the smoke test at the tarball, so the thing exercised over stdio is the thing that will be published:
+
+```bash
+npm run build && npm pack
+node scripts/smoke-mcp.mjs --tarball "$(pwd)/codecartographer-pi-<version>.tgz"
+```
+
+Also confirm the prompt is present in **both** `content` and `structuredContent`. Clients disagree about which they read (see [`docs/client-surfaces.md`](docs/client-surfaces.md)), and #94 shipped a `codecarto_next` whose `structuredContent` carried `{phase, forced}` and no prompt. Checking both fields is what makes that shape impossible for any client, rather than for the ones you happened to test.
+
 ### Standard release (single version)
 
 For a PR that includes a version bump and changelog entry:
