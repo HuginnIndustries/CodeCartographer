@@ -211,10 +211,25 @@
 <div style="border:1px solid var(--border);border-left:4px solid var(--accent);background:var(--bg-card);padding:1rem 1.25rem;border-radius:6px;margin-bottom:2rem">
   <strong>Status, 2026-09-07.</strong> Preserved as the design record for
   <a href="https://github.com/HuginnIndustries/CodeCartographer/issues/185">issue #185</a>, which tracks the upgrade.
-  Two things have moved since this was written: <code>@modelcontextprotocol/server</code> 2.0.0 is no longer beta — it
-  is <code>latest</code> on npm — and CodeCartographer is at v0.18.0 with 22 MCP tools, not the v0.12.11 and 18 tools
-  counted below. The per-item analysis, the priority ordering and the deprecation audit all still hold; only the
-  counts are stale. No part of this evaluation has been implemented.
+  No part of this evaluation has been implemented. Read it with three corrections, all established by probing
+  SDK v2 2.0.0 directly rather than by reading its release notes — the details are on issue #185.
+  <ul style="margin:0.6rem 0 0 1.1rem;padding:0">
+    <li><strong>The counts are stale.</strong> CodeCartographer is at v0.18.0 with 22 MCP tools, not the v0.12.11
+      and 18 tools counted below, and <code>@modelcontextprotocol/server</code> 2.0.0 is no longer beta — it is
+      <code>latest</code> on npm.</li>
+    <li><strong>Swapping the package does not adopt the new spec.</strong> This document reads as though replacing
+      the dependency and running the codemod lands you on 2026-07-28. It does not: v2's <code>Server</code> still
+      answers <code>initialize</code> and negotiates 2025-11-25 exactly as v1 does, even when
+      <code>supportedProtocolVersions</code> lists 2026-07-28. The new revision is a separate era reached through
+      <code>server/discover</code>, so item 2 of the checklist (the discover handler) is not one task among nine —
+      it is the task the rest depend on.</li>
+    <li><strong><code>@modelcontextprotocol/server-legacy</code> is not a dual-era compatibility layer.</strong>
+      The table below describes it as "backward-compat with v1 initialize era." Its published description is
+      "frozen v1 SSE transport and OAuth Authorization Server helpers… deprecated." It covers SSE and OAuth, neither
+      of which this server uses, so it is not part of this upgrade.</li>
+  </ul>
+  The file-by-file impact map, the priority ordering within the checklist and the deprecation audit — which found
+  that this server uses none of the deprecated features — were all confirmed and still hold.
 </div>
 
 <!-- ─── Executive Summary ─── -->
