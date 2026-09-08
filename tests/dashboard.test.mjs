@@ -8,7 +8,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { renderDashboard, escapeHtml, DASHBOARD_RELATIVE_PATH } = await import(pathToFileURL(`${REPO_ROOT}/core/dashboard.ts`).href);
+const core = await import(pathToFileURL(`${REPO_ROOT}/core/dashboard.ts`).href);
+const { renderDashboard, escapeHtml, DASHBOARD_RELATIVE_PATH } = core;
 
 // ----------------------------------------------------------------------------
 // Helpers — fixture builders
@@ -348,4 +349,32 @@ test("absolute or parent-relative session files are not rendered as unsafe links
 	const html = renderDashboard({ ...emptyInputs(["architecture", "contracts"]), usage });
 	assert.doesNotMatch(html, /href="\/home\/james/);
 	assert.doesNotMatch(html, /href="\.\.\/outside\.html"/);
+});
+
+// ---------------------------------------------------------------
+// safeRelativeHref — pinned after a Broad-Side scan flagged the segment scan
+// as a backslash-traversal bypass. It is not one, because every segment is
+// percent-encoded; these pin the property the scan mistook for a hole, so a
+// later simplification cannot quietly remove it.
+// ---------------------------------------------------------------
+
+test("safeRelativeHref refuses absolute paths, schemes, and dot segments", () => {
+	for (const bad of ["/etc/passwd", "\\\\server\\share", "http://example.com/x", "file:///etc/passwd", "a/../b", "./a", "a//b", ""]) {
+		assert.equal(core.safeRelativeHref(bad), undefined, `${JSON.stringify(bad)} must not produce a href`);
+	}
+});
+
+test("safeRelativeHref keeps an ordinary workspace path readable", () => {
+	assert.equal(core.safeRelativeHref("findings/architecture/architecture-map.md"), "findings/architecture/architecture-map.md");
+});
+
+test("a backslash traversal cannot resolve out of the base directory", () => {
+	// The segment scan splits on "/" only, so this reaches the encoder as one
+	// segment. Encoding is what defuses it: %5C is not a path separator.
+	const href = core.safeRelativeHref("dir\\..\\secret");
+	assert.equal(href, "dir%5C..%5Csecret");
+	assert.equal(new URL(href, "file:///base/").pathname, "/base/dir%5C..%5Csecret");
+	// Contrast: unencoded, the same string does escape the base directory,
+	// which is precisely why the encoding must stay.
+	assert.equal(new URL("dir\\..\\secret", "http://h/base/").pathname, "/base/secret");
 });

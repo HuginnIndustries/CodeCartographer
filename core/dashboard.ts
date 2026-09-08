@@ -737,7 +737,19 @@ function renderSafeLink(path: string, label: string, className?: string): string
 	return `<a${classAttr} href="${escapeAttr(href)}">${escapeHtml(label)}</a>`;
 }
 
-function safeRelativeHref(path: string): string | undefined {
+/**
+ * A dashboard link target, or undefined when the path is not a safe relative
+ * reference. Absolute paths, scheme-bearing URLs and `.`/`..` segments are
+ * refused outright.
+ *
+ * Percent-encoding each segment is load-bearing, not cosmetic: a Windows-style
+ * `dir\..\secret` survives the segment scan, because that scan splits on `/`
+ * — but `encodeURIComponent` turns the separators into `%5C`, which no URL
+ * parser treats as a path separator, so the traversal cannot resolve. Removing
+ * the encoding, or "simplifying" it to a raw join, reopens it. Exported so
+ * that property has a test.
+ */
+export function safeRelativeHref(path: string): string | undefined {
 	if (!path || path.startsWith("/") || path.startsWith("\\") || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(path)) return undefined;
 	const parts = path.split("/");
 	if (parts.some((seg) => !seg || seg === "." || seg === "..")) return undefined;
