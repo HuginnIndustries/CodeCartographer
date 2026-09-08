@@ -24,6 +24,8 @@ const {
 	handleComplete,
 	handleSkill,
 	handleListSkills,
+	handleVision,
+	handleConfig,
 } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { buildPhasePrompt, getNextEligiblePhase, getWorkspaceState } = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
@@ -207,4 +209,48 @@ test("requireWorkspace error: missing .codecarto/", async () => {
 
 test("teardown: cleanup tmp workspace", async () => {
 	if (WORKSPACE) await rm(WORKSPACE, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------
+// Argument validation (from the live Broad-Side self-scan)
+//
+// An MCP server is handed whatever JSON a client sends. These four handlers
+// each trusted an argument that sibling handlers already guard, and the
+// failure modes were not "invalid input rejected" but a bare TypeError, a
+// prompt containing the word "undefined", or config read from the wrong
+// workspace entirely.
+// ---------------------------------------------------------------
+
+test("validate and complete reject a non-string phase instead of throwing TypeError", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "cc-argcheck-"));
+	try {
+		await handleInit({ cwd, pipeline: "lite" });
+		for (const handler of [handleValidate, handleComplete]) {
+			await assert.rejects(
+				() => handler({ cwd, phase: 42 }),
+				(error) => {
+					assert.match(error.message, /phase must be a string/i);
+					assert.ok(!/is not a function/.test(error.message), "must not surface a raw TypeError");
+					return true;
+				},
+			);
+		}
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("vision refuses an absent raw_text rather than prompting on the word undefined", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "cc-argcheck-"));
+	try {
+		await handleInit({ cwd, pipeline: "synthesis" });
+		await assert.rejects(() => handleVision({ cwd }), /raw_text is required/);
+		await assert.rejects(() => handleVision({ cwd, raw_text: "   " }), /raw_text is required/);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("config refuses a relative cwd rather than answering from the server's own directory", async () => {
+	await assert.rejects(() => handleConfig({ cwd: "relative/path" }), /absolute path/i);
 });

@@ -106,6 +106,20 @@ import { writeDashboard } from "../extensions/codecarto/dashboard-writer.ts";
 
 // ---------- input helpers ----------
 
+/**
+ * Normalize an optional `phase` argument. A client can send any JSON, and
+ * `args.phase?.trim()` throws a bare TypeError on a number or an object —
+ * surfacing as an opaque InternalError rather than telling the caller which
+ * argument was wrong. Sibling handlers already guard the required case.
+ */
+function requireOptionalPhase(phase: unknown): string | undefined {
+	if (phase === undefined || phase === null) return undefined;
+	if (typeof phase !== "string") {
+		throw new McpError(ErrorCode.InvalidParams, `phase must be a string when provided, got ${typeof phase}`);
+	}
+	return phase.trim() || undefined;
+}
+
 async function validateCwd(cwd: unknown): Promise<string> {
 	if (typeof cwd !== "string" || !cwd.trim()) {
 		throw new McpError(ErrorCode.InvalidParams, "cwd is required");
@@ -356,7 +370,7 @@ export async function handlePhase(args: { cwd: string; phase: string }) {
 export async function handleValidate(args: { cwd: string; phase?: string }) {
 	const cwd = await validateCwd(args.cwd);
 	const state = await requireWorkspace(cwd);
-	const validation = await validatePhaseOutput(state, args.phase?.trim() || undefined).catch((error) => {
+	const validation = await validatePhaseOutput(state, requireOptionalPhase(args.phase)).catch((error) => {
 		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
 	const summary = buildValidationSummary(validation).join("\n");
@@ -376,7 +390,7 @@ export async function handleValidate(args: { cwd: string; phase?: string }) {
 export async function handleComplete(args: { cwd: string; phase?: string }) {
 	const cwd = await validateCwd(args.cwd);
 	const initialState = await requireWorkspace(cwd);
-	const validation = await validatePhaseOutput(initialState, args.phase?.trim() || undefined).catch((error) => {
+	const validation = await validatePhaseOutput(initialState, requireOptionalPhase(args.phase)).catch((error) => {
 		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
 	if (validation.overall === "FAIL" || validation.overall === "MISSING") {
@@ -513,9 +527,16 @@ async function resolveLibraryPath(args: { library_path?: unknown; cwd?: unknown 
  * the publish tool enforces.
  */
 async function loadEffectiveConfig(cwd: unknown): Promise<CodecartoConfig> {
-	return typeof cwd === "string" && cwd.trim() !== ""
-		? loadCodecartoConfig(join(cwd.trim(), ".codecarto"))
-		: loadUserConfig();
+	if (typeof cwd !== "string" || cwd.trim() === "") return loadUserConfig();
+	// A relative path here resolves against the server process's working
+	// directory, not the caller's, so it would quietly read some other
+	// workspace's config — and this config decides whether publish_confirm
+	// gates the write. Refuse rather than answer from the wrong file.
+	const trimmed = cwd.trim();
+	if (!isAbsolute(trimmed)) {
+		throw new McpError(ErrorCode.InvalidParams, `cwd must be an absolute path, got: ${trimmed}`);
+	}
+	return loadCodecartoConfig(join(trimmed, ".codecarto"));
 }
 
 function asStringArray(value: unknown, fieldName: string): string[] {
@@ -932,6 +953,13 @@ export async function handleLibraryInit(args: { library_path: string; name?: str
 
 export async function handleVision(args: { cwd: string; raw_text: string }) {
 	const cwd = await validateCwd(args.cwd);
+	// raw_text is interpolated straight into the returned prompt, so an absent
+	// value silently becomes the literal string "undefined" for the agent to
+	// synthesize a vision brief from. Every sibling handler validates its
+	// required string argument; this one did not.
+	if (typeof args.raw_text !== "string" || !args.raw_text.trim()) {
+		throw new McpError(ErrorCode.InvalidParams, "raw_text is required (the user's raw product description)");
+	}
 	const workspaceDir = join(cwd, ".codecarto");
 	const interviewPath = join(workspaceDir, "findings", "vision-capture", "INTERVIEW.md");
 	const visionPath = join(workspaceDir, "inputs", "vision.md");
@@ -962,8 +990,8 @@ export async function handleVision(args: { cwd: string; raw_text: string }) {
 }
 
 export async function handleConfig(args: { cwd?: string }) {
-	const config = args.cwd
-		? await loadCodecartoConfig(join(args.cwd, ".codecarto"))
+	const config = args.cwd !== undefined && args.cwd !== null
+		? await loadCodecartoConfig(join(await validateCwd(args.cwd), ".codecarto"))
 		: await loadUserConfig();
 
 	const userConfigPath = resolveUserConfigPath();
