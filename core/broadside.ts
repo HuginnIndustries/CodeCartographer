@@ -1494,18 +1494,40 @@ export function buildBatchRequest(
 	};
 }
 
+/**
+ * Pre-flight cost estimate for one lens.
+ *
+ * Every slice is its own batch request, so both halves scale with the slice
+ * count. The output half used to be a single `maxTokens * 0.75` for the whole
+ * lens no matter how many requests it sent — on a repository that sliced into
+ * 13 modules that budgeted one request's output and shipped thirteen, and a
+ * live run came in at roughly 3x its estimate. Since this number is what
+ * `max_cost` binds against, under-counting it lets a run outspend the cap the
+ * user set.
+ *
+ * @param info - Repo info, when the caller has it: lets the estimate include
+ *   the system prompt and JSON schema each request carries. Omitted, the
+ *   estimate covers slice content only, which is what the old signature did.
+ */
 export function estimateCost(
 	lens: LensDefinition,
 	slices: FileSlice[],
 	pricing: ModelPricing,
 	maxTokensOverride?: number,
+	info?: RepoInfo,
 ): {
 	inputTokens: number;
 	outputTokens: number;
 	cost: number;
 } {
-	const inputTokens = Math.ceil(slices.reduce((sum, s) => sum + (lens.maxChars === 0 ? 6000 : s.chars), 0) / 4);
-	const outputTokens = Math.ceil((maxTokensOverride ?? lens.maxTokens) * 0.75);
+	const sliceChars = slices.reduce((sum, s) => sum + (lens.maxChars === 0 ? 6000 : s.chars), 0);
+	// The system prompt and the response schema ride on every request, so they
+	// are paid once per slice rather than once per lens.
+	const perRequestOverhead = info
+		? (lens.systemPrompt(info)?.length ?? 0) + JSON.stringify(SCHEMAS[lens.schemaName] ?? {}).length
+		: 0;
+	const inputTokens = Math.ceil((sliceChars + perRequestOverhead * slices.length) / 4);
+	const outputTokens = slices.length * Math.ceil((maxTokensOverride ?? lens.maxTokens) * 0.75);
 	const cost =
 		(inputTokens / 1_000_000) * pricing.inputPerM +
 		(outputTokens / 1_000_000) * pricing.outputPerM;
@@ -2073,7 +2095,7 @@ export async function runBroadsideSubmit(
 		const lensModel = modelForLens(lensId);
 		const { pricing: lensPricing, outputCap: lensOutputCap } = resolved.get(lensModel)!;
 		const maxTokens = lensOutputCap ? Math.min(lens.maxTokens, lensOutputCap) : lens.maxTokens;
-		const estimate = estimateCost(lens, slices, lensPricing, maxTokens);
+		const estimate = estimateCost(lens, slices, lensPricing, maxTokens, info);
 		estimatedInputTokens += estimate.inputTokens;
 		estimatedOutputTokens += estimate.outputTokens;
 		estimatedTotalCost += estimate.cost;
