@@ -126,6 +126,19 @@ export function parseSimpleYaml(raw: string): unknown {
 
 	const parseMapping = (indent: number): Record<string, unknown> => {
 		const result: Record<string, unknown> = {};
+		// Duplicate detection tracks keys explicitly rather than testing
+		// `key in result`. A bare object inherits from Object.prototype, so
+		// `"constructor" in result` is already true before anything is parsed —
+		// a document whose key is `constructor`, `toString`, `valueOf` or any
+		// other prototype member was rejected as a duplicate on first sight.
+		const seen = new Set<string>();
+		// Assignment goes through defineProperty for the same reason: plain
+		// `result[key] = value` with the key `__proto__` invokes the prototype
+		// setter instead of creating an entry, so a hand-edited YAML file could
+		// change the shape of every object in the process rather than parse.
+		const assign = (key: string, value: unknown): void => {
+			Object.defineProperty(result, key, { value, writable: true, enumerable: true, configurable: true });
+		};
 
 		while (index < lines.length) {
 			skipBlank();
@@ -148,9 +161,10 @@ export function parseSimpleYaml(raw: string): unknown {
 			const key = trimmed.slice(0, separator).trim();
 			const rawValue = trimmed.slice(separator + 1).trim();
 			index++;
-			if (key in result) {
+			if (seen.has(key)) {
 				throw new Error(`Duplicate YAML key: ${key} near line: ${line.trim()}`);
 			}
+			seen.add(key);
 
 			if (rawValue === "|" || rawValue === "|-") {
 				const blockLines: string[] = [];
@@ -169,20 +183,20 @@ export function parseSimpleYaml(raw: string): unknown {
 					index++;
 				}
 				const content = blockLines.join("\n").replace(/\n+$/, "");
-				result[key] = rawValue === "|" ? `${content}\n` : content;
+				assign(key, rawValue === "|" ? `${content}\n` : content);
 				continue;
 			}
 
 			if (rawValue !== "") {
-				result[key] = parseYamlScalar(rawValue);
+				assign(key, parseYamlScalar(rawValue));
 				continue;
 			}
 
 			skipBlank();
 			if (index < lines.length && countIndent(lines[index] ?? "") > indent) {
-				result[key] = parseBlock(countIndent(lines[index] ?? ""));
+				assign(key, parseBlock(countIndent(lines[index] ?? "")));
 			} else {
-				result[key] = null;
+				assign(key, null);
 			}
 		}
 
@@ -201,7 +215,13 @@ export function parseSimpleYaml(raw: string): unknown {
 			const trimmed = line.slice(lineIndent);
 			if (lineIndent !== indent || (!trimmed.startsWith("- ") && trimmed !== "-")) break;
 
-			const rawItem = trimmed === "-" ? "" : trimmed.slice(2).trim();
+			const afterDash = trimmed === "-" ? "" : trimmed.slice(2);
+			const rawItem = afterDash.trim();
+			// A sequence item's mapping continues at the column where its own
+			// content starts, which is not always two past the dash: `-   id: x`
+			// aligns its siblings under the `i`, four columns in. Hardcoding two
+			// rejected that valid layout as bad indentation.
+			const itemIndent = indent + 2 + (afterDash.length - afterDash.trimStart().length);
 			index++;
 
 			if (rawItem === "") {
@@ -226,7 +246,7 @@ export function parseSimpleYaml(raw: string): unknown {
 					item[key] = parseBlock(countIndent(lines[index] ?? ""));
 				}
 				if (index < lines.length && countIndent(lines[index] ?? "") > indent) {
-					const nested = parseMapping(indent + 2);
+					const nested = parseMapping(itemIndent);
 					for (const [nestedKey, nestedValue] of Object.entries(nested)) item[nestedKey] = nestedValue;
 				}
 				result.push(item);
