@@ -2681,7 +2681,11 @@ export async function runBroadsideCollect(
 				const { batchId, error } = await submitBatch([bumped], apiKey, opts.fetcher, lensModel);
 				if (error) continue;
 				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
-					deadlineMs: BROADSIDE_DEFAULT_POLL_BUDGET_MS,
+					// Share the caller's deadline. Each of these polls used to
+					// start a fresh 25-minute budget, so `wait_seconds` bounded
+					// only the lens poll and a collect could run for the caller's
+					// budget plus fifty minutes.
+					deadlineMs: Math.max(0, deadline - Date.now()),
 					onStatus: (status, counts) => opts.onStatus?.(`${stored.lensId}:retry`, status, counts),
 					fetcher: opts.fetcher,
 				});
@@ -2814,7 +2818,10 @@ export async function runBroadsideCollect(
 
 			for (const { batchId, pass } of submitted.values()) {
 				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
-					deadlineMs: BROADSIDE_DEFAULT_POLL_BUDGET_MS,
+					// Shares the caller's deadline, as the retry poll above does.
+					// A pass whose poll runs out stays `submitted`, so the batch
+					// is already paid for and a later collect claims its result.
+					deadlineMs: Math.max(0, deadline - Date.now()),
 					onStatus: (status, counts) => opts.onStatus?.(pass.kind, status, counts),
 					fetcher: opts.fetcher,
 				});

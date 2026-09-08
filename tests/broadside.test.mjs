@@ -1877,3 +1877,58 @@ test("the submit header counts batches sent, not lenses considered", async () =>
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+test("wait_seconds bounds the whole collect, not just the lens poll", async () => {
+	// The truncation-retry and post-pass polls each started a fresh 25-minute
+	// budget, so `wait_seconds` bounded only the first of three phases: a
+	// collect could block for the caller's budget plus fifty minutes. Counting
+	// polls rather than measuring elapsed time keeps this test fast and lets it
+	// fail cleanly — an earlier version of it hung the suite for 25 minutes when
+	// the bug was present, because Promise.race does not cancel the loser.
+	const dir = await makeFixture();
+	try {
+		const finding = JSON.stringify({ module: "root", findings: [], patterns_checked: [], files_scanned: 1 });
+		let postPassPolls = 0;
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				const payload = JSON.parse(init.body);
+				const isPostPass = payload.requests.some((r) =>
+					String(r.custom_id).startsWith("synthesis") || String(r.custom_id).startsWith("triage"),
+				);
+				return fakeResponse(202, { id: isPostPass ? "batch-postpass" : "batch-lens", status: "validating" });
+			}
+			if (String(url).includes("batch-postpass")) {
+				postPassPolls += 1;
+				// Terminal on the second poll, so a collect that ignores the
+				// deadline still finishes and fails on the assertion below
+				// rather than hanging the suite.
+				return fakeResponse(200, { id: "batch-postpass", status: postPassPolls >= 2 ? "completed" : "in_progress", results: [], usage: { cost: 0 } });
+			}
+			return fakeResponse(200, {
+				id: "batch-lens",
+				status: "completed",
+				results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: finding } }] } }, error: null }],
+				usage: { cost: 0.001 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, waitMs: 0, includeTriage: false });
+
+		assert.equal(collect.lensOutcomes.architecture.status, "completed", "the lens itself still completed");
+		assert.equal(
+			postPassPolls,
+			1,
+			"with no budget left the post-pass must be polled once and abandoned, not retried on a fresh 25-minute deadline",
+		);
+
+		const run = (await loadBroadsideState(join(dir, ".codecarto", "broadside"))).runs.at(-1);
+		assert.equal(
+			run.synthesis.status,
+			"submitted",
+			"a pass whose poll ran out stays claimable: the batch is paid for and a later collect must be able to claim it",
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
