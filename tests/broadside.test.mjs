@@ -481,10 +481,37 @@ test("resolveModelPricing falls back to built-in for the default model without n
 		};
 		const pricing = await resolveModelPricing(dir, config, BROADSIDE_MODEL, "sk-fake", fetcher);
 		assert.equal(pricing.source, "built-in");
-		assert.equal(pricing.inputPerM, 0.1875);
+		assert.equal(pricing.inputPerM, 0.375, "the fallback must carry OpenRouter's listed batch rate, not a second discount");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+});
+
+test("the live catalog outranks the built-in rate for the default model", async () => {
+	// The built-in constants used to short-circuit the lookup, so a stale rate
+	// could never self-correct even though the catalog was already fetched for
+	// every other model — and a stale rate on the default model is the one that
+	// silently halves every estimate and doubles what max_cost really allows.
+	const dir = await mkdtemp(join(tmpdir(), "broadside-pricing-"));
+	try {
+		const config = { model: BROADSIDE_MODEL, apiKey: "", defaultLenses: ["architecture"], maxCost: 0, pricing: null };
+		const fetcher = async () =>
+			fakeResponse(200, modelsCatalog([{ id: BROADSIDE_MODEL, pricing: { prompt: "0.000001", completion: "0.00001" } }]));
+		const pricing = await resolveModelPricing(dir, config, BROADSIDE_MODEL, "sk-fake", fetcher);
+		assert.equal(pricing.source, "live", "the catalog is authoritative, not the compile-time constant");
+		assert.equal(pricing.inputPerM, 1);
+		assert.equal(pricing.outputPerM, 10);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("the built-in fallback carries OpenRouter's listed batch rate", () => {
+	// Guards the specific mistake this replaced: the `:batch` variant's listed
+	// price already includes the batch discount, so halving it again is wrong.
+	// If OpenRouter's listing moves, update these to match the listing — do not
+	// derive them from the sync price.
+	assert.deepEqual(core.builtInPricing(BROADSIDE_MODEL), { inputPerM: 0.375, outputPerM: 1.875, source: "built-in" });
 });
 
 test("resolveModelPricing looks up unknown models live and caches the result", async () => {

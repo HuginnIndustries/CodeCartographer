@@ -68,8 +68,8 @@
 # lookup fails (offline, private model) or you want to assert a ceiling.
 #
 # pricing:
-#   input_per_m: 0.1875
-#   output_per_m: 0.9375
+#   input_per_m: 0.375
+#   output_per_m: 1.875
 # ---------------------------------------------------------------------------
 # Run defaults. Each key below mirrors a codecarto_broadside parameter of the
 # same name and sets this repository's default for it; an explicit parameter on
