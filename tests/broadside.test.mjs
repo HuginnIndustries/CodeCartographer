@@ -1282,6 +1282,88 @@ test("runBroadsideSubmit records a run and fires one batch per lens", async () =
 
 // ---------- collect with fake fetcher ----------
 
+test("loadSavedLensResults rebuilds results a previous collect wrote", async () => {
+	const runDir = await mkdtemp(join(tmpdir(), "broadside-restore-"));
+	try {
+		await writeFile(join(runDir, "defect-core-1.json"), JSON.stringify({ module: "core", findings: [] }), "utf8");
+		await writeFile(join(runDir, "architecture-root.json"), JSON.stringify({ summary: "x" }), "utf8");
+		await writeFile(join(runDir, "conventions-core-2.json"), "{ truncated output with no closing", "utf8");
+		// None of these are lens findings and none may be mistaken for them.
+		await writeFile(join(runDir, "requests.json"), "{}", "utf8");
+		await writeFile(join(runDir, "run-meta.json"), "{}", "utf8");
+		await writeFile(join(runDir, "synthesis.json"), "{}", "utf8");
+		await writeFile(join(runDir, "defect-core-9.error.json"), "{}", "utf8");
+		await writeFile(join(runDir, "defect-core-1.md"), "# rendered", "utf8");
+
+		const restored = await core.loadSavedLensResults(runDir, ["architecture", "defect", "conventions"]);
+		assert.deepEqual(restored.map((r) => r.customId).sort(), ["architecture-root", "conventions-core-2", "defect-core-1"]);
+		assert.deepEqual([...new Set(restored.map((r) => r.lensId))].sort(), ["architecture", "conventions", "defect"]);
+		assert.equal(restored.find((r) => r.customId === "conventions-core-2").truncated, true, "unparseable content is still a truncation");
+		assert.equal(restored.find((r) => r.customId === "defect-core-1").truncated, false);
+	} finally {
+		await rm(runDir, { recursive: true, force: true });
+	}
+});
+
+test("a resumed collect runs the post-passes an interrupted one never reached", async () => {
+	// The batch window is long and a collect polls for minutes, so losing the
+	// process after the lens results are saved but before synthesis and triage
+	// is an ordinary outcome. Every lens is terminal on the next run, so
+	// nothing is polled — and the post-passes used to be gated on what *this*
+	// invocation polled, which left the run permanently without the executive
+	// report and work order it exists to produce.
+	const dir = await mkdtemp(join(tmpdir(), "broadside-resume-"));
+	try {
+		const broadsideDir = join(dir, ".codecarto", "broadside");
+		const runId = "2026-01-01T00-00-00-000Z";
+		const runDir = join(broadsideDir, runId);
+		await mkdir(runDir, { recursive: true });
+		await writeFile(join(runDir, "defect-core-1.json"), JSON.stringify({ module: "core", findings: [{ title: "x" }] }), "utf8");
+
+		await writeFile(join(broadsideDir, "state.json"), JSON.stringify({
+			schema_version: 1,
+			runs: [{
+				id: runId,
+				outputDir: runId,   // stored relative to broadside/, as submit records it
+				model: BROADSIDE_MODEL,
+				lenses: ["defect"],
+				status: "in-flight",
+				batches: { defect: { batchId: "batch-done", requests: 1, status: "completed", submittedAt: runId, estimatedCost: 0.01, resultCount: 1 } },
+				synthesis: { status: "pending" },
+				triage: { status: "pending" },
+			}],
+		}), "utf8");
+
+		const posted = [];
+		const done = (id, content) => ({
+			id,
+			status: "completed",
+			results: [{ custom_id: id.replace("batch-", ""), response: { status_code: 200, body: { choices: [{ message: { content } }] } }, error: null }],
+			usage: { cost: 0.001 },
+		});
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				const customId = JSON.parse(init.body).requests[0].custom_id;
+				posted.push(customId);
+				return fakeResponse(202, { id: `batch-${customId}`, status: "validating" });
+			}
+			// The post-pass poll runs on its own budget, so a fake that never
+			// reaches a terminal status would hang the suite rather than fail it.
+			const id = String(url).split("/").pop();
+			return fakeResponse(200, done(id, JSON.stringify({ summary: "s", themes: [], top_findings: [], items: [] })));
+		};
+
+		await runBroadsideCollect(dir, "sk-fake", { fetcher, waitMs: 0 });
+		assert.ok(posted.length >= 1, "the resumed collect must submit the pending post-passes, not report completion");
+		const state = await loadBroadsideState(broadsideDir);
+		const run = state.runs.at(-1);
+		assert.notEqual(run.synthesis.status, "pending", "synthesis must leave the pending state on resume");
+		assert.notEqual(run.triage.status, "pending", "triage must leave the pending state on resume");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 test("runBroadsideCollect polls, saves results, and runs synthesis + triage", async () => {
 	const dir = await makeFixture();
 	try {

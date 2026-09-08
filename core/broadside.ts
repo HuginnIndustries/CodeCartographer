@@ -2328,6 +2328,43 @@ export async function saveLensResults(
 	return out;
 }
 
+/**
+ * Rebuild lens results from what a previous collect already wrote to disk.
+ *
+ * The post-passes are gated on having lens findings in hand, and a collect
+ * only holds the ones *it* polled. When an earlier collect saved every lens
+ * and then died before synthesis and triage ran — the batch window is long
+ * and a poll can easily be interrupted — the next collect finds every lens
+ * already terminal, skips them all, and would otherwise reach the post-pass
+ * gate with nothing to hand it. Reading the saved results back is what makes
+ * "a resumed collect can finish whichever is still pending" true.
+ */
+export async function loadSavedLensResults(runDir: string, lenses: BroadsideLensId[]): Promise<StoredLensResult[]> {
+	if (!(await pathExists(runDir))) return [];
+	const reserved = new Set(["requests.json", "run-meta.json", "synthesis.json", "triage.json"]);
+	const out: StoredLensResult[] = [];
+	// Longest lens id first: no id is a prefix of another today, but ordering
+	// keeps that from becoming a silent misattribution if one ever is.
+	const ordered = [...lenses].sort((a, b) => b.length - a.length);
+	for (const name of (await readdir(runDir)).sort()) {
+		if (!name.endsWith(".json") || name.endsWith(".error.json") || reserved.has(name) || name.startsWith("raw-")) continue;
+		const customId = name.slice(0, -".json".length);
+		const lensId = ordered.find((id) => customId === id || customId.startsWith(`${id}-`));
+		if (!lensId) continue;
+		const content = await readFile(join(runDir, name), "utf8").catch(() => null);
+		if (content === null) continue;
+		out.push({
+			lensId,
+			customId,
+			moduleName: customId.replace(/^[a-z]+-/, ""),
+			content,
+			raw: {},
+			truncated: parseLensJson(content) === null,
+		});
+	}
+	return out;
+}
+
 async function loadStoredRequests(runDir: string): Promise<Record<string, BatchRequest>> {
 	const path = join(runDir, "requests.json");
 	if (!(await pathExists(path))) return {};
@@ -2587,6 +2624,18 @@ export async function runBroadsideCollect(
 	let topTriageItems: BroadsideCollectResult["topTriageItems"] = [];
 	const wantSynthesis = opts.includeSynthesis !== false;
 	const wantTriage = opts.includeTriage !== false;
+	// A resumed collect polls nothing — every lens is already terminal — so the
+	// findings the post-passes need have to come back off disk, or a run whose
+	// first collect was interrupted could never produce its executive report
+	// and work order, however many times it was re-run.
+	if ((wantSynthesis || wantTriage) && allLensResults.length === 0
+		&& (run.synthesis.status === "pending" || run.triage.status === "pending")) {
+		const restored = await loadSavedLensResults(runDir, run.lenses);
+		if (restored.length > 0) {
+			allLensResults.push(...restored);
+			truncatedCount = restored.filter((s) => s.truncated).length;
+		}
+	}
 	if ((wantSynthesis || wantTriage) && allLensResults.length > 0) {
 		const allTerminal = run.lenses.every((lensId) => {
 			const entry = run.batches[lensId];
