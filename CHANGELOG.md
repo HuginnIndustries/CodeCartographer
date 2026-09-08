@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-09-08
+
+### Changed
+
+Two items in this release are not purely internal, and are called out here because a patch version would not otherwise lead anyone to look for them.
+
+- **`wait_seconds` now bounds a whole collect rather than its first polling phase.** Previously the truncation-retry and post-pass polls each opened a fresh 25-minute budget, so a collect could run for the caller's budget plus fifty minutes. Callers who had tuned a large `wait_seconds` around the old behavior will find collects returning sooner, with any unfinished post-pass left claimable by a later collect rather than waited out in the same call.
+- **`BroadsideSubmitResult` carries a new `incremental` field**, `BroadsideCatalogResult.entry` is no longer nullable, and `autoCompletePhase` takes a `cwd` string rather than an extension ctx. All three are additive or narrowing for anyone reading these types; only code that *constructs* or *calls* them is affected.
+
 ### Fixed
 
 - **`/codecarto-next` crashed the Pi process instead of running the phase.** A phase runs as an isolated sub-agent, which replaces the session and invalidates the ctx the command captured. Pi then throws on *every* property access on that ctx — `ctx.cwd` and `ctx.hasUI` included — so the ordinary `if (ctx.hasUI) ctx.ui.notify(...)` guard was itself a throw site, and `readWorkspaceState` rejected instead of returning `null` as its signature promises because it read `ctx.cwd` before its own `try`. The post-phase work fires without being awaited, so each of those throws became an unhandled promise rejection. Worst of all, the chain's `.catch` handler threw while reporting the original failure, and that second rejection had nothing left to catch it. A real `/codecarto-next` run took the process down and left every phase `pending` with no report written. Post-phase work now captures the directory up front rather than reading it off a ctx that may be gone, routes UI updates through a helper that drops them when the session has ended, and `autoCompletePhase` takes a `cwd` instead of a ctx — it only ever used `ctx.cwd`. Found by the surface verification the release process requires, which is exactly the class of failure that step exists to catch: every gate was green and the recommended surface was broken. Present since at least 0.19.0 and not a regression from anything else in this release.
