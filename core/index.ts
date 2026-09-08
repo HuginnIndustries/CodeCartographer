@@ -9,6 +9,7 @@ export * from "./status.ts";
 export * from "./amendment.ts";
 export * from "./pipeline.ts";
 export * from "./findings.ts";
+export * from "./coverage.ts";
 export * from "./prompts.ts";
 export * from "./workspace.ts";
 export * from "./completion.ts";

@@ -5,6 +5,7 @@ import { open, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type {
 	CarryForwardEntry,
+	ClosureEntry,
 	NormalizedStatus,
 	OpenQuestionEntry,
 	PostPipelineEntry,
@@ -46,7 +47,37 @@ function coerceEntry(value: unknown, allowTargetPhase: boolean): OpenQuestionEnt
 	if (typeof raw.description === "string" && raw.description.trim()) entry.description = raw.description.trim();
 	if (typeof raw.deferred_reason === "string" && raw.deferred_reason.trim()) entry.deferred_reason = raw.deferred_reason.trim();
 	if (allowTargetPhase && typeof raw.target_phase === "string" && raw.target_phase.trim()) entry.target_phase = raw.target_phase.trim();
+	// derives_from rides the same flag as target_phase: it is a carry-forward
+	// concept only — the id of the open question this routed item answers one
+	// candidate of (#122, #186). An open_questions entry has nothing to derive
+	// from, so the field is dropped there rather than silently carried.
+	if (allowTargetPhase && typeof raw.derives_from === "string" && raw.derives_from.trim()) entry.derives_from = raw.derives_from.trim();
 	return Object.keys(entry).length > 0 ? entry : null;
+}
+
+/**
+ * Normalize a handoff's `open_question_closures` (#122, #186). Accepts both
+ * the original bare-string shape and `{ id, evidence }`; a string becomes
+ * `{ id }`, and an entry with no usable id is dropped rather than resolving
+ * nothing under the lock. Values are trimmed.
+ */
+export function ensureClosureArray(value: unknown): ClosureEntry[] {
+	if (!Array.isArray(value)) return [];
+	const result: ClosureEntry[] = [];
+	for (const item of value) {
+		if (typeof item === "string") {
+			const id = item.trim();
+			if (id) result.push({ id });
+			continue;
+		}
+		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+		const raw = item as Record<string, unknown>;
+		const id = typeof raw.id === "string" ? raw.id.trim() : "";
+		if (!id) continue;
+		const evidence = typeof raw.evidence === "string" && raw.evidence.trim() ? raw.evidence.trim() : undefined;
+		result.push({ id, ...(evidence !== undefined && { evidence }) });
+	}
+	return result;
 }
 
 export function ensureEntryArray<T extends OpenQuestionEntry>(value: unknown, allowTargetPhase: boolean = false): T[] {
@@ -235,7 +266,7 @@ export function parseHandoff(value: unknown): PhaseHandoff {
 		open_questions: openQuestions,
 		carry_forward: carryForward,
 		carry_forward_closures: ensureArray(raw.carry_forward_closures),
-		open_question_closures: ensureArray(raw.open_question_closures),
+		open_question_closures: ensureClosureArray(raw.open_question_closures),
 		post_pipeline: ensurePostPipelineArray(raw.post_pipeline),
 		decisions: ensureArray(raw.decisions),
 		proposed_conventions: ensureProposedConventionArray(raw.proposed_conventions),
@@ -347,7 +378,8 @@ export function applyHandoff(status: NormalizedStatus, handoff: PhaseHandoff): N
 	}
 
 	// Apply open_question_closures: remove resolved questions from ALL phases by id
-	for (const closureId of handoff.open_question_closures) {
+	for (const closure of handoff.open_question_closures) {
+		const closureId = closure?.id;
 		if (!closureId) continue;
 		for (const ph of Object.values(status.phases)) {
 			ph.open_questions = ph.open_questions.filter((entry) => entry.id !== closureId);

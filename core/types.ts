@@ -23,6 +23,16 @@ export type OpenQuestionEntry = {
 
 export type CarryForwardEntry = OpenQuestionEntry & {
 	target_phase?: string;
+	/**
+	 * Optional id of the `open_questions` entry this routed item is one
+	 * candidate answer to (#122, #186). The upstream phase usually registers
+	 * the question and routes the candidate onward in the same handoff, which
+	 * is the cheapest moment to record the link. Completion refuses a closure
+	 * of this entry while that question is still open and is not closed by the
+	 * same handoff: closing a routed item does not settle the question it came
+	 * from. Omitted on every entry that predates the field.
+	 */
+	derives_from?: string;
 };
 
 export type PostPipelineEntry = OpenQuestionEntry & {
@@ -131,6 +141,19 @@ export type ProposedConventionEntry = {
 	evidence?: string;
 };
 
+/**
+ * One claimed closure in a handoff's `open_question_closures` (#122, #186).
+ * A bare string — the only shape before this field grew — normalizes to
+ * `{ id }`; the object form adds the evidence that settles the question.
+ * Completion requires non-empty `evidence` when the closed question's `kind`
+ * is `needs-runtime-test`, because such a question closes on runtime evidence
+ * rather than on another source read.
+ */
+export type ClosureEntry = {
+	id: string;
+	evidence?: string;
+};
+
 export type PhaseHandoff = {
 	phase_id: string;
 	/**
@@ -143,7 +166,8 @@ export type PhaseHandoff = {
 	open_questions: OpenQuestionEntry[];
 	carry_forward: CarryForwardEntry[];
 	carry_forward_closures: string[]; // ids to remove from earlier phases
-	open_question_closures: string[]; // ids to resolve and remove from all phases
+	/** ids to resolve and remove from all phases; a bare string parses to `{ id }`. */
+	open_question_closures: ClosureEntry[];
 	post_pipeline: PostPipelineEntry[];
 	decisions: string[];
 	/** Conventions proposed for promotion; completion stages them in CONVENTIONS.md. Omitted defaults to empty. */

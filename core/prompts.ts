@@ -11,6 +11,7 @@ import type {
 	WorkspaceState,
 } from "./types.ts";
 import { pathExists } from "./utils.ts";
+import { collectCoverageGaps } from "./coverage.ts";
 import { countPendingProposals } from "./completion.ts";
 import { describeScaffoldStaleness } from "./workspace.ts";
 import { runPhasePreflight, type PhasePreflightResult } from "./synthesis.ts";
@@ -18,7 +19,11 @@ import { runPhasePreflight, type PhasePreflightResult } from "./synthesis.ts";
 /** Open-question kinds whose label the orchestrator re-tests at each phase boundary. */
 const RETRIAGE_KINDS = new Set(["needs-maintainer-decision", "needs-runtime-test"]);
 
-/** Cap on individually listed re-triage questions; the rest collapse to a count. */
+/**
+ * Cap on the individually listed entries of a mechanically surfaced duty list
+ * — re-triage questions and upstream coverage gaps alike; the rest collapse to
+ * a count naming where the full list lives.
+ */
 const RETRIAGE_LIST_LIMIT = 10;
 
 /**
@@ -60,6 +65,18 @@ async function buildOrchestratorDuties(
 			const exists = await pathExists(join(state.workspaceDir, output.path));
 			lines.push(`  - .codecarto/${output.path} (${exists ? "exists" : "missing"})`);
 		}
+	}
+
+	// The coverage-gap ledger (#122, #186). The contradiction sweep below
+	// compares against `owner_notes` only, and a declared blind spot is not an
+	// owner note — so a phase could assert an observed fact about a component
+	// the upstream phase had recorded as not decoded, and nothing compared the
+	// two. Non-gating: this is a duty in the prompt, not a validation rule.
+	const coverageGaps = await collectCoverageGaps(state);
+	if (coverageGaps.length > 0) {
+		lines.push("- Upstream phases declared these coverage gaps in their `## Coverage and limits` sections. A finding of yours that lands inside one must either close the gap with cited new evidence of its own or inherit its uncertainty — an upstream `not inspected` or `not decoded` does not license an `observed fact` about that scope:");
+		for (const gap of coverageGaps.slice(0, RETRIAGE_LIST_LIMIT)) lines.push(`  - ${gap.phaseId} (${gap.label}): ${gap.detail}`);
+		if (coverageGaps.length > RETRIAGE_LIST_LIMIT) lines.push(`  - (+${coverageGaps.length - RETRIAGE_LIST_LIMIT} more in completed phases' Coverage and limits sections)`);
 	}
 
 	const anyCompleted = Object.values(state.status.phases).some((phaseState) => phaseState.status === "complete");
