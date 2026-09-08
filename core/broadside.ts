@@ -35,7 +35,7 @@
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { pathExists, sleep } from "./utils.ts";
 import { acquireLock } from "./status.ts";
 import { loadYamlFile } from "./yaml.ts";
@@ -184,6 +184,8 @@ export type BroadsideSynthesisEntry = {
 	batchId?: string;
 	status: "pending" | "submitted" | "completed" | "failed";
 	cost?: number;
+	/** Why the pass was retired, when the batch reported one. */
+	error?: string;
 };
 
 /** One triage item — a scouting lead turned into a work-order entry. */
@@ -1180,7 +1182,10 @@ async function walkFiles(
 			const children = await walkFiles(rootDir, join(dir, entry.name), depth + 1, remaining - out.length);
 			out = out.concat(children);
 		} else if (entry.isFile()) {
-			const rel = join(dir, entry.name).slice(rootDir.length + 1).split("\\").join("/");
+			// relative() rather than slice(rootDir.length + 1): the hand-rolled
+			// slice cut one character too many whenever rootDir carried a trailing
+			// separator, and mangled every path outright when rootDir was "/".
+			const rel = relative(rootDir, join(dir, entry.name)).split("\\").join("/");
 			out.push(rel);
 		}
 	}
@@ -1982,6 +1987,15 @@ export async function fetchBatch(
 	return data;
 }
 
+/**
+ * Batch statuses that will never produce a result.
+ *
+ * Deliberately excludes the synthetic `timeout` this module returns when a poll
+ * budget expires: that batch is still running server-side and has already been
+ * charged, so callers must come back for it rather than retire it.
+ */
+export const BROADSIDE_DEAD_BATCH_STATUSES: string[] = ["failed", "expired", "cancelled", "auth-failed"];
+
 export async function pollBatchUntilTerminal(
 	batchId: string,
 	apiKey: string,
@@ -2011,7 +2025,7 @@ export async function pollBatchUntilTerminal(
 		const status = String(batch.status ?? "unknown");
 		const counts = (batch.request_counts ?? {}) as Record<string, unknown>;
 		opts.onStatus?.(status, counts);
-		if (["completed", "failed", "expired", "cancelled", "auth-failed"].includes(status)) return batch;
+		if (status === "completed" || BROADSIDE_DEAD_BATCH_STATUSES.includes(status)) return batch;
 		if (Date.now() >= deadline) return { id: batchId, status: "timeout" };
 		await sleep(intervalMs);
 	}
@@ -2619,8 +2633,15 @@ export async function runBroadsideCollect(
 				"utf8",
 			);
 			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount, truncated };
-		} else if (batch.error) {
-			entry.error = batch.error;
+		} else {
+			// Every non-completed outcome still has to reach the report.
+			// `lensOutcomes` is what the caller renders, and this branch used to
+			// require `batch.error` — but the commonest failure here is the
+			// synthetic `{ status: "timeout" }` the poll returns when its budget
+			// expires with the batch still in flight, and that carries no error.
+			// A lens that never came back was therefore omitted entirely,
+			// indistinguishable in the output from one that was never requested.
+			if (batch.error) entry.error = batch.error;
 			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount };
 		}
 		await persistBroadsideRun(broadsideDir, run);
@@ -2808,9 +2829,18 @@ export async function runBroadsideCollect(
 							topTriageItems = parseTriageItems(content);
 						}
 					}
-				} else if (batch.error) {
+				} else if (BROADSIDE_DEAD_BATCH_STATUSES.includes(String(batch.status))) {
+					// The batch will never produce a result, so retire the pass.
+					// This used to require `batch.error`, leaving an expired or
+					// cancelled batch parked at "submitted" forever — and since a
+					// resumed collect re-polls anything still "submitted", it
+					// would re-poll a dead batch on every future run.
 					pass.entry.status = "failed";
+					if (batch.error) pass.entry.error = batch.error instanceof Error ? batch.error.message : String(batch.error);
 				}
+				// A "timeout" is deliberately left at "submitted": the batch is
+				// still running server-side and has already been paid for, so a
+				// later collect should claim its result rather than discard it.
 				await persistBroadsideRun(broadsideDir, run);
 			}
 		}

@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -253,4 +253,28 @@ test("vision refuses an absent raw_text rather than prompting on the word undefi
 
 test("config refuses a relative cwd rather than answering from the server's own directory", async () => {
 	await assert.rejects(() => handleConfig({ cwd: "relative/path" }), /absolute path/i);
+});
+
+test("status survives a phase entry that carries no open_questions key", async () => {
+	// The Broad-Side scan flagged `phases[currentPhase]?.open_questions.length`
+	// as a crash: the optional chain guards the phase, not the field, while the
+	// reduce two lines below writes `phase.open_questions?.length`. Verification
+	// downgraded it — normalizeStatus backfills the array, so the throw is not
+	// reachable through getWorkspaceState — but the guard is now symmetric with
+	// its sibling, and this pins the behavior the reading relied on.
+	const cwd = await mkdtemp(join(tmpdir(), "cc-oq-"));
+	try {
+		await handleInit({ cwd, pipeline: "lite" });
+		const statusPath = join(cwd, ".codecarto", "workflow", "status.yaml");
+		const original = await readFile(statusPath, "utf8");
+		const stripped = original.split(/\r?\n/).filter((line) => !/^\s+open_questions:/.test(line)).join("\n");
+		assert.ok(!/open_questions/.test(stripped), "the fixture must actually remove the key");
+		assert.match(stripped, /^\s+architecture:/m, "the phase entries themselves must survive");
+		await writeFile(statusPath, stripped, "utf8");
+
+		const result = await handleStatus({ cwd });
+		assert.match(result.content[0].text, /Phase: /);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
 });

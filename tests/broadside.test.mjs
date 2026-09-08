@@ -47,6 +47,7 @@ const {
 	runBroadsideCollect,
 	runBroadsideStatus,
 	runBroadsideSubmit,
+	BROADSIDE_DEAD_BATCH_STATUSES,
 	persistBroadsideRun,
 	saveBroadsideState,
 	submitBatch,
@@ -1738,6 +1739,109 @@ test("saveLensResults marks truncated content and writes parsed JSON cleanly", a
 
 		const written = JSON.parse(await readFile(join(dir, "defect-core-1.json"), "utf8"));
 		assert.equal(written.module, "core", "fenced JSON must be saved parsed, not verbatim");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+
+// ---------- outcomes reported for non-completed batches ----------
+//
+// Leads from the second live Broad-Side scan of this repository, each verified
+// against the source before being fixed.
+
+test("a lens whose batch never came back is still reported, not omitted", async () => {
+	const dir = await makeFixture();
+	try {
+		// A batch still in flight when the poll budget expires yields the
+		// synthetic `{ status: "timeout" }`, which carries no `error`. The
+		// outcome map used to require an error, so this lens disappeared from
+		// the report entirely — indistinguishable from one never requested.
+		const fetcher = async (url, init) =>
+			init.method === "POST"
+				? fakeResponse(202, { id: "batch-stuck", status: "validating" })
+				: fakeResponse(200, { id: "batch-stuck", status: "in_progress" });
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		const collect = await runBroadsideCollect(dir, "sk-fake", {
+			fetcher,
+			waitMs: 0,
+			includeSynthesis: false,
+			includeTriage: false,
+		});
+
+		assert.ok(collect.lensOutcomes.architecture, "a timed-out lens must appear in the outcome map");
+		assert.equal(collect.lensOutcomes.architecture.status, "timeout");
+		assert.notEqual(collect.status, "completed", "a run with an unreturned lens is not complete");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a post-pass whose batch dies without an error is retired, not left submitted", async () => {
+	const dir = await makeFixture();
+	try {
+		const finding = JSON.stringify({ module: "root", findings: [], patterns_checked: [], files_scanned: 1 });
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				const payload = JSON.parse(init.body);
+				const isPostPass = payload.requests.some((r) => String(r.custom_id).startsWith("synthesis") || String(r.custom_id).startsWith("triage"));
+				return fakeResponse(202, { id: isPostPass ? "batch-postpass" : "batch-lens", status: "validating" });
+			}
+			if (String(url).includes("batch-postpass")) {
+				// Terminal, dead, and carrying no error object.
+				return fakeResponse(200, { id: "batch-postpass", status: "expired" });
+			}
+			return fakeResponse(200, {
+				id: "batch-lens",
+				status: "completed",
+				results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: finding } }] } }, error: null }],
+				usage: { cost: 0.001 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
+		await runBroadsideCollect(dir, "sk-fake", { fetcher, includeTriage: false });
+
+		const run = (await loadBroadsideState(join(dir, ".codecarto", "broadside"))).runs.at(-1);
+		assert.equal(
+			run.synthesis.status,
+			"failed",
+			"an expired post-pass batch must be retired; leaving it 'submitted' makes every later collect re-poll a dead batch",
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a timeout is not a dead batch status", () => {
+	// The distinction is load-bearing: a dead status retires the work, while a
+	// timeout means the batch is still running server-side and has already been
+	// paid for, so a later collect must be able to claim its result.
+	assert.ok(!BROADSIDE_DEAD_BATCH_STATUSES.includes("timeout"));
+	assert.ok(!BROADSIDE_DEAD_BATCH_STATUSES.includes("completed"));
+	assert.deepEqual(BROADSIDE_DEAD_BATCH_STATUSES, ["failed", "expired", "cancelled", "auth-failed"]);
+});
+
+test("a trailing separator on the target directory does not corrupt slice paths", async () => {
+	const dir = await makeFixture();
+	try {
+		const info = await collectRepoInfo(dir);
+		const lens = getLens("defect");
+		const plain = await gatherSlices(dir, lens, info);
+		const trailing = await gatherSlices(`${dir}/`, lens, info);
+
+		const filesOf = (slices) => slices.flatMap((s) => s.files).sort();
+		assert.deepEqual(
+			filesOf(trailing),
+			filesOf(plain),
+			"paths were sliced at a hardcoded rootDir.length + 1, so a trailing separator cut one character too many",
+		);
+		assert.ok(filesOf(plain).length > 0, "the fixture must yield files for this to prove anything");
+		assert.ok(
+			filesOf(trailing).every((f) => !f.startsWith("/")),
+			"no slice path may be absolute",
+		);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
