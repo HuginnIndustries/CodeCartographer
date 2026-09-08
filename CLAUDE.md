@@ -46,7 +46,7 @@ When adding a feature, the question to ask is "does this work on all three surfa
 - `core/status.ts` — `status.yaml` normalization + atomic update with file lock (`updateStatusAtomically`).
 - `core/prompts.ts` — phase and skill prompt assembly. Output here is what the LLM actually sees; tests check byte-identical assembly across surfaces.
 - `core/workspace.ts` — `getWorkspaceState`, `packagedWorkspaceDir`, `PACKAGE_VERSION` (read from `package.json` at module load).
-- `core/dashboard.ts` — single-file HTML renderer for `.codecarto/dashboard.html` (no JS, no external assets, light/dark via `prefers-color-scheme`).
+- `core/dashboard.ts` — single-file HTML renderer for `.codecarto/dashboard.html`. Self-contained: **no external assets of any kind** (no links, no absolute URLs, nothing fetched), light/dark via `prefers-color-scheme`. It does inline two `<script>` blocks — a JSON data island and a search/filter script — so the file works opened straight off disk with no server. `tests/mcp-uncovered-handlers.test.mjs` pins the self-containment.
 - `core/usage.ts` — per-phase token/duration log at `.codecarto/workflow/.usage.local.yaml`.
 - `core/orchestrator-config.ts` — loads `.codecarto/workflow/config.yaml` (the `orchestrator.llm_steer_next_phase` flag lives here).
 - `core/library.ts` — versioned library discovery, publication, reads, listing, reindexing, and optional git commits shared by Pi and MCP.
