@@ -2628,8 +2628,10 @@ export async function runBroadsideCollect(
 	// findings the post-passes need have to come back off disk, or a run whose
 	// first collect was interrupted could never produce its executive report
 	// and work order, however many times it was re-run.
+	const postPassUnfinished = (entry: BroadsideSynthesisEntry): boolean =>
+		entry.status === "pending" || entry.status === "submitted";
 	if ((wantSynthesis || wantTriage) && allLensResults.length === 0
-		&& (run.synthesis.status === "pending" || run.triage.status === "pending")) {
+		&& (postPassUnfinished(run.synthesis) || postPassUnfinished(run.triage))) {
 		const restored = await loadSavedLensResults(runDir, run.lenses);
 		if (restored.length > 0) {
 			allLensResults.push(...restored);
@@ -2641,7 +2643,7 @@ export async function runBroadsideCollect(
 			const entry = run.batches[lensId];
 			return entry && ["completed", "failed", "expired", "cancelled", "auth-failed", "skipped", "rejected"].includes(entry.status);
 		});
-		if (allTerminal && (run.synthesis.status === "pending" || run.triage.status === "pending")) {
+		if (allTerminal && (postPassUnfinished(run.synthesis) || postPassUnfinished(run.triage))) {
 			const findingsText = allLensResults
 				.map((r) => `## ${r.lensId} — ${r.customId}\n\n${r.content}\n`)
 				.join("\n");
@@ -2677,6 +2679,24 @@ export async function runBroadsideCollect(
 			];
 
 			const submitted = new Map<string, { batchId: string; pass: (typeof passes)[number] }>();
+
+			// A pass can be left at "submitted" when an earlier collect returned
+			// before its batch reached a terminal status — the batch still runs
+			// and is still charged, so the result exists and is simply unclaimed.
+			// Nothing above would ever look at it again: the pass list is built
+			// from "pending" entries only. Poll those regardless of the want
+			// flags, because the spend already happened and discarding a
+			// finished result is worse than saving one the caller opted out of.
+			for (const kind of ["synthesis", "triage"] as const) {
+				const entry = kind === "synthesis" ? run.synthesis : run.triage;
+				if (entry.status !== "submitted" || !entry.batchId) continue;
+				if (submitted.has(entry.batchId)) continue;
+				submitted.set(entry.batchId, {
+					batchId: entry.batchId,
+					pass: { kind, request: undefined as unknown as BatchRequest, entry },
+				});
+			}
+
 			await Promise.allSettled(
 				passes.map(async (pass) => {
 					pass.entry.status = "submitted";
