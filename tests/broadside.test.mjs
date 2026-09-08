@@ -48,6 +48,9 @@ const {
 	runBroadsideStatus,
 	runBroadsideSubmit,
 	BROADSIDE_DEAD_BATCH_STATUSES,
+	BROADSIDE_REASONING_BUDGET_FRACTION,
+	BROADSIDE_MIN_REASONING_TOKENS,
+	defaultReasoningFor,
 	estimateSubmitText,
 	persistBroadsideRun,
 	saveBroadsideState,
@@ -538,6 +541,7 @@ test("every documented config key is one loadBroadsideConfig actually reads", as
 		"max_cost",
 		"pricing",
 		"lens_models",
+		"reasoning",
 		"incremental",
 		"retry_truncated",
 		"include_synthesis",
@@ -551,7 +555,7 @@ test("every documented config key is one loadBroadsideConfig actually reads", as
 	}
 
 	// Nested examples must be real too: pricing's two fields, or a lens id.
-	const parsedNested = new Set(["input_per_m", "output_per_m", ...BROADSIDE_LENS_IDS]);
+	const parsedNested = new Set(["input_per_m", "output_per_m", "enabled", "effort", "max_tokens", ...BROADSIDE_LENS_IDS]);
 	for (const key of documentedNested) {
 		assert.ok(parsedNested.has(key), `config.yaml shows a nested ${key} key that nothing reads`);
 	}
@@ -2021,6 +2025,134 @@ test("a run that never asked for incremental says nothing about it", async () =>
 			!/Incremental:/.test(estimateSubmitText(result, [getLens("architecture")])),
 			"an unrequested mode must not add noise to the summary",
 		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+// ---------- reasoning tokens must not eat the output budget ----------
+//
+// Sending no `reasoning` field means each model applies its own default. A
+// reasoning-capable model then spent 5,758 of a 6,000-token output budget
+// thinking and left ~230 tokens for the JSON, which truncated mid-structure —
+// on 11 of 13 slices, with the thinking billed at the full output rate. The
+// field is now always present.
+
+test("every lens request caps reasoning explicitly", async () => {
+	const dir = await makeFixture();
+	try {
+		const info = await collectRepoInfo(dir);
+		for (const lensId of BROADSIDE_LENS_IDS) {
+			const lens = getLens(lensId);
+			const slices = await gatherSlices(dir, lens, info);
+			if (slices.length === 0) continue;
+			const request = buildBatchRequest(lens, info, slices[0], 0, slices.length);
+			assert.ok(
+				Object.prototype.hasOwnProperty.call(request.body, "reasoning"),
+				`${lensId} must send reasoning explicitly rather than inheriting the model's default`,
+			);
+			const cap = request.body.reasoning.max_tokens;
+			assert.ok(cap > 0, `${lensId} must carry a reasoning cap`);
+			assert.ok(cap < request.body.max_tokens, `${lensId}'s cap must leave room for the answer`);
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("the cap is a cap, never an off switch", async () => {
+	// Disabling is not portable: google/gemini-3.8-flash:batch refuses the whole
+	// batch with "Reasoning is mandatory for this endpoint and cannot be
+	// disabled", which turns a partial result into none at all. Verified live —
+	// `{enabled: false}` failed 13 of 13 requests on that model, where the
+	// uncapped run had at least produced 2.
+	const dir = await makeFixture();
+	try {
+		const info = await collectRepoInfo(dir);
+		const lens = getLens("defect");
+		const slices = await gatherSlices(dir, lens, info);
+		const reasoning = buildBatchRequest(lens, info, slices[0], 0, slices.length).body.reasoning;
+		assert.equal(reasoning.enabled, undefined, "the default must not try to switch reasoning off");
+		assert.equal(typeof reasoning.max_tokens, "number");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("the reasoning cap leaves exactly the share estimateCost budgets for output", () => {
+	// estimateCost budgets output at 75% of maxTokens. Capping thinking at the
+	// remaining quarter makes that assumption true rather than hopeful.
+	assert.equal(BROADSIDE_REASONING_BUDGET_FRACTION, 0.25);
+	assert.equal(defaultReasoningFor(6000).max_tokens, 1500);
+	assert.equal(defaultReasoningFor(8000).max_tokens, 2000);
+	// A small lens still gets a usable floor rather than a nonsense cap.
+	assert.equal(defaultReasoningFor(100).max_tokens, BROADSIDE_MIN_REASONING_TOKENS);
+});
+
+test("a retry's extra budget goes to the answer, not to more thinking", async () => {
+	// #133 doubles maxTokens on a truncated slice, and the retry clones the
+	// stored request rather than rebuilding it — so the reasoning cap carries
+	// over unchanged while the answer budget doubles. That is the right way
+	// round: the slice was retried *because* the answer was cut off, so the
+	// extra budget belongs to the answer.
+	const dir = await makeFixture();
+	try {
+		const info = await collectRepoInfo(dir);
+		const lens = getLens("defect");
+		const slices = await gatherSlices(dir, lens, info);
+		const original = buildBatchRequest(lens, info, slices[0], 0, slices.length);
+		const bumped = { ...original, body: { ...original.body, max_tokens: original.body.max_tokens * 2 } };
+
+		assert.equal(bumped.body.reasoning.max_tokens, original.body.reasoning.max_tokens, "the thinking cap must not grow");
+		const answerBefore = original.body.max_tokens - original.body.reasoning.max_tokens;
+		const answerAfter = bumped.body.max_tokens - bumped.body.reasoning.max_tokens;
+		assert.ok(answerAfter > answerBefore * 2, "all of the extra budget must reach the answer");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a per-lens reasoning setting overrides the default", async () => {
+	const dir = await makeFixture();
+	try {
+		const info = await collectRepoInfo(dir);
+		const lens = { ...getLens("defect"), reasoning: { effort: "low" } };
+		const slices = await gatherSlices(dir, lens, info);
+		const request = buildBatchRequest(lens, info, slices[0], 0, slices.length);
+		assert.deepEqual(request.body.reasoning, { effort: "low" });
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("an explicit override beats both the lens and the default", async () => {
+	const dir = await makeFixture();
+	try {
+		const info = await collectRepoInfo(dir);
+		const lens = getLens("defect");
+		const slices = await gatherSlices(dir, lens, info);
+		const request = buildBatchRequest(lens, info, slices[0], 0, slices.length, undefined, undefined, { effort: "high" });
+		assert.deepEqual(request.body.reasoning, { effort: "high" });
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("config.yaml can re-enable reasoning, and malformed values are ignored", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-reasoning-"));
+	try {
+		const write = async (body) => {
+			await writeFile(join(dir, "config.yaml"), body, "utf8");
+			return loadBroadsideConfig(dir);
+		};
+		assert.equal((await write("model: x\n")).reasoning, null, "absent means: use the lens default");
+		assert.deepEqual((await write("reasoning:\n  effort: high\n")).reasoning, { effort: "high" });
+		assert.deepEqual((await write("reasoning:\n  enabled: true\n")).reasoning, { enabled: true });
+		assert.deepEqual((await write("reasoning:\n  max_tokens: 2000\n")).reasoning, { max_tokens: 2000 });
+		// A typo must not silently become a setting.
+		assert.equal((await write("reasoning:\n  effort: enormous\n")).reasoning, null);
+		assert.equal((await write("reasoning:\n  max_tokens: -5\n")).reasoning, null);
+		assert.equal((await write("reasoning: not-a-mapping\n")).reasoning, null);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
