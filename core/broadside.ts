@@ -2974,8 +2974,18 @@ function parseSynthesisTopFindings(
 // ---------- formatting helpers for tool output ----------
 
 export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDefinition[]): string {
+	// Count the lenses that actually got a batch, not every lens considered. A
+	// lens with nothing to scan is reported as `skipped (0 request(s))` two
+	// lines below, so counting it here made the header contradict its own body:
+	// a Rust CLI with no server surface reported "submitted 6 batch(es)" over a
+	// list showing four batches and two skips.
+	const entries = Object.values(result.batches ?? {});
+	const submittedCount = entries.filter((entry) => entry.batchId).length;
+	const withoutBatch = entries.length - submittedCount;
 	const lines = [
-		`Broad-Side submitted ${result.batches ? Object.keys(result.batches).length : 0} batch(es).`,
+		withoutBatch > 0
+			? `Broad-Side submitted ${submittedCount} batch(es); ${withoutBatch} lens(es) produced none (see below).`
+			: `Broad-Side submitted ${submittedCount} batch(es).`,
 	];
 	for (const lens of lenses) {
 		const entry = result.batches[lens.id];

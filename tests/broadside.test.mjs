@@ -48,6 +48,7 @@ const {
 	runBroadsideStatus,
 	runBroadsideSubmit,
 	BROADSIDE_DEAD_BATCH_STATUSES,
+	estimateSubmitText,
 	persistBroadsideRun,
 	saveBroadsideState,
 	submitBatch,
@@ -1842,6 +1843,36 @@ test("a trailing separator on the target directory does not corrupt slice paths"
 			filesOf(trailing).every((f) => !f.startsWith("/")),
 			"no slice path may be absolute",
 		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("the submit header counts batches sent, not lenses considered", async () => {
+	// A lens with nothing to scan is listed as skipped with 0 requests, so
+	// counting it in the header made that line contradict the body directly
+	// below it. Seen on a live scan of a Rust CLI with no server surface:
+	// "submitted 6 batch(es)" over a list of four batches and two skips.
+	const dir = await mkdtemp(join(tmpdir(), "broadside-noserver-"));
+	try {
+		// No server/, no auth*, no middleware/, no SECURITY.md — so the security
+		// lens gathers nothing, while architecture always has the repo info.
+		await writeFile(join(dir, "go.mod"), "module example.com/cli\n\ngo 1.26.0\n");
+		await writeFile(join(dir, "main.go"), "package main\n\nfunc main() {}\n");
+
+		const fetcher = async (url, init) =>
+			init.method === "POST"
+				? fakeResponse(202, { id: "batch-x", status: "validating" })
+				: fakeResponse(200, { id: "batch-x", status: "in_progress" });
+		const lenses = ["architecture", "security"];
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses, fetcher });
+
+		const skipped = Object.values(result.batches).filter((b) => !b.batchId);
+		assert.equal(skipped.length, 1, "the fixture must produce exactly one lens with nothing to scan");
+
+		const text = estimateSubmitText(result, lenses.map(getLens));
+		assert.match(text, /submitted 1 batch\(es\); 1 lens\(es\) produced none/);
+		assert.ok(!/submitted 2 batch\(es\)/.test(text), "the header must not count the skipped lens");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
