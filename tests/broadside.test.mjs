@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -47,8 +47,10 @@ const {
 	runBroadsideCollect,
 	runBroadsideStatus,
 	runBroadsideSubmit,
+	persistBroadsideRun,
 	saveBroadsideState,
 	submitBatch,
+	updateBroadsideStateAtomically,
 } = core;
 
 // ---------- lens registry ----------
@@ -309,6 +311,134 @@ test("state round-trips and defaults to an empty run list", async () => {
 		const reloaded = await loadBroadsideState(dir);
 		assert.equal(reloaded.runs.length, 1);
 		assert.equal(reloaded.runs[0].id, "run-1");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+// A long-running operation holds its state in memory while it polls, then
+// checkpoints. Until persistBroadsideRun, that checkpoint wrote the whole
+// snapshot back, erasing any run a concurrent operation had recorded since the
+// snapshot was taken. Found live: a submit at 23:35 recorded a run, a collect
+// that had loaded state before it wrote back at 00:08, and the run vanished
+// from state.json while its paid results sat orphaned on disk.
+
+const makeRun = (id, extra = {}) => ({
+	id,
+	createdAt: "2026-09-08T00:00:00Z",
+	model: BROADSIDE_MODEL,
+	lenses: ["architecture"],
+	status: "in-flight",
+	outputDir: id,
+	batches: {},
+	synthesis: { status: "pending" },
+	...extra,
+});
+
+test("a checkpoint does not erase a run recorded after its snapshot was taken", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-lostupdate-"));
+	try {
+		const slow = makeRun("run-slow");
+		await persistBroadsideRun(dir, slow);
+
+		// The long operation's snapshot: taken now, written back much later.
+		const snapshotTakenBySlowOperation = await loadBroadsideState(dir);
+		assert.equal(snapshotTakenBySlowOperation.runs.length, 1);
+
+		// Meanwhile an independent submit records a second run.
+		await persistBroadsideRun(dir, makeRun("run-concurrent"));
+
+		// The slow operation finishes and checkpoints its own run.
+		slow.status = "completed";
+		slow.totalCost = 0.5;
+		await persistBroadsideRun(dir, slow);
+
+		const finalState = await loadBroadsideState(dir);
+		assert.deepEqual(
+			finalState.runs.map((r) => r.id).sort(),
+			["run-concurrent", "run-slow"],
+			"the concurrently-recorded run must survive the slow operation's checkpoint",
+		);
+		const persistedSlow = finalState.runs.find((r) => r.id === "run-slow");
+		assert.equal(persistedSlow.status, "completed", "the checkpoint must still apply its own updates");
+		assert.equal(persistedSlow.totalCost, 0.5);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a run erased by an older writer is restored by its own next checkpoint", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-selfheal-"));
+	try {
+		const run = makeRun("run-orphaned");
+		await persistBroadsideRun(dir, run);
+
+		// An older writer overwrites state.json without this run.
+		await saveBroadsideState(dir, defaultBroadsideState());
+		assert.equal((await loadBroadsideState(dir)).runs.length, 0);
+
+		run.status = "completed";
+		await persistBroadsideRun(dir, run);
+
+		const restored = await loadBroadsideState(dir);
+		assert.equal(restored.runs.length, 1);
+		assert.equal(restored.runs[0].id, "run-orphaned");
+		assert.equal(restored.runs[0].status, "completed");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("interleaved checkpoints from many runs all survive", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-interleaved-"));
+	try {
+		const runs = ["a", "b", "c", "d", "e"].map((id) => makeRun(`run-${id}`));
+		// Every run checkpoints twice, interleaved, as concurrent operations would.
+		await Promise.all(runs.map((run) => persistBroadsideRun(dir, run)));
+		await Promise.all(
+			runs.map((run) => {
+				run.status = "completed";
+				return persistBroadsideRun(dir, run);
+			}),
+		);
+
+		const state = await loadBroadsideState(dir);
+		assert.deepEqual(
+			state.runs.map((r) => r.id).sort(),
+			runs.map((r) => r.id).sort(),
+			"no run may be dropped by an interleaved write",
+		);
+		assert.ok(state.runs.every((r) => r.status === "completed"));
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a checkpoint updates a run in place rather than appending a duplicate", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-dedupe-"));
+	try {
+		const run = makeRun("run-1");
+		for (const status of ["in-flight", "partial", "completed"]) {
+			run.status = status;
+			await persistBroadsideRun(dir, run);
+		}
+		const state = await loadBroadsideState(dir);
+		assert.equal(state.runs.length, 1, "repeated checkpoints must not append duplicates");
+		assert.equal(state.runs[0].status, "completed");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("state writes leave no temp file behind", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "broadside-tmp-"));
+	try {
+		await persistBroadsideRun(dir, makeRun("run-1"));
+		await updateBroadsideStateAtomically(dir, (state) => {
+			state.runs[0].status = "completed";
+		});
+		const leftovers = (await readdir(dir)).filter((name) => name.endsWith(".tmp") || name.endsWith(".lock"));
+		assert.deepEqual(leftovers, [], "temp and lock files must be cleaned up");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
