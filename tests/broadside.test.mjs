@@ -1932,3 +1932,96 @@ test("wait_seconds bounds the whole collect, not just the lens poll", async () =
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+// ---------- incremental fallback is reported, not silent ----------
+//
+// A request for incremental scouting falls back to a full scan whenever there
+// is nothing to diff against. That fallback costs real money — the caller asked
+// for the cheap mode and pays for the expensive one — so it has to be stated.
+// Found live: an incremental scan of a Rust repository submitted all 31
+// requests at full price because the earlier run predated the repo being a git
+// checkout, and the output said nothing about it.
+
+const acceptingFetcher = async (url, init) =>
+	init.method === "POST"
+		? fakeResponse(202, { id: "batch-x", status: "validating" })
+		: fakeResponse(200, { id: "batch-x", status: "in_progress" });
+
+test("an incremental run with no baseline says so instead of quietly scanning everything", async () => {
+	const dir = await makeGitRepo();
+	try {
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["architecture"],
+			fetcher: acceptingFetcher,
+			incremental: true,
+		});
+		assert.equal(result.incremental.requested, true);
+		assert.equal(result.incremental.applied, false);
+		assert.equal(result.incremental.reason, "no-baseline");
+
+		const text = estimateSubmitText(result, [getLens("architecture")]);
+		assert.match(text, /Incremental: requested but NOT applied/);
+		assert.match(text, /no earlier run recorded a commit/);
+		assert.match(text, /at full cost/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("an incremental run against a dirty worktree names that as the reason", async () => {
+	const dir = await makeGitRepo();
+	try {
+		// A first run records the commit a later run would diff against.
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher: acceptingFetcher });
+		await writeFile(join(dir, "main.go"), "package main\n// uncommitted\n");
+
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["architecture"],
+			fetcher: acceptingFetcher,
+			incremental: true,
+		});
+		assert.equal(result.incremental.applied, false);
+		assert.equal(result.incremental.reason, "dirty-worktree");
+		assert.match(estimateSubmitText(result, [getLens("architecture")]), /uncommitted changes/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("an incremental run that finds a baseline reports the commit it diffed against", async () => {
+	const dir = await makeGitRepo();
+	try {
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher: acceptingFetcher });
+		await writeFile(join(dir, "main.go"), "package main\n// committed change\n");
+		await git(dir, "add", "-A");
+		await git(dir, "commit", "-q", "-m", "change");
+
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["architecture"],
+			fetcher: acceptingFetcher,
+			incremental: true,
+		});
+		assert.equal(result.incremental.applied, true, "a committed change on top of a recorded run must diff cleanly");
+		assert.ok(result.incremental.baseHead, "the base commit must be recorded");
+
+		const text = estimateSubmitText(result, [getLens("architecture")]);
+		assert.match(text, /Incremental: scanning only what changed since/);
+		assert.match(text, new RegExp(result.incremental.baseHead.slice(0, 8)));
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a run that never asked for incremental says nothing about it", async () => {
+	const dir = await makeGitRepo();
+	try {
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher: acceptingFetcher });
+		assert.equal(result.incremental.requested, false);
+		assert.ok(
+			!/Incremental:/.test(estimateSubmitText(result, [getLens("architecture")])),
+			"an unrequested mode must not add noise to the summary",
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});

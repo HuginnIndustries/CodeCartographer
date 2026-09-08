@@ -300,6 +300,8 @@ export type BroadsideEstimate = {
 	/** Set when incremental scouting found a baseline to diff against. */
 	baseHead: string | null;
 	sourceDirty: boolean;
+	/** Whether a requested incremental run actually narrowed this estimate. */
+	incremental: BroadsideIncrementalOutcome;
 	/** The provider's completion ceiling, when the catalog advertises one. */
 	outputCap?: number;
 };
@@ -311,6 +313,23 @@ export class BroadsideCancelledError extends Error {
 		this.name = "BroadsideCancelledError";
 	}
 }
+
+/**
+ * Whether incremental scouting actually narrowed the run.
+ *
+ * A request for incremental falls back to a full scan whenever there is nothing
+ * to diff against, and that fallback costs real money — the caller asked for the
+ * cheap mode and gets the expensive one. It must be reported, not inferred from
+ * the request counts.
+ */
+export type BroadsideIncrementalOutcome = {
+	requested: boolean;
+	applied: boolean;
+	/** The commit the run diffed against, when one was found. */
+	baseHead: string | null;
+	/** Why a requested incremental run did not apply. */
+	reason?: "dirty-worktree" | "no-baseline" | "diff-failed";
+};
 
 export type BroadsideSubmitResult = {
 	runId: string;
@@ -327,6 +346,7 @@ export type BroadsideSubmitResult = {
 		supportsStructuredOutputs?: boolean;
 		expirationDate?: string | null;
 	};
+	incremental: BroadsideIncrementalOutcome;
 };
 
 export type BroadsideCollectResult = {
@@ -2149,14 +2169,26 @@ export async function runBroadsideSubmit(
 	const sourceDirty = await gitDirty(cwd);
 	let baseHead: string | null = null;
 	let changed: Set<string> | null = null;
+	const incrementalOutcome: BroadsideIncrementalOutcome = {
+		requested: opts.incremental === true,
+		applied: false,
+		baseHead: null,
+	};
 	if (opts.incremental) {
 		const state = await loadBroadsideState(broadsideDir);
 		// The baseline is the most recent run that recorded a HEAD — a
 		// submit-only run (never collected) is still a valid committed base.
 		const previous = [...state.runs].reverse().find((r) => r.sourceHead);
-		if (previous?.sourceHead && !sourceDirty) {
+		if (sourceDirty) {
+			incrementalOutcome.reason = "dirty-worktree";
+		} else if (!previous?.sourceHead) {
+			incrementalOutcome.reason = "no-baseline";
+		} else {
 			baseHead = previous.sourceHead;
 			changed = await changedFilesSince(cwd, baseHead);
+			incrementalOutcome.baseHead = baseHead;
+			if (changed) incrementalOutcome.applied = true;
+			else incrementalOutcome.reason = "diff-failed";
 		}
 	}
 
@@ -2222,6 +2254,7 @@ export async function runBroadsideSubmit(
 			exceedsLimit,
 			baseHead,
 			sourceDirty,
+			incremental: incrementalOutcome,
 			...(outputCap !== undefined && { outputCap }),
 		});
 		if (!approved) throw new BroadsideCancelledError();
@@ -2338,6 +2371,7 @@ export async function runBroadsideSubmit(
 				: resolved.get(model)!.supportsStructuredOutputs,
 			expirationDate: defaultEntry.expirationDate ?? null,
 		},
+		incremental: incrementalOutcome,
 	};
 }
 
@@ -2986,6 +3020,19 @@ function parseSynthesisTopFindings(
 
 // ---------- formatting helpers for tool output ----------
 
+function describeIncrementalFallback(reason: BroadsideIncrementalOutcome["reason"]): string {
+	switch (reason) {
+		case "dirty-worktree":
+			return "the working tree has uncommitted changes, so there is no committed state to diff against";
+		case "no-baseline":
+			return "no earlier run recorded a commit to diff against";
+		case "diff-failed":
+			return "the diff against the previous run's commit could not be read";
+		default:
+			return "no baseline was available";
+	}
+}
+
 export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDefinition[]): string {
 	// Count the lenses that actually got a batch, not every lens considered. A
 	// lens with nothing to scan is reported as `skipped (0 request(s))` two
@@ -3006,6 +3053,14 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		const status = entry.batchId ? `batch ${entry.batchId}` : entry.status;
 		const override = entry.model ? ` on ${entry.model}` : "";
 		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})${override}`);
+	}
+	const incremental = result.incremental;
+	if (incremental?.requested) {
+		lines.push(
+			incremental.applied
+				? `Incremental: scanning only what changed since ${(incremental.baseHead ?? "").slice(0, 8)}.`
+				: `Incremental: requested but NOT applied — ${describeIncrementalFallback(incremental.reason)}. Every module was scanned, at full cost.`,
+		);
 	}
 	lines.push(
 		`Estimated total: ~$${result.estimatedTotalCost.toFixed(4)}`,
