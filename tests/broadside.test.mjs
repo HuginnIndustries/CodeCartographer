@@ -1364,6 +1364,54 @@ test("a resumed collect runs the post-passes an interrupted one never reached", 
 	}
 });
 
+test("a post-pass left at submitted is polled and saved, not stranded", async () => {
+	// The batch keeps running and is charged whether or not the collect that
+	// submitted it is still alive, so a pass abandoned at "submitted" is a
+	// result the user has already paid for and can never retrieve: the pass
+	// list is built from "pending" entries, so nothing looks at it again.
+	const dir = await mkdtemp(join(tmpdir(), "broadside-rescue-"));
+	try {
+		const broadsideDir = join(dir, ".codecarto", "broadside");
+		const runId = "2026-01-02T00-00-00-000Z";
+		const runDir = join(broadsideDir, runId);
+		await mkdir(runDir, { recursive: true });
+		await writeFile(join(runDir, "defect-core-1.json"), JSON.stringify({ module: "core", findings: [] }), "utf8");
+		await writeFile(join(broadsideDir, "state.json"), JSON.stringify({
+			schema_version: 1,
+			runs: [{
+				id: runId,
+				outputDir: runId,
+				model: BROADSIDE_MODEL,
+				lenses: ["defect"],
+				status: "completed",
+				batches: { defect: { batchId: "batch-done", requests: 1, status: "completed", submittedAt: runId, estimatedCost: 0.01, resultCount: 1 } },
+				synthesis: { status: "completed", batchId: "batch-synth", cost: 0.01 },
+				triage: { status: "submitted", batchId: "batch-triage-inflight" },
+			}],
+		}), "utf8");
+
+		let posts = 0;
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") { posts += 1; return fakeResponse(202, { id: "batch-new", status: "validating" }); }
+			const id = String(url).split("/").pop();
+			return fakeResponse(200, {
+				id,
+				status: "completed",
+				results: [{ custom_id: "triage", response: { status_code: 200, body: { choices: [{ message: { content: JSON.stringify({ items: [] }) } }] } }, error: null }],
+				usage: { cost: 0.002 },
+			});
+		};
+
+		await runBroadsideCollect(dir, "sk-fake", { fetcher, waitMs: 0 });
+		const run = (await loadBroadsideState(broadsideDir)).runs.at(-1);
+		assert.equal(run.triage.status, "completed", "the in-flight pass must be claimed, not left submitted");
+		assert.equal(posts, 0, "an already-submitted pass is polled, never re-submitted and re-charged");
+		assert.equal(run.synthesis.status, "completed", "a finished pass is not disturbed");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 test("runBroadsideCollect polls, saves results, and runs synthesis + triage", async () => {
 	const dir = await makeFixture();
 	try {
