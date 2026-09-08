@@ -125,6 +125,13 @@ from OpenRouter's runtime cost tracking: it predicts from file sizes before
 spend, it does not stop a batch mid-flight. Actual spend appears in
 `run-meta.json` after collect.
 
+Budget for the **ceiling, not the estimate**. OpenRouter charges the worst
+case when it accepts a batch — every request's full `max_tokens` — and
+refunds the unused output as each request settles. A six-lens scan of this
+repository held $0.6972 and settled at $0.3806, so the balance a run needs to
+*start* is roughly double what it ends up costing. The submit estimate sits
+between the two: above what the run should settle at, below what it can hold.
+
 ## Resilience notes
 
 - **Truncation is spoken.** A lens output whose JSON does not parse — even
