@@ -32,11 +32,12 @@
 // carry is the reading guide for its output — `.codecarto/broadside/SKILL.md`,
 // served by codecarto_skill under the name `broadside` (see readBroadsideSkill).
 
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dirname, join } from "node:path";
 import { pathExists, sleep } from "./utils.ts";
+import { acquireLock } from "./status.ts";
 import { loadYamlFile } from "./yaml.ts";
 import { packagedWorkspaceDir } from "./workspace.ts";
 
@@ -1583,9 +1584,78 @@ export async function loadBroadsideState(broadsideDir: string): Promise<Broadsid
 	}
 }
 
+/**
+ * Overwrite `state.json` wholesale with `state`.
+ *
+ * Prefer {@link persistBroadsideRun} anywhere a live operation is recording its
+ * own progress — this entry point replaces the file, so any run a concurrent
+ * process recorded in the meantime is erased. It remains the right call for
+ * seeding a fresh workspace and for test fixtures, where "make the file exactly
+ * this" is the intent.
+ */
 export async function saveBroadsideState(broadsideDir: string, state: BroadsideStateFile): Promise<void> {
 	await mkdir(broadsideDir, { recursive: true });
-	await writeFile(join(broadsideDir, BROADSIDE_STATE_FILE), `${JSON.stringify(state, null, "\t")}\n`, "utf8");
+	const statePath = join(broadsideDir, BROADSIDE_STATE_FILE);
+	const lock = await acquireLock(`${statePath}.lock`);
+	try {
+		await writeBroadsideStateFile(statePath, state);
+	} finally {
+		await lock.release();
+	}
+}
+
+/** Serialize through a temp file so a crash mid-write cannot truncate state.json. */
+async function writeBroadsideStateFile(statePath: string, state: BroadsideStateFile): Promise<void> {
+	const tempPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+	await writeFile(tempPath, `${JSON.stringify(state, null, "\t")}\n`, "utf8");
+	await rename(tempPath, statePath);
+}
+
+/**
+ * Read-modify-write `state.json` under a lock.
+ *
+ * The lock is held only for the read-modify-write, never for the surrounding
+ * operation: a `collect` can poll for the better part of an hour, and holding
+ * the lock across that would push every concurrent caller past the 5s lock
+ * timeout.
+ */
+export async function updateBroadsideStateAtomically(
+	broadsideDir: string,
+	mutate: (state: BroadsideStateFile) => void | Promise<void>,
+): Promise<BroadsideStateFile> {
+	await mkdir(broadsideDir, { recursive: true });
+	const statePath = join(broadsideDir, BROADSIDE_STATE_FILE);
+	const lock = await acquireLock(`${statePath}.lock`);
+	try {
+		const state = await loadBroadsideState(broadsideDir);
+		await mutate(state);
+		await writeBroadsideStateFile(statePath, state);
+		return state;
+	} finally {
+		await lock.release();
+	}
+}
+
+/**
+ * Record one run's current shape, merged into whatever is on disk *now*.
+ *
+ * Broad-Side operations are long-lived and hold their state in memory while
+ * they poll. Writing that snapshot back wholesale silently erased any run a
+ * concurrent operation had recorded since it was loaded, orphaning that run's
+ * paid results on disk — present as files, invisible to `list`, and unreachable
+ * by `collect`, which finds its run by position in `state.runs`. Observed live:
+ * a submit at 23:35 was erased by a collect that had loaded state before it and
+ * wrote back at 00:08.
+ *
+ * Merging by run id also self-heals: a run erased by an older writer is
+ * restored the next time its own operation checkpoints.
+ */
+export async function persistBroadsideRun(broadsideDir: string, run: BroadsideRun): Promise<BroadsideStateFile> {
+	return updateBroadsideStateAtomically(broadsideDir, (state) => {
+		const index = state.runs.findIndex((candidate) => candidate.id === run.id);
+		if (index === -1) state.runs.push(run);
+		else state.runs[index] = run;
+	});
 }
 
 export async function loadBroadsideConfig(broadsideDir: string): Promise<BroadsideConfig> {
@@ -2168,7 +2238,7 @@ export async function runBroadsideSubmit(
 		baseHead,
 	};
 	state.runs.push(run);
-	await saveBroadsideState(broadsideDir, state);
+	await persistBroadsideRun(broadsideDir, run);
 
 	const requestsByCustomId: Record<string, BatchRequest> = {};
 	const submissions: Promise<void>[] = [];
@@ -2219,7 +2289,7 @@ export async function runBroadsideSubmit(
 		);
 	}
 	await Promise.allSettled(submissions);
-	await saveBroadsideState(broadsideDir, state);
+	await persistBroadsideRun(broadsideDir, run);
 
 	// Persist the exact request bodies so collect can re-submit a truncated
 	// slice (bumped output cap) without re-walking the repo (#133). The run
@@ -2553,7 +2623,7 @@ export async function runBroadsideCollect(
 			entry.error = batch.error;
 			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount };
 		}
-		await saveBroadsideState(broadsideDir, state);
+		await persistBroadsideRun(broadsideDir, run);
 	}
 
 	// #133: re-submit truncated slices once with a bumped output cap. Batch
@@ -2614,7 +2684,7 @@ export async function runBroadsideCollect(
 				outcome.truncated = allLensResults.filter((s) => s.lensId === lensId && s.truncated).length;
 			}
 		}
-		await saveBroadsideState(broadsideDir, state);
+		await persistBroadsideRun(broadsideDir, run);
 	}
 
 	// Synthesis + triage: cross-lens post-passes, only after every lens batch
@@ -2713,7 +2783,7 @@ export async function runBroadsideCollect(
 					}
 				}),
 			);
-			await saveBroadsideState(broadsideDir, state);
+			await persistBroadsideRun(broadsideDir, run);
 
 			for (const { batchId, pass } of submitted.values()) {
 				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
@@ -2741,7 +2811,7 @@ export async function runBroadsideCollect(
 				} else if (batch.error) {
 					pass.entry.status = "failed";
 				}
-				await saveBroadsideState(broadsideDir, state);
+				await persistBroadsideRun(broadsideDir, run);
 			}
 		}
 	}
@@ -2752,7 +2822,7 @@ export async function runBroadsideCollect(
 	});
 	run.status = terminal ? (resultCount > 0 ? "completed" : "failed") : "partial";
 	run.totalCost = totalCost;
-	await saveBroadsideState(broadsideDir, state);
+	await persistBroadsideRun(broadsideDir, run);
 
 	await writeFile(
 		join(runDir, "run-meta.json"),
