@@ -79,3 +79,42 @@ test("the shipped emitter's output parses back to the same object", () => {
 	};
 	assert.deepEqual(parseSimpleYaml(stringifySimpleYaml(original)), original);
 });
+
+// ---------- block scalars ----------
+//
+// A handoff is usually written by a model, and a model reaching for a wrapped
+// prose field reaches for `>-`. Before #211 that fell through to the plain
+// scalar path and the block body then failed the indentation check, so valid
+// YAML was rejected with a message that blamed whitespace.
+
+test("a folded scalar joins its lines with spaces instead of being rejected", () => {
+	const parsed = parseSimpleYaml("closeout_summary: >-\n  one line\n  two line\n");
+	assert.equal(parsed.closeout_summary, "one line two line");
+});
+
+test("folded chomping: strip, clip and keep each behave", () => {
+	assert.equal(parseSimpleYaml("k: >-\n  a\n  b\n").k, "a b", "`-` strips every trailing newline");
+	assert.equal(parseSimpleYaml("k: >\n  a\n  b\n").k, "a b\n", "bare `>` clips to one trailing newline");
+	assert.equal(parseSimpleYaml("k: >+\n  a\n\n\n").k, "a\n\n\n", "`+` keeps them all");
+});
+
+test("a blank line inside a folded scalar becomes a newline, and a run becomes that many", () => {
+	assert.equal(parseSimpleYaml("k: >-\n  para one a\n  para one b\n\n  para two\n").k, "para one a para one b\npara two");
+	assert.equal(parseSimpleYaml("k: >-\n  a\n\n\n  b\n").k, "a\n\nb");
+});
+
+test("a more-indented line inside a folded scalar keeps its breaks", () => {
+	// This is what lets a folded block hold a snippet without flattening it.
+	assert.equal(parseSimpleYaml("k: >-\n  intro\n    code line\n  outro\n").k, "intro\n  code line\noutro");
+});
+
+test("literal scalars are unchanged, and `|+` now works alongside them", () => {
+	assert.equal(parseSimpleYaml("k: |-\n  one\n  two\n").k, "one\ntwo");
+	assert.equal(parseSimpleYaml("k: |\n  one\n  two\n").k, "one\ntwo\n");
+	assert.equal(parseSimpleYaml("k: |+\n  one\n\n").k, "one\n\n");
+});
+
+test("a value that merely starts with a block indicator is still a plain scalar", () => {
+	assert.equal(parseSimpleYaml("k: |x\n").k, "|x");
+	assert.equal(parseSimpleYaml("k: > not a header\n").k, "> not a header");
+});

@@ -39,7 +39,8 @@ decisions: []
 #     evidence: <optional: where the pattern showed up>
 proposed_conventions: []
 closeout_summary: ""
-# Optional full closeout Markdown. YAML literal blocks are supported.
+# Optional full closeout Markdown. Block scalars are supported — literal (|, |-,
+# |+) to keep line breaks, folded (>, >-, >+) to join wrapped prose into one line.
 closeout_content: |-
   # Closeout — <phase-id>
 
