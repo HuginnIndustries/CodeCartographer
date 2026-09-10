@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { closeoutFileName, pathExists, type WorkspaceState } from "../../core/index.ts";
+import { createChildModelRuntime } from "./child-model-runtime.ts";
 
 /** Closeout content over this many bytes is truncated before being passed to
  *  the rewriter. Keeps the orchestrator-side cost predictable. */
@@ -182,6 +183,7 @@ async function runRewriterOnce(ctx: ExtensionContext, prompt: string): Promise<s
 	const { session } = await createAgentSession({
 		cwd,
 		agentDir,
+		modelRuntime: await createChildModelRuntime(ctx, agentDir),
 		sessionManager: SessionManager.inMemory(cwd),
 		settingsManager: SettingsManager.create(cwd, agentDir),
 		model: ctx.model,

@@ -25,6 +25,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { canonicalPath, isWithinPath } from "../../core/index.ts";
+import { createChildModelRuntime } from "./child-model-runtime.ts";
 import { phaseCompactionExtension } from "./phase-compaction.ts";
 
 // Tools available to the phase sub-agent. Matches the codecarto interception
@@ -166,6 +167,7 @@ export async function runPhase(
 	const { session } = await createAgentSession({
 		cwd,
 		agentDir,
+		modelRuntime: await createChildModelRuntime(ctx, agentDir),
 		sessionManager,
 		settingsManager: SettingsManager.create(cwd, agentDir),
 		model: ctx.model,

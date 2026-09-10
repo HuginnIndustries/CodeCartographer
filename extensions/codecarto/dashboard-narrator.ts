@@ -33,6 +33,7 @@ import {
 	type UsageFile,
 	type WorkspaceState,
 } from "../../core/index.ts";
+import { createChildModelRuntime } from "./child-model-runtime.ts";
 
 // Per-closeout byte budget when stuffing the narrator's input. Three
 // closeouts × 4 KB each ≈ 12 KB of prompt context, which is well under any
@@ -202,6 +203,7 @@ async function runNarratorOnce(ctx: ExtensionContext, prompt: string): Promise<s
 	const { session } = await createAgentSession({
 		cwd,
 		agentDir,
+		modelRuntime: await createChildModelRuntime(ctx, agentDir),
 		sessionManager: SessionManager.inMemory(cwd),
 		settingsManager: SettingsManager.create(cwd, agentDir),
 		model: ctx.model,
