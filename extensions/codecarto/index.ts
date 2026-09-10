@@ -10,6 +10,7 @@ import { narrateDashboard } from "./dashboard-narrator.ts";
 import { writeDashboard } from "./dashboard-writer.ts";
 import { parseBroadsideFlags, KNOWN_BROADSIDE_TOKENS } from "./broadside-flags.ts";
 import { parseNextFlags } from "./next-flags.ts";
+import { buildPiGuideMessage } from "./guide-framing.ts";
 import { phaseCompactionExtension } from "./phase-compaction.ts";
 
 import {
@@ -1082,10 +1083,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			}
 
 			const other = topics.filter((name) => name !== document.topic);
-			const footer = other.length > 0
-				? `\n\n---\nOther guide topics: ${other.join(", ")} (run /codecarto-guide <topic>).`
-				: "";
-			const message = `${document.content}${footer}`;
+			// Framed, not bare: the guide is MCP-centric text arriving as a user
+			// message, so it needs both a "this is reference, not a task" header
+			// and a Pi-surface addendum. See guide-framing.ts.
+			const message = buildPiGuideMessage(document.content, other);
 			if (ctx.isIdle()) {
 				pi.sendUserMessage(message);
 			} else {
