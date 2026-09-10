@@ -154,14 +154,25 @@ test("/codecarto-guide serves the packaged overview without a workspace, footer 
 		const { message, options } = pi.sentUserMessages[0];
 		assert.equal(options, undefined, "an idle session receives it immediately");
 		const document = (await core.readGuide("overview")).content;
-		assert.ok(message.startsWith(document), "the document is served entire, not summarized");
-		const footer = message.slice(document.length);
+		assert.ok(message.includes(document), "the document is embedded entire, not summarized");
+
+		// The document body is byte-identical to what MCP serves; only the Pi
+		// framing around it differs. Compare the shared span rather than the
+		// whole message.
+		const mcp = await server.handleGuide({});
+		const mcpDocument = mcp.content[0].text.slice(0, mcp.content[0].text.indexOf("\n\n---\nOther guide topics:"));
+		assert.ok(message.includes(mcpDocument), "Pi and MCP serve the same guide bytes");
+
+		// Framing: reference-not-task header before, Pi-surface addendum after.
+		assert.ok(message.indexOf("reference material, not a task") < message.indexOf(document), "the framing header precedes the document");
+		assert.match(message, /Do not start a workflow/, "the header tells the model not to drive");
+		assert.ok(message.indexOf("Reading this guide in a Pi session") > message.indexOf(document), "the surface addendum follows the document");
+		assert.match(message, /registers no tools/, "the addendum explains why no codecarto_\* tool exists here");
+		assert.match(message, /auto-validates and auto-completes/, "the addendum corrects the MCP drive loop");
+
+		const footer = message.slice(message.lastIndexOf("\n\n---\nOther guide topics:"));
 		assert.match(footer, /^\n\n---\nOther guide topics: .*handoff-contract.* \(run \/codecarto-guide <topic>\)\.$/);
 		assert.equal(footer.includes("codecarto_guide"), false, "the footer sends a Pi session to the slash command, not the MCP tool");
-
-		// Byte parity with MCP apart from the command the footer names.
-		const mcp = await server.handleGuide({});
-		assert.equal(message, mcp.content[0].text.replace("(call codecarto_guide with topic)", "(run /codecarto-guide <topic>)"));
 
 		assert.equal(lastNotification(ui).level, "info");
 		assert.match(lastNotification(ui).message, /overview/);
