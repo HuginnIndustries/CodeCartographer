@@ -104,6 +104,78 @@ export function parseYamlScalar(rawValue: string): unknown {
 	return trimmed;
 }
 
+/**
+ * Block scalar header: the `|`/`>` style plus an optional chomping indicator.
+ *
+ * Folded (`>`) is supported because a handoff is usually written by a model,
+ * and a model reaching for a wrapped prose field reaches for `>-` — the field
+ * `closeout_summary` is exactly that shape. Before this, `>-` fell through to
+ * the plain-scalar path and the block body then failed the indentation check,
+ * so valid YAML was rejected with a message that blamed whitespace (#211).
+ */
+interface BlockScalarHeader {
+	/** true for `|` (literal), false for `>` (folded). */
+	literal: boolean;
+	/** `-` strip, `+` keep, `` clip (a single trailing newline). */
+	chomp: "strip" | "keep" | "clip";
+}
+
+function parseBlockScalarHeader(rawValue: string): BlockScalarHeader | null {
+	const match = /^([|>])([-+]?)$/.exec(rawValue);
+	if (!match) return null;
+	return {
+		literal: match[1] === "|",
+		chomp: match[2] === "-" ? "strip" : match[2] === "+" ? "keep" : "clip",
+	};
+}
+
+/**
+ * Fold a block scalar's lines per YAML's folding rules: a single line break
+ * between two content lines becomes a space, and a run of k blank lines becomes
+ * k newlines. Lines indented deeper than the block's own content indent are
+ * "more indented" and keep their breaks literally, which is what lets a folded
+ * block hold an indented snippet without it being flattened onto one line.
+ */
+function foldBlockLines(blockLines: readonly string[]): string {
+	let result = "";
+	let pendingBreaks = 0;
+	let started = false;
+	let previousMoreIndented = false;
+
+	for (const line of blockLines) {
+		if (line.trim() === "") {
+			pendingBreaks++;
+			continue;
+		}
+		const moreIndented = /^[ \t]/.test(line);
+		if (!started) {
+			result = line;
+			started = true;
+			previousMoreIndented = moreIndented;
+			continue;
+		}
+		if (pendingBreaks > 0) {
+			result += "\n".repeat(pendingBreaks);
+			pendingBreaks = 0;
+		} else if (moreIndented || previousMoreIndented) {
+			result += "\n";
+		} else {
+			result += " ";
+		}
+		result += line;
+		previousMoreIndented = moreIndented;
+	}
+
+	return started ? result + "\n".repeat(pendingBreaks) : "";
+}
+
+function applyBlockScalar(blockLines: readonly string[], header: BlockScalarHeader): string {
+	const content = header.literal ? blockLines.join("\n") : foldBlockLines(blockLines);
+	if (header.chomp === "keep") return content;
+	const stripped = content.replace(/\n+$/, "");
+	return header.chomp === "strip" ? stripped : `${stripped}\n`;
+}
+
 export function parseSimpleYaml(raw: string): unknown {
 	const lines = raw.split(/\r?\n/);
 	let index = 0;
@@ -166,7 +238,8 @@ export function parseSimpleYaml(raw: string): unknown {
 			}
 			seen.add(key);
 
-			if (rawValue === "|" || rawValue === "|-") {
+			const blockHeader = parseBlockScalarHeader(rawValue);
+			if (blockHeader) {
 				const blockLines: string[] = [];
 				let contentIndent: number | null = null;
 				while (index < lines.length) {
@@ -182,8 +255,7 @@ export function parseSimpleYaml(raw: string): unknown {
 					blockLines.push(blockLine.slice(Math.min(contentIndent, blockIndent)));
 					index++;
 				}
-				const content = blockLines.join("\n").replace(/\n+$/, "");
-				assign(key, rawValue === "|" ? `${content}\n` : content);
+				assign(key, applyBlockScalar(blockLines, blockHeader));
 				continue;
 			}
 
