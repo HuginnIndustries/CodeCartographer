@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.19.4] — 2026-09-10
 
 ### Fixed
 
@@ -763,7 +763,8 @@ Initial public release under the MIT license.
 - Node 20+ is required.
 - The Pi runtime and `@sinclair/typebox` are peer dependencies — install them in your host environment, not as direct dependencies of this package.
 
-[Unreleased]: https://github.com/HuginnIndustries/CodeCartographer/compare/v0.19.3...HEAD
+[Unreleased]: https://github.com/HuginnIndustries/CodeCartographer/compare/v0.19.4...HEAD
+[0.19.4]: https://github.com/HuginnIndustries/CodeCartographer/compare/v0.19.3...v0.19.4
 [0.19.3]: https://github.com/HuginnIndustries/CodeCartographer/compare/v0.19.2...v0.19.3
 [0.19.2]: https://github.com/HuginnIndustries/CodeCartographer/compare/v0.19.1...v0.19.2
 [0.9.1]: https://github.com/HuginnIndustries/CodeCartographer/compare/v0.9.0...v0.9.1
