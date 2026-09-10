@@ -184,6 +184,31 @@ export function parseSimpleYaml(raw: string): unknown {
 		while (index < lines.length && isBlankOrComment(lines[index] ?? "")) index++;
 	};
 
+	/**
+	 * Read the body of a block scalar that opened on the line just consumed.
+	 * Shared by mapping values (`key: >-`) and sequence items (`- >-`): when only
+	 * the mapping path had it, a handoff whose `decisions:` list used `- >-`
+	 * still failed with the indentation error that #211 was supposed to end.
+	 */
+	const collectBlockScalarLines = (baseIndent: number): string[] => {
+		const blockLines: string[] = [];
+		let contentIndent: number | null = null;
+		while (index < lines.length) {
+			const blockLine = lines[index] ?? "";
+			if (blockLine.trim() === "") {
+				blockLines.push("");
+				index++;
+				continue;
+			}
+			const blockIndent = countIndent(blockLine);
+			if (blockIndent <= baseIndent) break;
+			contentIndent ??= blockIndent;
+			blockLines.push(blockLine.slice(Math.min(contentIndent, blockIndent)));
+			index++;
+		}
+		return blockLines;
+	};
+
 	const parseBlock = (indent: number): unknown => {
 		skipBlank();
 		if (index >= lines.length) return {};
@@ -240,22 +265,7 @@ export function parseSimpleYaml(raw: string): unknown {
 
 			const blockHeader = parseBlockScalarHeader(rawValue);
 			if (blockHeader) {
-				const blockLines: string[] = [];
-				let contentIndent: number | null = null;
-				while (index < lines.length) {
-					const blockLine = lines[index] ?? "";
-					if (blockLine.trim() === "") {
-						blockLines.push("");
-						index++;
-						continue;
-					}
-					const blockIndent = countIndent(blockLine);
-					if (blockIndent <= indent) break;
-					contentIndent ??= blockIndent;
-					blockLines.push(blockLine.slice(Math.min(contentIndent, blockIndent)));
-					index++;
-				}
-				assign(key, applyBlockScalar(blockLines, blockHeader));
+				assign(key, applyBlockScalar(collectBlockScalarLines(indent), blockHeader));
 				continue;
 			}
 
@@ -303,6 +313,12 @@ export function parseSimpleYaml(raw: string): unknown {
 				} else {
 					result.push(null);
 				}
+				continue;
+			}
+
+			const itemBlockHeader = parseBlockScalarHeader(rawItem);
+			if (itemBlockHeader) {
+				result.push(applyBlockScalar(collectBlockScalarLines(indent), itemBlockHeader));
 				continue;
 			}
 
