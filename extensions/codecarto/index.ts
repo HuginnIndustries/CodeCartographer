@@ -609,8 +609,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			await seedOrchestratorFiles(targetWorkspaceDir);
 
 			codecartoModeActive = true;
-			lastFeedbackLines = [`Initialized workspace with pipeline: ${getPipelineLabel(selectedPipelinePath)}`];
-			ctx.ui.notify(`Initialized CodeCartographer (${getPipelineLabel(selectedPipelinePath)})`, "info");
+			// Name the run command here: init is the moment someone needs it, and
+			// the flags that make a full run useful are not guessable from the
+			// command name alone.
+			lastFeedbackLines = [
+				`Initialized workspace with pipeline: ${getPipelineLabel(selectedPipelinePath)}`,
+				"Full run: `/codecarto-next --auto --llm-steer` — or `/codecarto-next` to watch one phase first.",
+			];
+			ctx.ui.notify(`Initialized CodeCartographer (${getPipelineLabel(selectedPipelinePath)}). Full run: /codecarto-next --auto --llm-steer`, "info");
 			// Render the initial dashboard (empty usage, all phases pending) so
 			// the user sees the file exist immediately after /codecarto-init.
 			void writeDashboard(ctx.cwd, PACKAGE_VERSION);
@@ -686,11 +692,23 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("codecarto-next", {
-		description: "Run the next eligible CodeCartographer phase as a sub-agent. Flags: --llm-steer / --no-llm-steer / --auto [--strict]",
+		description: "Run the next phase as a sub-agent. Full run: --auto --llm-steer. Add --strict to stop on PASS WITH GAPS.",
 		getArgumentCompletions: (prefix) => {
-			const items = ["--llm-steer", "--no-llm-steer", "--auto", "--strict"]
-				.filter((value) => value.startsWith(prefix))
-				.map((value) => ({ value, label: value }));
+			// Descriptions, not bare flag names: the completion list is the only
+			// place most users will ever see what these do, and the useful
+			// combination (--auto --llm-steer) is not guessable from the names.
+			// --strict is offered only once --auto is present, because on its own
+			// it is rejected — suggesting it standalone invites the one error the
+			// parser has.
+			const autoAlreadyTyped = prefix.includes("--auto");
+			const items = [
+				{ value: "--auto", label: "--auto", description: "run every remaining phase back to back (recommended with --llm-steer)" },
+				{ value: "--llm-steer", label: "--llm-steer", description: "seed each phase from the previous phase's closeout; no effect on the first phase" },
+				{ value: "--no-llm-steer", label: "--no-llm-steer", description: "force steering off when the workspace config turns it on" },
+				...(autoAlreadyTyped
+					? [{ value: "--strict", label: "--strict", description: "with --auto: stop on PASS WITH GAPS instead of advancing" }]
+					: []),
+			].filter((item) => item.value.startsWith(prefix.split(/\s+/).pop() ?? prefix));
 			return items.length > 0 ? items : null;
 		},
 		handler: async (args, ctx) => {

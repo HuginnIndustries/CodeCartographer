@@ -72,3 +72,28 @@ test("the MCP-only tool list matches the real gap between the surfaces", async (
 		assert.ok(PI_SURFACE_ADDENDUM.includes(name), `${name} must be named in the addendum`);
 	}
 });
+
+// The flags are the least discoverable part of the Pi surface: the useful
+// combination is not guessable from the names, and a model that has read the
+// guide is the thing best placed to tell the user about it.
+test("the addendum names the recommended full-run invocation", () => {
+	assert.match(PI_SURFACE_ADDENDUM, /\/codecarto-next --auto --llm-steer/);
+	assert.match(PI_SURFACE_ADDENDUM, /usual choice for a full run/i);
+});
+
+test("the addendum explains the flags a user will otherwise misread", () => {
+	assert.match(PI_SURFACE_ADDENDUM, /first phase is never steered/i, "the skip message reads as a failure otherwise");
+	assert.match(PI_SURFACE_ADDENDUM, /--strict` is only valid with `--auto/);
+	assert.match(PI_SURFACE_ADDENDUM, /extra model call per phase/i, "steering has a cost worth stating");
+});
+
+test("the addendum tells the agent to volunteer the run command after init", () => {
+	assert.match(PI_SURFACE_ADDENDUM, /tell them the run command rather than waiting to be asked/i);
+});
+
+test("the addendum points a stopped auto run at its summary", () => {
+	// The observed confusion: a phase wrote its artifact, the pipeline still
+	// showed 0 complete, and the reason was in the auto summary rather than in
+	// the phase result.
+	assert.match(PI_SURFACE_ADDENDUM, /Auto pipeline stopped at/);
+});
