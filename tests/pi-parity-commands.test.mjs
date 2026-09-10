@@ -410,3 +410,40 @@ test("/codecarto-amend previews the closures against status.yaml, applies on yes
 		assert.equal((await readFile(join(codecarto, "THREAD_LOG.md"), "utf8")).match(/amendment:scope-resolved/g).length, 1, "THREAD_LOG entry appears once");
 	});
 });
+
+// ---------- /codecarto-next flag discoverability ----------
+
+test("/codecarto-next completions describe each flag rather than echoing its name", async () => {
+	await withTempRepo(async (cwd) => {
+		const { commands } = createHarness(cwd);
+		const items = await commands.get("codecarto-next").getArgumentCompletions("--");
+
+		const byValue = new Map(items.map((item) => [item.value, item]));
+		for (const flag of ["--auto", "--llm-steer", "--no-llm-steer"]) {
+			assert.ok(byValue.has(flag), `${flag} should be offered`);
+			const { description } = byValue.get(flag);
+			assert.ok(description && description.length > 0, `${flag} needs a description`);
+			assert.notEqual(description, flag, "a description that repeats the flag teaches nothing");
+		}
+		assert.match(byValue.get("--auto").description, /recommended with --llm-steer/);
+	});
+});
+
+test("/codecarto-next offers --strict only once --auto is present", async () => {
+	await withTempRepo(async (cwd) => {
+		const { commands } = createHarness(cwd);
+		const bare = (await commands.get("codecarto-next").getArgumentCompletions("--")) ?? [];
+		assert.equal(bare.some((item) => item.value === "--strict"), false, "--strict alone is an error; do not suggest it");
+
+		const withAuto = (await commands.get("codecarto-next").getArgumentCompletions("--auto --")) ?? [];
+		assert.equal(withAuto.some((item) => item.value === "--strict"), true, "--strict is valid once --auto is typed");
+	});
+});
+
+test("/codecarto-init names the full-run command, which is not guessable from the command name", async () => {
+	await withTempRepo(async (cwd) => {
+		const { commands, ctx, ui } = createHarness(cwd);
+		await commands.get("codecarto-init").handler("lite", ctx);
+		assert.match(lastNotification(ui).message, /\/codecarto-next --auto --llm-steer/);
+	});
+});

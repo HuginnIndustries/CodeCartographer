@@ -118,3 +118,35 @@ test("a value that merely starts with a block indicator is still a plain scalar"
 	assert.equal(parseSimpleYaml("k: |x\n").k, "|x");
 	assert.equal(parseSimpleYaml("k: > not a header\n").k, "> not a header");
 });
+
+// A block scalar can also open a sequence item. Supporting it only as a mapping
+// value (#211) left `- >-` still failing with the same indentation error, which
+// is what a real handoff hit: an LLM writing a `decisions:` list reaches for
+// `- >-` per entry just as readily as it reaches for `key: >-`.
+
+test("a block scalar can open a sequence item", () => {
+	assert.deepEqual(parseSimpleYaml("k:\n  - >-\n    a\n    b\n").k, ["a b"]);
+	assert.deepEqual(parseSimpleYaml("k:\n  - |-\n    a\n    b\n").k, ["a\nb"]);
+});
+
+test("sequence block scalars sit alongside their siblings without swallowing them", () => {
+	const parsed = parseSimpleYaml(
+		"decisions:\n  - >-\n    first one wrapped\n    across two lines\n  - plain second\n  - >-\n    third one\nother: kept\n",
+	);
+	assert.deepEqual(parsed.decisions, ["first one wrapped across two lines", "plain second", "third one"]);
+	assert.equal(parsed.other, "kept", "the key after the sequence must survive");
+});
+
+test("a block scalar inside a sequence item's mapping still parses", () => {
+	const parsed = parseSimpleYaml(
+		"carry_forward:\n  - id: arch-CF1\n    description: >-\n      wrapped one\n      wrapped two\n    target_phase: contracts\n",
+	);
+	assert.deepEqual(parsed.carry_forward, [
+		{ id: "arch-CF1", description: "wrapped one wrapped two", target_phase: "contracts" },
+	]);
+});
+
+test("chomping works on sequence block scalars too", () => {
+	assert.deepEqual(parseSimpleYaml("k:\n  - >\n    a\n").k, ["a\n"]);
+	assert.deepEqual(parseSimpleYaml("k:\n  - >-\n    a\n").k, ["a"]);
+});

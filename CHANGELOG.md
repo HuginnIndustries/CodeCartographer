@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Block scalars still failed inside a sequence, so 0.19.3 did not actually finish #211.** The fix landed on mapping values (`key: >-`) and not on sequence items (`- >-`), and the second is the shape an LLM reaches for when it writes a list of prose entries — a `decisions:` list with one folded entry per decision. A real run hit it the same day 0.19.3 shipped: the architecture phase ran for 25 turns and 73 tool uses, wrote a `PASS WITH GAPS` artifact, and then auto-completion died on `Invalid YAML indentation near: The architecture map treats the legacy filesystem pipeline…`. The phase stayed `pending`, the dashboard showed 0/7 with the artifact and token usage recorded beside it, and the auto run stopped one phase in. `- |-` was never supported either, so this was not a regression from #211 so much as a hole it left. The block-scalar body reader is now one shared routine used by both the mapping and sequence paths rather than logic inlined in one of them, so the two cannot diverge again.
+
+### Changed
+
+- **`/codecarto-next`'s flags now explain themselves.** `--auto` and `--llm-steer` are independent — one decides how many phases run, the other decides what prompt each gets — and the combination that suits most full runs, `--auto --llm-steer`, was not guessable from a completion list that showed four bare flag names and a description that just listed them again. Completions now carry a sentence each (the `AutocompleteItem.description` field was there all along, unused), `--strict` is offered only once `--auto` is present rather than inviting the one combination the parser rejects, `/codecarto-init` names the full-run command at the moment someone needs it, and the Pi guide addendum documents all four flags with a table of the four sensible invocations. The addendum also tells the agent to volunteer that command after an init instead of waiting to be asked, and pre-empts two things that read as failures but are not: the first phase is never steered because there is no closeout to steer from, and a stopped auto run explains itself in its summary block rather than in the phase result.
+
+
 ## [0.19.3] — 2026-09-10
 
 ### Fixed
