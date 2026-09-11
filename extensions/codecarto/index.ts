@@ -11,6 +11,7 @@ import { writeDashboard } from "./dashboard-writer.ts";
 import { parseBroadsideFlags, KNOWN_BROADSIDE_TOKENS } from "./broadside-flags.ts";
 import { parseNextFlags } from "./next-flags.ts";
 import { buildPiGuideMessage } from "./guide-framing.ts";
+import { isCtxLive, notifyCtx } from "./notify.ts";
 import { phaseCompactionExtension } from "./phase-compaction.ts";
 
 import {
@@ -166,44 +167,6 @@ function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): str
 	}
 
 	return lines;
-}
-
-/**
- * Whether `ctx` still belongs to the live session.
- *
- * Pi invalidates an extension ctx when the session is replaced, and from then
- * on *every* property access on it throws — `ctx.cwd` and `ctx.hasUI` included.
- * A phase runs as a sub-agent, so by the time post-phase work fires, the ctx
- * captured when the command started may already be dead. That is an ordinary
- * outcome rather than an error: the UI it would have refreshed is gone with the
- * session. Callers skip their UI work instead of throwing into a `void` call
- * that nothing is waiting on.
- */
-function isCtxLive(ctx: ExtensionContext | ExtensionCommandContext): boolean {
-	try {
-		return typeof ctx.cwd === "string";
-	} catch {
-		return false;
-	}
-}
-
-/**
- * Notify through `ctx`, dropping the message if the session it belonged to is
- * gone.
- *
- * `ctx.hasUI` throws on a stale ctx rather than returning false, so the usual
- * `if (ctx.hasUI) ctx.ui.notify(...)` guard was itself a throw site. Inside a
- * promise chain that was worse than a lost message: the `.catch` handler threw
- * while reporting the original failure, and that second rejection had nothing
- * left to catch it.
- */
-function notifyCtx(
-	ctx: ExtensionContext | ExtensionCommandContext,
-	message: string,
-	level: "info" | "warning" | "error",
-): void {
-	if (!isCtxLive(ctx) || !ctx.hasUI) return;
-	ctx.ui.notify(message, level);
 }
 
 function setUiState(ctx: ExtensionContext | ExtensionCommandContext, state: WorkspaceState | null, extraLines: string[] = []): void {
@@ -403,7 +366,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			setUiState(ctx, null);
 			// The ctx can die between the read above and here, so the error
 			// path must not assume it is still usable either.
-			if (notifyOnError && isCtxLive(ctx) && ctx.hasUI) ctx.ui.notify(message, "error");
+			if (notifyOnError) notifyCtx(ctx, message, "error");
 			return null;
 		}
 	};
@@ -463,7 +426,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		if (!(await pathExists(workspaceDir))) return undefined;
 
 		if (event.toolName === "bash") {
-			if (ctx.hasUI) ctx.ui.notify("Blocked bash in CodeCartographer mode", "warning");
+			notifyCtx(ctx, "Blocked bash in CodeCartographer mode", "warning");
 			return { block: true, reason: "CodeCartographer mode disables bash to keep source analysis read-only." };
 		}
 
@@ -480,9 +443,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			allowedRoots.map((allowedRoot) => isWithinPathResolved(targetPath, allowedRoot)),
 		);
 		if (!withinAllowed.some((result) => result)) {
-				if (ctx.hasUI) {
-					ctx.ui.notify(`Blocked ${event.toolName} outside .codecarto/ or configured library: ${inputPath}`, "warning");
-				}
+				notifyCtx(ctx, `Blocked ${event.toolName} outside .codecarto/ or configured library: ${inputPath}`, "warning");
 				return { block: true, reason: `CodeCartographer mode only allows ${event.toolName} within .codecarto/ or the configured CodeCartographer library.` };
 			}
 		}
@@ -495,7 +456,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const workspaceDir = join(ctx.cwd, ".codecarto");
 			if (!(await pathExists(join(workspaceDir, "workflow", "status.yaml")))) {
-				ctx.ui.notify("No existing CodeCartographer workspace found. Run /codecarto-init first.", "warning");
+				notifyCtx(ctx, "No existing CodeCartographer workspace found. Run /codecarto-init first.", "warning");
 				return;
 			}
 			try {
@@ -504,10 +465,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				lastFeedbackLines = [`Opened existing workspace: ${getPipelineLabel(state.status.pipeline)}`];
 				pi.setActiveTools(SAFE_TOOL_NAMES);
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);
-				ctx.ui.notify("Opened existing CodeCartographer workspace without resetting state.", "info");
+				notifyCtx(ctx, "Opened existing CodeCartographer workspace without resetting state.", "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				ctx.ui.notify(`Unable to open CodeCartographer workspace: ${message}`, "error");
+				notifyCtx(ctx, `Unable to open CodeCartographer workspace: ${message}`, "error");
 			}
 		},
 	});
@@ -517,7 +478,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const interviewPath = join(ctx.cwd, ".codecarto", "findings", "vision-capture", "INTERVIEW.md");
 			if (!(await pathExists(interviewPath))) {
-				ctx.ui.notify("Vision interview skill not found. Run /codecarto-init synthesis first.", "warning");
+				notifyCtx(ctx, "Vision interview skill not found. Run /codecarto-init synthesis first.", "warning");
 				return;
 			}
 
@@ -542,7 +503,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			}
 
 			lastFeedbackLines = ["Vision interview started — answer the questions in chat."];
-			ctx.ui.notify("Vision interview queued — answer the questions in the chat.", "info");
+			notifyCtx(ctx, "Vision interview queued — answer the questions in the chat.", "info");
 		},
 	});
 
@@ -558,14 +519,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const trimmedArgs = args.trim();
 			const pipelineChoice = resolvePipelineChoice(trimmedArgs);
 			if (trimmedArgs && !pipelineChoice) {
-				ctx.ui.notify(`Unknown pipeline: ${trimmedArgs}`, "error");
+				notifyCtx(ctx, `Unknown pipeline: ${trimmedArgs}`, "error");
 				return;
 			}
 			const targetWorkspaceDir = join(ctx.cwd, ".codecarto");
 			const sourceWorkspaceDir = packagedWorkspaceDir;
 
 			if (!(await pathExists(sourceWorkspaceDir))) {
-				ctx.ui.notify("Packaged .codecarto assets are missing.", "error");
+				notifyCtx(ctx, "Packaged .codecarto assets are missing.", "error");
 				return;
 			}
 
@@ -580,7 +541,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					if (!overwrite) return;
 					const backupDir = join(ctx.cwd, `.codecarto-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`);
 					await rename(targetWorkspaceDir, backupDir);
-					if (ctx.hasUI) ctx.ui.notify(`Backed up existing workspace to ${basename(backupDir)}/`, "info");
+					notifyCtx(ctx, `Backed up existing workspace to ${basename(backupDir)}/`, "info");
 				}
 			}
 
@@ -595,7 +556,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const resolvedPipelinePath = join(targetWorkspaceDir, selectedPipelinePath);
 
 			if (!(await pathExists(resolvedPipelinePath))) {
-				ctx.ui.notify(`Pipeline not found: ${selectedPipelinePath}`, "error");
+				notifyCtx(ctx, `Pipeline not found: ${selectedPipelinePath}`, "error");
 				return;
 			}
 
@@ -616,7 +577,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				`Initialized workspace with pipeline: ${getPipelineLabel(selectedPipelinePath)}`,
 				"Full run: `/codecarto-next --auto --llm-steer` — or `/codecarto-next` to watch one phase first.",
 			];
-			ctx.ui.notify(`Initialized CodeCartographer (${getPipelineLabel(selectedPipelinePath)}). Full run: /codecarto-next --auto --llm-steer`, "info");
+			notifyCtx(ctx, `Initialized CodeCartographer (${getPipelineLabel(selectedPipelinePath)}). Full run: /codecarto-next --auto --llm-steer`, "info");
 			// Render the initial dashboard (empty usage, all phases pending) so
 			// the user sees the file exist immediately after /codecarto-init.
 			void writeDashboard(ctx.cwd, PACKAGE_VERSION);
@@ -635,7 +596,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const nextPhase = getNextEligiblePhase(state)?.id ?? "complete";
 			lastFeedbackLines = [`Current phase: ${nextPhase}`, `Pipeline: ${getPipelineLabel(state.status.pipeline)}`];
 			setUiState(ctx, state, lastFeedbackLines);
-			ctx.ui.notify(`CodeCartographer phase: ${nextPhase}`, "info");
+			notifyCtx(ctx, `CodeCartographer phase: ${nextPhase}`, "info");
 		},
 	});
 
@@ -650,13 +611,13 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const trimmedArgs = args.trim();
 			if (!trimmedArgs) {
-				ctx.ui.notify("Usage: /codecarto-switch-pipeline <variant> (e.g. lite, full, synthesis)", "warning");
+				notifyCtx(ctx, "Usage: /codecarto-switch-pipeline <variant> (e.g. lite, full, synthesis)", "warning");
 				return;
 			}
 
 			const pipelineChoice = resolvePipelineChoice(trimmedArgs);
 			if (!pipelineChoice) {
-				ctx.ui.notify(`Unknown pipeline: ${trimmedArgs}`, "error");
+				notifyCtx(ctx, `Unknown pipeline: ${trimmedArgs}`, "error");
 				return;
 			}
 
@@ -665,7 +626,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			const currentPipeline = state.status.pipeline;
 			if (currentPipeline === pipelineChoice) {
-				ctx.ui.notify(`Already on pipeline: ${getPipelineLabel(pipelineChoice)}`, "info");
+				notifyCtx(ctx, `Already on pipeline: ${getPipelineLabel(pipelineChoice)}`, "info");
 				return;
 			}
 
@@ -680,13 +641,13 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 				lastFeedbackLines = lines;
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);
-				ctx.ui.notify(`Switched to pipeline: ${getPipelineLabel(pipelineChoice)}`, "info");
+				notifyCtx(ctx, `Switched to pipeline: ${getPipelineLabel(pipelineChoice)}`, "info");
 				void writeDashboard(ctx.cwd, PACKAGE_VERSION);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				lastFeedbackLines = [message];
 				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify(message, "error");
+				notifyCtx(ctx, message, "error");
 			}
 		},
 	});
@@ -714,11 +675,11 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const flags = parseNextFlags(args);
 			if (flags.error) {
-				ctx.ui.notify(flags.error, "error");
+				notifyCtx(ctx, flags.error, "error");
 				return;
 			}
 			if (flags.unknown.length > 0) {
-				ctx.ui.notify(`Unknown /codecarto-next flag: ${flags.unknown.join(" ")}`, "error");
+				notifyCtx(ctx, `Unknown /codecarto-next flag: ${flags.unknown.join(" ")}`, "error");
 				return;
 			}
 
@@ -726,7 +687,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (!state) return;
 
 			if (flags.auto) {
-				ctx.ui.notify(`Auto pipeline${flags.strict ? " (strict)" : ""} running…`, "info");
+				notifyCtx(ctx, `Auto pipeline${flags.strict ? " (strict)" : ""} running…`, "info");
 				const result = await runAuto(ctx, pi, state, {
 					strict: flags.strict,
 					llmSteerOverride: flags.llmSteerOverride,
@@ -748,7 +709,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				});
 				lastFeedbackLines = [`Auto pipeline ${result.outcome}: ${result.reason}`];
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);
-				ctx.ui.notify(`Auto pipeline ${result.outcome}: ${result.phasesRun.length}/${result.totalPhases} phases.`, result.outcome === "complete" ? "info" : "warning");
+				notifyCtx(ctx, `Auto pipeline ${result.outcome}: ${result.phasesRun.length}/${result.totalPhases} phases.`, result.outcome === "complete" ? "info" : "warning");
 				return;
 			}
 
@@ -756,7 +717,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (!phase) {
 				lastFeedbackLines = ["All phases complete."];
 				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify("All CodeCartographer phases are complete.", "info");
+				notifyCtx(ctx, "All CodeCartographer phases are complete.", "info");
 				return;
 			}
 
@@ -767,14 +728,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				const message = error instanceof Error ? error.message : String(error);
 				lastFeedbackLines = [message];
 				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify(message, error instanceof PhasePreflightError ? "warning" : "error");
+				notifyCtx(ctx, message, error instanceof PhasePreflightError ? "warning" : "error");
 				return;
 			}
 
 			// Reject re-entry: don't spawn a duplicate runner for a phase that's
 			// already in flight from a previous /codecarto-next invocation.
 			if (isPhaseRunning(phase.id)) {
-				ctx.ui.notify(`Phase ${phase.id} is already running.`, "warning");
+				notifyCtx(ctx, `Phase ${phase.id} is already running.`, "warning");
 				return;
 			}
 
@@ -856,7 +817,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const phaseId = args.trim();
 			if (!phaseId) {
-				ctx.ui.notify("Usage: /codecarto-phase <phase>", "warning");
+				notifyCtx(ctx, "Usage: /codecarto-phase <phase>", "warning");
 				return;
 			}
 
@@ -865,7 +826,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			const phase = resolvePhase(state, phaseId);
 			if (!phase) {
-				ctx.ui.notify(`Unknown phase: ${phaseId}`, "error");
+				notifyCtx(ctx, `Unknown phase: ${phaseId}`, "error");
 				return;
 			}
 
@@ -874,7 +835,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				prompt = await buildPhasePrompt(state, phase, true);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				ctx.ui.notify(message, error instanceof PhasePreflightError ? "warning" : "error");
+				notifyCtx(ctx, message, error instanceof PhasePreflightError ? "warning" : "error");
 				return;
 			}
 			if (ctx.isIdle()) {
@@ -885,7 +846,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			lastFeedbackLines = [`Queued explicit phase prompt for ${phase.id}`];
 			setUiState(ctx, state, lastFeedbackLines);
-			ctx.ui.notify(`Queued CodeCartographer phase: ${phase.id}`, "info");
+			notifyCtx(ctx, `Queued CodeCartographer phase: ${phase.id}`, "info");
 		},
 	});
 
@@ -899,14 +860,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (validation instanceof Error) {
 				lastFeedbackLines = [validation.message];
 				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify(validation.message, "error");
+				notifyCtx(ctx, validation.message, "error");
 				return;
 			}
 			lastFeedbackLines = buildValidationSummary(validation);
 			setUiState(ctx, state, lastFeedbackLines);
 
 			const level = validation.overall === "FAIL" || validation.overall === "MISSING" ? "error" : validation.overall === "PASS WITH GAPS" ? "warning" : "info";
-			ctx.ui.notify(`Validation ${validation.phaseId}: ${validation.overall}`, level);
+			notifyCtx(ctx, `Validation ${validation.phaseId}: ${validation.overall}`, level);
 		},
 	});
 
@@ -920,13 +881,13 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (validation instanceof Error) {
 				lastFeedbackLines = [validation.message];
 				setUiState(ctx, currentState, lastFeedbackLines);
-				ctx.ui.notify(validation.message, "error");
+				notifyCtx(ctx, validation.message, "error");
 				return;
 			}
 			if (validation.overall === "FAIL" || validation.overall === "MISSING") {
 				lastFeedbackLines = buildValidationSummary(validation);
 				setUiState(ctx, currentState, lastFeedbackLines);
-				ctx.ui.notify(`Cannot complete ${validation.phaseId}: ${validation.overall}`, "error");
+				notifyCtx(ctx, `Cannot complete ${validation.phaseId}: ${validation.overall}`, "error");
 				return;
 			}
 
@@ -944,7 +905,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				const message = error instanceof Error ? error.message : String(error);
 				lastFeedbackLines = [`Completion refused: ${message}`];
 				setUiState(ctx, currentState, lastFeedbackLines);
-				ctx.ui.notify(message, "error");
+				notifyCtx(ctx, message, "error");
 				return;
 			}
 			const { updatedState, closeoutNotice, warnings } = completion;
@@ -958,9 +919,9 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const notes = [...(validation.warnings ?? []), ...warnings];
 			for (const note of notes) lastFeedbackLines.push(`NOTE: ${note} Non-gating.`);
 			setUiState(ctx, updatedState, lastFeedbackLines);
-			ctx.ui.notify(`Marked ${validation.phaseId} complete`, validation.overall === "PASS WITH GAPS" || notes.length > 0 ? "warning" : "info");
-			if (closeoutNotice) ctx.ui.notify(closeoutNotice, "info");
-			for (const note of notes) ctx.ui.notify(note, "warning");
+			notifyCtx(ctx, `Marked ${validation.phaseId} complete`, validation.overall === "PASS WITH GAPS" || notes.length > 0 ? "warning" : "info");
+			if (closeoutNotice) notifyCtx(ctx, closeoutNotice, "info");
+			for (const note of notes) notifyCtx(ctx, note, "warning");
 		},
 	});
 
@@ -971,7 +932,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (!skillName) {
 				const available = await listSkillNames(join(ctx.cwd, ".codecarto"));
 				const hint = available.length > 0 ? ` (available: ${available.join(", ")})` : "";
-				ctx.ui.notify(`Usage: /codecarto-skill <name>${hint}`, "warning");
+				notifyCtx(ctx, `Usage: /codecarto-skill <name>${hint}`, "warning");
 				return;
 			}
 
@@ -982,7 +943,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (skillName === BROADSIDE_SKILL_NAME) {
 				const skill = await readBroadsideSkill(ctx.cwd).catch(() => null);
 				if (!skill) {
-					ctx.ui.notify("Broad-Side reading guide not found. Reinstall codecartographer-pi.", "error");
+					notifyCtx(ctx, "Broad-Side reading guide not found. Reinstall codecartographer-pi.", "error");
 					return;
 				}
 				const message = [
@@ -995,7 +956,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				} else {
 					pi.sendUserMessage(message, { deliverAs: "followUp" });
 				}
-				ctx.ui.notify("Queued the Broad-Side reading guide", "info");
+				notifyCtx(ctx, "Queued the Broad-Side reading guide", "info");
 				return;
 			}
 
@@ -1004,7 +965,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			const nextPhase = getNextEligiblePhase(state);
 			if (nextPhase) {
-				ctx.ui.notify(
+				notifyCtx(ctx, 
 					`Cannot run skill: pipeline is not complete (next phase: ${nextPhase.id}). Finish the pipeline before running post-pipeline skills.`,
 					"error",
 				);
@@ -1015,7 +976,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (!(await pathExists(skillFile))) {
 				const available = await listSkillNames(state.workspaceDir);
 				const hint = available.length > 0 ? ` (available: ${available.join(", ")})` : " (no skills installed)";
-				ctx.ui.notify(
+				notifyCtx(ctx, 
 					`Unknown skill: ${skillName}${hint}. The Broad-Side reading guide is served as \`${BROADSIDE_SKILL_NAME}\` and is not pipeline-gated.`,
 					"error",
 				);
@@ -1031,7 +992,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			lastFeedbackLines = [`Queued post-pipeline skill: ${skillName}`];
 			setUiState(ctx, state, lastFeedbackLines);
-			ctx.ui.notify(`Queued CodeCartographer skill: ${skillName}`, "info");
+			notifyCtx(ctx, `Queued CodeCartographer skill: ${skillName}`, "info");
 		},
 	});
 
@@ -1069,7 +1030,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			lastFeedbackLines = lines;
 			setUiState(ctx, state, lastFeedbackLines);
-			ctx.ui.notify(
+			notifyCtx(ctx, 
 				skills.length > 0
 					? `${skills.length} post-pipeline skill${skills.length === 1 ? "" : "s"}: ${skills.join(", ")}`
 					: "No post-pipeline skills installed.",
@@ -1096,7 +1057,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				topics = await listGuideTopics();
 				document = await readGuide(args.trim() || undefined);
 			} catch (error) {
-				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				notifyCtx(ctx, error instanceof Error ? error.message : String(error), "error");
 				return;
 			}
 
@@ -1113,7 +1074,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			lastFeedbackLines = [`Queued the CodeCartographer guide: ${document.topic}`];
 			if (codecartoModeActive) void refreshWorkspaceUi(ctx, lastFeedbackLines).catch(() => undefined);
-			ctx.ui.notify(`Queued the CodeCartographer guide (${document.topic})`, "info");
+			notifyCtx(ctx, `Queued the CodeCartographer guide (${document.topic})`, "info");
 		},
 	});
 
@@ -1128,7 +1089,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const flags = parseBroadsideFlags(args);
 			if (flags.unknown.length > 0) {
-				ctx.ui.notify(
+				notifyCtx(ctx, 
 					`Unknown /codecarto-broadside argument: ${flags.unknown.join(" ")}. ` +
 						`Actions: submit, collect, status, models. Lenses: ${BROADSIDE_LENS_IDS.join(", ")}.`,
 					"error",
@@ -1136,7 +1097,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 			if (flags.error) {
-				ctx.ui.notify(flags.error, "error");
+				notifyCtx(ctx, flags.error, "error");
 				return;
 			}
 
@@ -1156,7 +1117,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					// the result can live, so it holds it instead of being cleared.
 					ctx.ui.setWidget(BROADSIDE_WIDGET_ID, ["Broad-Side", ...lines]);
 				}
-				ctx.ui.notify(notice, level);
+				notifyCtx(ctx, notice, level);
 			};
 
 			if (flags.action === "status") {
@@ -1171,7 +1132,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			const apiKey = resolveBroadsideKey(config.apiKey);
 			if (!apiKey) {
-				ctx.ui.notify(
+				notifyCtx(ctx, 
 					"No OpenRouter API key. Set OPENROUTER_API_KEY in the environment, or add api_key to " +
 						".codecarto/broadside/config.yaml. (A slash command takes no key: it would land in the transcript.)",
 					"error",
@@ -1180,7 +1141,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			}
 
 			if (flags.action === "models") {
-				ctx.ui.notify("Fetching the OpenRouter batch-model catalog…", "info");
+				notifyCtx(ctx, "Fetching the OpenRouter batch-model catalog…", "info");
 				try {
 					const { entries, benchmarks } = await listBatchModels(broadsideDir, config, apiKey, {
 						includeBenchmarks: flags.benchmarks,
@@ -1190,7 +1151,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						`Broad-Side: ${entries.length} batch model${entries.length === 1 ? "" : "s"} listed`,
 					);
 				} catch (error) {
-					ctx.ui.notify(`Model catalog lookup failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+					notifyCtx(ctx, `Model catalog lookup failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 				}
 				return;
 			}
@@ -1240,10 +1201,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				} catch (error) {
 					if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
 					if (error instanceof BroadsideCancelledError) {
-						ctx.ui.notify("Broad-Side cancelled. Nothing was submitted.", "info");
+						notifyCtx(ctx, "Broad-Side cancelled. Nothing was submitted.", "info");
 						return;
 					}
-					ctx.ui.notify(`Broad-Side submit failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+					notifyCtx(ctx, `Broad-Side submit failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 					return;
 				}
 
@@ -1254,7 +1215,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					return;
 				}
 
-				ctx.ui.notify(`Broad-Side submitted run ${submit.runId}; polling for up to ${waitSeconds}s…`, "info");
+				notifyCtx(ctx, `Broad-Side submitted run ${submit.runId}; polling for up to ${waitSeconds}s…`, "info");
 				try {
 					const collect = await runBroadsideCollect(ctx.cwd, apiKey, {
 						waitMs,
@@ -1268,7 +1229,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
 					// The batches are submitted and paid for either way — say so, so
 					// nobody re-submits a run that is already in flight.
-					ctx.ui.notify(
+					notifyCtx(ctx, 
 						`Broad-Side submitted run ${submit.runId}, but collect failed: ` +
 							`${error instanceof Error ? error.message : String(error)}. Retry with /codecarto-broadside collect.`,
 						"error",
@@ -1293,7 +1254,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				finish(lines, `Broad-Side ${collect.status}: ${collect.resultCount} result${collect.resultCount === 1 ? "" : "s"} saved`, done ? "info" : "warning");
 			} catch (error) {
 				if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
-				ctx.ui.notify(`Broad-Side collect failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+				notifyCtx(ctx, `Broad-Side collect failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 			}
 		},
 	});
@@ -1306,23 +1267,23 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			const config = await loadCodecartoConfig(state.workspaceDir);
 			if (!config.library.path) {
-				ctx.ui.notify("No library.path is configured. Create a library directory with a .codecarto-library marker, then set library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml.", "error");
+				notifyCtx(ctx, "No library.path is configured. Create a library directory with a .codecarto-library marker, then set library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml.", "error");
 				return;
 			}
 			const marker = await discoverLibrary(config.library.path);
 			if (!marker) {
-				ctx.ui.notify(`No CodeCartographer library at ${config.library.path} (missing .codecarto-library). Create a .codecarto-library marker file in that directory.`, "error");
+				notifyCtx(ctx, `No CodeCartographer library at ${config.library.path} (missing .codecarto-library). Create a .codecarto-library marker file in that directory.`, "error");
 				return;
 			}
 
 			const phase = resolvePhase(state, "reimplementation-spec");
 			if (!phase?.primary_output) {
-				ctx.ui.notify("The active pipeline does not produce a reimplementation spec to publish.", "error");
+				notifyCtx(ctx, "The active pipeline does not produce a reimplementation spec to publish.", "error");
 				return;
 			}
 			const specPath = join(state.workspaceDir, phase.primary_output);
 			if (!(await pathExists(specPath))) {
-				ctx.ui.notify(`Reimplementation spec is missing: .codecarto/${phase.primary_output}`, "error");
+				notifyCtx(ctx, `Reimplementation spec is missing: .codecarto/${phase.primary_output}`, "error");
 				return;
 			}
 
@@ -1334,7 +1295,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const headline = derivePublishHeadline(spec, ctx.cwd);
 			const namespace = marker.namespaced ? config.library.namespace ?? undefined : undefined;
 			if (marker.namespaced && !namespace) {
-				ctx.ui.notify("The configured library is namespaced; set library.namespace before publishing.", "error");
+				notifyCtx(ctx, "The configured library is namespaced; set library.namespace before publishing.", "error");
 				return;
 			}
 			const label = `${namespace ? `${namespace}/` : ""}${slug}`;
@@ -1383,7 +1344,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 								`Library entry ${label} records source_repo "${error.recorded}", but this publish carries "${error.incoming}". If the repository genuinely moved (rename, org transfer, host change — or this is the first publish since CodeCartographer began recording the git remote instead of the local directory), answer yes and this spec is appended as the entry's next version. If these are two different projects that share a directory name, answer no: nothing is written, and the second project needs a distinct slug (codecarto_publish on MCP accepts one). Did the repository move?`,
 							);
 							if (!moved) {
-								ctx.ui.notify("Publish cancelled. Nothing was written.", "info");
+								notifyCtx(ctx, "Publish cancelled. Nothing was written.", "info");
 								return;
 							}
 							options.allowSourceRepoChange = true;
@@ -1395,7 +1356,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 								`This spec's confidentiality is "${error.entryConfidentiality}" (CodeCartographer's default; /codecarto-publish declares none), but the library "${marker.name}" has visibility "${error.libraryVisibility}". Publishing would expose it to everyone that library reaches. Publish anyway?`,
 							);
 							if (!publishAnyway) {
-								ctx.ui.notify("Publish cancelled. Nothing was written.", "info");
+								notifyCtx(ctx, "Publish cancelled. Nothing was written.", "info");
 								return;
 							}
 							options.allowConfidentialityMismatch = true;
@@ -1407,10 +1368,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				lastFeedbackLines = [`Published ${result.namespace ? `${result.namespace}/` : ""}${result.slug} v${result.version}`, result.isNewVersion ? "New content version." : "Metadata-only update (content unchanged)."];
 				await writeDashboard(ctx.cwd, PACKAGE_VERSION);
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);
-				ctx.ui.notify(`Published ${result.namespace ? `${result.namespace}/` : ""}${result.slug} v${result.version}.`, "info");
+				notifyCtx(ctx, `Published ${result.namespace ? `${result.namespace}/` : ""}${result.slug} v${result.version}.`, "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				ctx.ui.notify(`Unable to publish: ${message}`, "error");
+				notifyCtx(ctx, `Unable to publish: ${message}`, "error");
 			}
 		},
 	});
@@ -1424,7 +1385,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const namespace = namespaceIdx >= 0 ? parts[namespaceIdx + 1] : null;
 
 			if (!pathArg) {
-				ctx.ui.notify("Usage: /codecarto-library-init <path> [--namespace <name>]", "warning");
+				notifyCtx(ctx, "Usage: /codecarto-library-init <path> [--namespace <name>]", "warning");
 				return;
 			}
 
@@ -1444,13 +1405,11 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					? `Library already exists at ${libraryPath} (marker preserved). Config updated.`
 					: `Created library at ${libraryPath} with marker "${result.marker.name}".`;
 				lastFeedbackLines = [msg, `Config written to ${configPath}`];
-				if (ctx.hasUI) {
-					ctx.ui.notify(msg, "info");
-					ctx.ui.notify(`Config written to ${configPath}`, "info");
-				}
+				notifyCtx(ctx, msg, "info");
+				notifyCtx(ctx, `Config written to ${configPath}`, "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				ctx.ui.notify(`Library init failed: ${message}`, "error");
+				notifyCtx(ctx, `Library init failed: ${message}`, "error");
 			}
 		},
 	});
@@ -1479,7 +1438,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			lastFeedbackLines = lines;
 			if (state) setUiState(ctx, state, lastFeedbackLines);
-			ctx.ui.notify("Configuration shown in status widget.", "info");
+			notifyCtx(ctx, "Configuration shown in status widget.", "info");
 		},
 	});
 
@@ -1493,7 +1452,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (usage.runs.length === 0) {
 				lastFeedbackLines = ["No phase runs recorded yet."];
 				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify("No phase runs recorded yet.", "info");
+				notifyCtx(ctx, "No phase runs recorded yet.", "info");
 				return;
 			}
 
@@ -1518,7 +1477,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 			lastFeedbackLines = lines;
 			setUiState(ctx, state, lastFeedbackLines);
-			ctx.ui.notify(`CodeCartographer usage: ${totals.runs} run${totals.runs === 1 ? "" : "s"}, ${formatUsageTokens(totals.tokens.input + totals.tokens.output)} tokens total`, "info");
+			notifyCtx(ctx, `CodeCartographer usage: ${totals.runs} run${totals.runs === 1 ? "" : "s"}, ${formatUsageTokens(totals.tokens.input + totals.tokens.output)} tokens total`, "info");
 		},
 	});
 
@@ -1533,7 +1492,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const flags = parseDashboardFlags(args);
 			if (flags.unknown.length > 0) {
-				ctx.ui.notify(`Unknown /codecarto-dashboard flag: ${flags.unknown.join(" ")}`, "error");
+				notifyCtx(ctx, `Unknown /codecarto-dashboard flag: ${flags.unknown.join(" ")}`, "error");
 				return;
 			}
 
@@ -1541,19 +1500,19 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (!state) return;
 
 			if (flags.narrate) {
-				ctx.ui.notify(`Narrating dashboard via LLM…`, "info");
+				notifyCtx(ctx, `Narrating dashboard via LLM…`, "info");
 				const result = await narrateDashboard(ctx, state);
 				if (result.used) {
-					ctx.ui.notify("Narration written to .codecarto/.dashboard-narration.local.md", "info");
+					notifyCtx(ctx, "Narration written to .codecarto/.dashboard-narration.local.md", "info");
 				} else {
-					ctx.ui.notify(`LLM narration skipped (${result.skipReason}); rendering deterministic dashboard.`, "warning");
+					notifyCtx(ctx, `LLM narration skipped (${result.skipReason}); rendering deterministic dashboard.`, "warning");
 				}
 			}
 
 			await writeDashboard(ctx.cwd, PACKAGE_VERSION);
 			lastFeedbackLines = ["Dashboard regenerated: .codecarto/dashboard.html"];
 			setUiState(ctx, state, lastFeedbackLines);
-			ctx.ui.notify("Dashboard regenerated: .codecarto/dashboard.html", "info");
+			notifyCtx(ctx, "Dashboard regenerated: .codecarto/dashboard.html", "info");
 		},
 	});
 
@@ -1569,7 +1528,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			try {
 				files = await listScaffoldRefreshFiles();
 			} catch (error) {
-				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				notifyCtx(ctx, error instanceof Error ? error.message : String(error), "error");
 				return;
 			}
 			const approved = await ctx.ui.confirm(
@@ -1577,7 +1536,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				describeScaffoldRefreshPreview(files, state.scaffoldVersion),
 			);
 			if (!approved) {
-				ctx.ui.notify("Scaffold refresh cancelled. Nothing was written.", "info");
+				notifyCtx(ctx, "Scaffold refresh cancelled. Nothing was written.", "info");
 				return;
 			}
 
@@ -1591,12 +1550,12 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				];
 				// Re-read state so the widget's staleness line clears with the marker.
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);
-				ctx.ui.notify(`Refreshed ${result.written.length} framework-owned file(s) (${transition}).`, "info");
+				notifyCtx(ctx, `Refreshed ${result.written.length} framework-owned file(s) (${transition}).`, "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				lastFeedbackLines = [message];
 				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify(`Scaffold refresh failed: ${message}`, "error");
+				notifyCtx(ctx, `Scaffold refresh failed: ${message}`, "error");
 			}
 		},
 	});
@@ -1619,12 +1578,12 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				const hint = staged.length > 0
 					? ` (staged: ${staged.join(", ")})`
 					: " — write .codecarto/scratch/amendments/<name>.yaml first (see templates/amendment.yaml)";
-				ctx.ui.notify(`Usage: /codecarto-amend <name>${hint}`, "warning");
+				notifyCtx(ctx, `Usage: /codecarto-amend <name>${hint}`, "warning");
 				return;
 			}
 			const name = resolveAmendmentName(args, ctx.cwd);
 			if (!name) {
-				ctx.ui.notify(
+				notifyCtx(ctx, 
 					`Amendments are read from .codecarto/scratch/amendments/ only; pass the amendment name or a path inside that directory, not ${args.trim()}.`,
 					"error",
 				);
@@ -1637,12 +1596,12 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			try {
 				amendment = await loadAmendmentFile(name, state.workspaceDir);
 			} catch (error) {
-				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				notifyCtx(ctx, error instanceof Error ? error.message : String(error), "error");
 				return;
 			}
 			const nextPhase = getNextEligiblePhase(state);
 			if (nextPhase) {
-				ctx.ui.notify(
+				notifyCtx(ctx, 
 					`Cannot amend: the pipeline is not complete (next phase: ${nextPhase.id}). `
 						+ "Resolve open questions and routed items through that phase's handoff (open_question_closures / carry_forward_closures) instead.",
 					"error",
@@ -1657,7 +1616,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				describeAmendmentPreview(amendment, state),
 			);
 			if (!approved) {
-				ctx.ui.notify(`Amendment ${amendment.slug} cancelled. Nothing was written.`, "info");
+				notifyCtx(ctx, `Amendment ${amendment.slug} cancelled. Nothing was written.`, "info");
 				return;
 			}
 
@@ -1679,7 +1638,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				lastFeedbackLines = lines;
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);
 				const closed = applied.openQuestionsClosed.length + applied.postPipelineClosed.length;
-				ctx.ui.notify(
+				notifyCtx(ctx, 
 					`Amendment ${amendment.slug} applied: ${applied.openQuestionsClosed.length} open question(s) and ${applied.postPipelineClosed.length} post-pipeline item(s) closed`
 						+ `${applied.unknownIds.length > 0 ? `; ${applied.unknownIds.length} id(s) matched nothing` : ""}.`,
 					closed === 0 || applied.unknownIds.length > 0 ? "warning" : "info",
@@ -1688,7 +1647,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				const message = error instanceof Error ? error.message : String(error);
 				lastFeedbackLines = [message];
 				setUiState(ctx, state, lastFeedbackLines);
-				ctx.ui.notify(`Amendment failed: ${message}`, "error");
+				notifyCtx(ctx, `Amendment failed: ${message}`, "error");
 			}
 		},
 	});
