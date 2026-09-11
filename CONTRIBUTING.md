@@ -111,9 +111,9 @@ Two things make a headless run look like a broken build when it is not. Both cos
 script -qec "pi -e /abs/path/to/extensions/codecarto/index.ts -p '/codecarto-init lite' '/codecarto-next --auto'" /dev/null
 ```
 
-**Chain commands in one session, led by `/codecarto-init` or `/codecarto-open`.** `codecartoModeActive` is process-local and `session_start` resets it to `false`, so a one-shot `pi -e <ext> -p '/codecarto-status'` exits 0 having silently refused — the refusal goes through `ctx.ui.notify`, which renders nothing under `-p`. Only those two commands set the flag.
+**Chain commands in one session, led by `/codecarto-init` or `/codecarto-open`.** `codecartoModeActive` is process-local and `session_start` resets it to `false`, so a one-shot `pi -e <ext> -p '/codecarto-status'` exits 0 having refused. The refusal is printed to stderr (see below), but the command still did nothing. Only those two commands set the flag.
 
-Use `--auto` for a round trip. Plain `/codecarto-next` fires the phase without awaiting it, so a one-shot process exits before the sub-agent starts and writes nothing; `runAuto` is awaited, so `/codecarto-next --auto` blocks until the phases finish. Commands whose only output is `ctx.ui.notify` (`status`, `usage`, `list-skills`, `guide`) print nothing under `-p` even when they work — verify those through a side effect, such as a deleted `dashboard.html` reappearing.
+Use `--auto` for a round trip. Plain `/codecarto-next` fires the phase without awaiting it, so a one-shot process exits before the sub-agent starts and writes nothing; `runAuto` is awaited, so `/codecarto-next --auto` blocks until the phases finish. Notifications go to **stderr** when there is no TUI, one line each as `[codecarto] <level>: <message>` — so `status`, `usage` and `list-skills`, whose only output is a notification, are readable under `-p`, and a refusal (`[codecarto] warning: CodeCartographer is not active in this session…`) is distinguishable from success rather than both being silence. Under `--mode json` stdout stays a clean event stream and the notices are on stderr alone; capture both with `2>&1` or read them separately.
 
 If `pi auth check --provider <name>` reports `not_ready`, that is a separate and duller cause of a hang; supply a key before concluding anything else.
 

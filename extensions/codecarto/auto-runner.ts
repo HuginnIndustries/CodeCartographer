@@ -15,6 +15,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { runPhase } from "./agent-runner.ts";
+import { notifyCtx } from "./notify.ts";
 import { type PhaseActivity, clearPhase, finishPhase, getPhaseActivity, startPhase } from "./agent-state.ts";
 import { buildSteeringMessage, rewritePhasePrompt } from "./agent-rewriter.ts";
 import { buildPhaseSummary } from "./agent-summary.ts";
@@ -92,11 +93,11 @@ export async function runSinglePhase(
 	});
 
 	if (options.llmSteerEnabled) {
-		if (ctx.hasUI) ctx.ui.notify(`Customizing ${phase.id} prompt via LLM rewriter…`, "info");
+		notifyCtx(ctx, `Customizing ${phase.id} prompt via LLM rewriter…`, "info");
 		const rewrite = await rewritePhasePrompt({ ctx, state, originalPrompt: prompt, nextPhaseId: phase.id });
 		if (rewrite.used) {
 			prompt = rewrite.prompt;
-			if (ctx.hasUI) ctx.ui.notify(`LLM rewriter customized ${phase.id} seed prompt.`, "info");
+			notifyCtx(ctx, `LLM rewriter customized ${phase.id} seed prompt.`, "info");
 			pi.sendMessage({
 				customType: "codecarto-steering",
 				content: buildSteeringMessage({
@@ -106,16 +107,14 @@ export async function runSinglePhase(
 				}),
 				display: true,
 			});
-		} else if (ctx.hasUI) {
-			ctx.ui.notify(`LLM rewriter skipped (${rewrite.skipReason}); using stock prompt.`, "warning");
+		} else {
+			notifyCtx(ctx, `LLM rewriter skipped (${rewrite.skipReason}); using stock prompt.`, "warning");
 		}
 	}
 
 	const activity = startPhase(phase.id);
-	if (ctx.hasUI) {
-		ctx.ui.notify(`CodeCartographer phase: ${phase.id} (sub-agent running)`, "info");
-		getAgentsWidget().attach(ctx.ui);
-	}
+	notifyCtx(ctx, `CodeCartographer phase: ${phase.id} (sub-agent running)`, "info");
+	if (ctx.hasUI) getAgentsWidget().attach(ctx.ui);
 
 	try {
 		const result = await runPhase(
@@ -145,14 +144,13 @@ export async function runSinglePhase(
 
 		const status: UsageRunStatus = result.aborted ? "aborted" : "completed";
 		finishPhase(phase.id, { status });
-		if (ctx.hasUI) {
-			ctx.ui.notify(
-				result.aborted
-					? `Phase ${phase.id} aborted.`
-					: `Phase ${phase.id} sub-agent finished (${result.toolUses} tool uses, ${result.turnCount} turns).`,
-				result.aborted ? "warning" : "info",
-			);
-		}
+		notifyCtx(
+			ctx,
+			result.aborted
+				? `Phase ${phase.id} aborted.`
+				: `Phase ${phase.id} sub-agent finished (${result.toolUses} tool uses, ${result.turnCount} turns).`,
+			result.aborted ? "warning" : "info",
+		);
 		pi.sendMessage({
 			customType: "codecarto-phase-summary",
 			content: buildPhaseSummary({
@@ -179,9 +177,7 @@ export async function runSinglePhase(
 	} catch (err: unknown) {
 		const message = err instanceof Error ? err.message : String(err);
 		finishPhase(phase.id, { status: "error", error: message });
-		if (ctx.hasUI) {
-			ctx.ui.notify(`Phase ${phase.id} sub-agent failed: ${message}`, "error");
-		}
+		notifyCtx(ctx, `Phase ${phase.id} sub-agent failed: ${message}`, "error");
 		pi.sendMessage({
 			customType: "codecarto-phase-summary",
 			content: buildPhaseSummary({

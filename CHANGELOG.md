@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **In a non-interactive Pi session, a command that worked and a command that silently refused looked identical.** Under `pi -p`, `ctx.hasUI` is false and `ctx.ui.notify` is a silent no-op, so `/codecarto-status`, `/codecarto-usage` and `/codecarto-list-skills` — whose only output is a notification — exited 0 having printed nothing. So did the `codecartoModeActive` refusal that every command goes through when no `/codecarto-init` or `/codecarto-open` has run, which is the silence that let #180 go undiagnosed for months. It also meant `status` and `usage` could not be verified headlessly at all: CONTRIBUTING said to check a side effect, and those two have none. Ninety-eight notification sites across the extension now go through one `notifyCtx` (`extensions/codecarto/notify.ts`) that uses the TUI when there is one, writes a single `[codecarto] <level>: <message>` line to **stderr** when there is not, and drops the message only when the ctx is stale. Stderr rather than stdout because `--mode json` owns stdout for its event stream and prose there would corrupt it; verified that stdout stays a clean stream of JSON events while the notices arrive on stderr alone. The interactive TUI is untouched — the parity suite runs every command with a UI and pins that. Code that runs inside the phase sub-agent (`phase-compaction.ts`) deliberately keeps its own `if (ctx.hasUI)` guards: it sees `hasUI === false` even while the parent TUI is on screen, and a stderr write there would put text into a live terminal. #219.
+
+
 ## [0.19.4] — 2026-09-10
 
 ### Fixed
