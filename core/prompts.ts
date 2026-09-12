@@ -302,6 +302,21 @@ export async function listSkillNames(workspaceDir: string): Promise<string[]> {
 	}
 }
 
+/**
+ * Resolve a user-supplied skill name to an installed post-pipeline skill.
+ *
+ * The name is matched against `listSkillNames()` by exact directory name and
+ * is never joined onto a path, so `../findings/architecture` or any other
+ * traversal cannot reach a SKILL.md outside `skills/` and be spliced into the
+ * prompt. Returns the canonical name, or null when nothing installed matches.
+ */
+export async function resolveSkillName(workspaceDir: string, name: string): Promise<string | null> {
+	const wanted = typeof name === "string" ? name.trim() : "";
+	if (!wanted) return null;
+	const installed = await listSkillNames(workspaceDir);
+	return installed.includes(wanted) ? wanted : null;
+}
+
 export async function buildSkillPrompt(state: WorkspaceState, skillName: string): Promise<string> {
 	const lines = [
 		`Read .codecarto/GUIDE.md and run the post-pipeline skill \`${skillName}\`.`,

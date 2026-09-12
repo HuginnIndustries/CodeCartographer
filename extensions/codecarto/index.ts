@@ -50,6 +50,7 @@ import {
 	listGuideTopics,
 	listScaffoldRefreshFiles,
 	listSkillNames,
+	resolveSkillName,
 	loadAmendmentFile,
 	loadBroadsideConfig,
 	modelsText,
@@ -975,8 +976,12 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const skillFile = join(state.workspaceDir, "skills", skillName, "SKILL.md");
-			if (!(await pathExists(skillFile))) {
+			// Resolve against the installed list only: the name is never joined
+			// onto a path, so a traversal like `../findings/architecture` cannot
+			// splice a phase SKILL.md into the post-pipeline prompt. Same rule as
+			// the MCP surface's handleSkill.
+			const resolved = await resolveSkillName(state.workspaceDir, skillName);
+			if (!resolved) {
 				const available = await listSkillNames(state.workspaceDir);
 				const hint = available.length > 0 ? ` (available: ${available.join(", ")})` : " (no skills installed)";
 				notifyCtx(ctx, 
@@ -986,16 +991,16 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const prompt = await buildSkillPrompt(state, skillName);
+			const prompt = await buildSkillPrompt(state, resolved);
 			if (ctx.isIdle()) {
 				pi.sendUserMessage(prompt);
 			} else {
 				pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 			}
 
-			lastFeedbackLines = [`Queued post-pipeline skill: ${skillName}`];
+			lastFeedbackLines = [`Queued post-pipeline skill: ${resolved}`];
 			setUiState(ctx, state, lastFeedbackLines);
-			notifyCtx(ctx, `Queued CodeCartographer skill: ${skillName}`, "info");
+			notifyCtx(ctx, `Queued CodeCartographer skill: ${resolved}`, "info");
 		},
 	});
 
