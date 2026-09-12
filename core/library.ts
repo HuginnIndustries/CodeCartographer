@@ -933,7 +933,10 @@ export async function listEntries(
 	return index.entries.filter((e) => {
 		if (filter.namespace !== undefined && e.namespace !== filter.namespace) return false;
 		if (filter.slug !== undefined && e.slug !== filter.slug) return false;
-		if (filter.source_repo !== undefined && e.source_repo !== filter.source_repo) return false;
+		// Same equivalence the publish guard applies: `.git`, scheme, userinfo,
+		// default port, and forge-host case do not make two references two
+		// repositories, so they must not make a filter miss one either (#257).
+		if (filter.source_repo !== undefined && !sameSourceRepo(e.source_repo, filter.source_repo)) return false;
 		if (filter.tag !== undefined && !e.tags.includes(filter.tag)) return false;
 		return true;
 	});
