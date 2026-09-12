@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.6] — 2026-09-12
+
+The first release after running the deep-audit pipeline on this repository itself ([`self-audit/`](self-audit/2026-09-11-v0.19.5-full-with-deep-audit/), issues #223–#279). This ships the four fixes ranked first in that review.
+
+### Fixed
+
+- **A write inside `.codecarto/` could land outside it.** The Pi write sandbox resolved a not-yet-existing target lexically, so a symlinked directory inside the workspace that pointed elsewhere let a new file through, and `link/..` was collapsed before the disk was consulted. Containment now follows every existing path component through `realpath` and appends the unborn tail (`resolveExistingPrefix`), in both the extension hook and the phase child-session hook. #223.
+
+- **`codecarto-init` from a checkout copied the framework's own findings into every new workspace, and `npm` installs shipped no `.gitignore`.** This repository's `.codecarto/` is the template and CodeCartographer's live workspace at once, so a finished phase in the checkout seeded every new workspace with another project's report (validation then passed on it, and the test suite failed 18/696 once one phase was complete). Init and scaffold refresh now leave behind every path a packaged pipeline declares as an output, plus scratch contents, closeouts, the dashboard, status, usage, and stray lock files. npm never packs a file named `.gitignore`, so the rules ship as `templates/gitignore` and init and refresh write `.gitignore` from it when the workspace has none; the rules also gain the two deep-audit reports they were missing. #224, #229, #258, #269.
+
+- **Eleven writers used `<pid>.<Date.now()>` temp names, and the status lock released whoever's lock was there.** Two writers hitting one file inside a millisecond collided: one `rename` failed or clobbered the other, which lost concurrent usage-log appends and library publishes outright. Every framework file now lands through one `atomicWriteFile` with a unique suffix. The lock file carries a per-acquisition token and release removes it only while that token is present, so a holder whose stale lock was broken can no longer delete the new holder's lock. Usage appends run under the lock and refuse to rewrite a log that does not parse; publishes hold a library-wide lock so two concurrent publishes of one slug land as v1 and v2. #226, #227, #238, #240.
+
+- **Completion wrote its closeout, index line, and decision rows before `status.yaml` was committed.** A commit that failed left every artifact asserting a completion that never happened. `updateStatusAtomically` now takes an `afterCommit` step that runs once the rename has landed; completion and amendment write their artifacts there, and a failure after the commit is reported with the note that re-running regenerates them. #234.
+
 ## [0.19.5] — 2026-09-11
 
 ### Fixed
