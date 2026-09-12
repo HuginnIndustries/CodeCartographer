@@ -387,7 +387,7 @@ Broad-Side is the cheap sweep you run *before* the expensive interactive run. It
 
 **Broad-Side findings are unverified scouting leads, not evidence.** Each lens is one shot: no cross-file traversal, no runtime verification, no builds, no tests. Every finding is a `file:line` pointer that the interactive pipeline — or you — must confirm before it is a fact. That division of labor is the point: a sub-dollar unattended sweep that tells the expensive run where to look. Nothing downstream may cite a Broad-Side report as a source.
 
-It runs on any git repository — no initialized workspace required — and needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY` environment variable, or `api_key` in `.codecarto/broadside/config.yaml`).
+It runs on any Go, Python, Rust, TypeScript, or JavaScript repository — no initialized workspace required — and needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY` environment variable, or `api_key` in `.codecarto/broadside/config.yaml`). The language is detected from the manifests present and, between them, the source-file counts; a repository in another language, or one with no source files behind its manifest, is refused before anything is priced or sent. Files are read from the working tree — tracked and untracked, ignore rules applied — and each run records that snapshot source, the HEAD, and whether the tree was dirty.
 
 ```
 codecarto_broadside {cwd, action: "models"}                   # compare batch models and pricing
