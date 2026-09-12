@@ -52,12 +52,15 @@ The easiest way is the init command:
 - **MCP:** `codecarto_library_init` with `library_path` (and optional
   `name` and `namespace`)
 
-This creates the directory, writes the marker file, and writes a
-`library:` block into your user-global config (`~/.codecarto/config.yaml`):
-`path`, `publish_confirm: true`, and `namespace` when one was given.
-Passing a namespace is what makes the new library namespaced. Init is
-idempotent — re-running it on an existing library preserves the existing
-marker and rewrites only the config block.
+This creates the directory, writes the marker file, and records the
+library in your user-global config (`~/.codecarto/config.yaml`):
+`library.path`, and `library.namespace` when one was given. Nothing else
+in the file is touched — in particular init does not set
+`publish_confirm`, so it never changes how `codecarto_publish` behaves
+(see below). Passing a namespace is what makes the new library
+namespaced. Init is idempotent — re-running it on an existing library
+preserves the existing marker and rewrites only those keys. A config file
+that cannot be parsed is left alone and reported rather than overwritten.
 
 Init writes the marker and nothing else. `index.yaml` and `INDEX.md`
 first appear on the first publish or reindex; a `README.md` and a
@@ -71,14 +74,20 @@ You can also create one manually:
 
 ```yaml
 library:
-  path: ~/codecarto-library    # tilde-expanded and made absolute on load
+  path: ~/codecarto-library    # absolute, or ~-prefixed (expanded on load); a relative path is refused
   namespace: james             # optional; required to publish into a namespaced library
   publish_confirm: true        # confirmation gate before writing — see below (default true)
 ```
 
 Configuration has two layers: the user-global file above, and
 `.codecarto/workflow/config.yaml` inside a workspace, which overrides
-individual keys. `publish_confirm` gates the write on both executable
+individual keys. A file that exists but cannot be used — unparseable
+YAML, a section that is not a mapping, a key of the wrong type, a
+relative `library.path` — is dropped at the granularity of the fault,
+and the fault is listed by `codecarto_config` / `/codecarto-config`. The
+library tools (`publish`, `library_list`, `library_reindex`) refuse
+while any such problem is listed, naming the file and key, rather than
+answer from whatever the other layer says; phase runs only warn. `publish_confirm` gates the write on both executable
 surfaces, in the only way each can ask: the Pi command shows a yes/no
 preview dialog, and the MCP server — which cannot prompt — refuses a
 `codecarto_publish` call that lacks `confirm: true` and returns the
@@ -88,9 +97,9 @@ confidentiality), writing nothing. The MCP gate applies only when the
 key is actually set in one of the two files; the loader's default
 (`true`) drives Pi's dialog alone, so a host that never configured the
 key is not gated. `codecarto_library_init` and
-`/codecarto-library-init` write the key, so a library initialized
-through the tooling has the gate on. No config key controls git
-behavior, because publish never touches git (see "Git interaction").
+`/codecarto-library-init` do not write the key: set it yourself to gate
+the MCP server. No config key controls git behavior, because publish
+never touches git (see "Git interaction").
 
 ### Marker file format
 

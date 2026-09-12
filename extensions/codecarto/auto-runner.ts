@@ -31,6 +31,7 @@ import {
 	formatTokenCount,
 	getNextEligiblePhase,
 	getWorkspaceState,
+	describeConfigProblems,
 	loadCodecartoConfig,
 	PACKAGE_VERSION,
 	PhasePreflightError,
@@ -326,6 +327,9 @@ export async function runAuto(
 	const totalPhases = initialState.pipeline.phase_order.length;
 
 	const config = await loadCodecartoConfig(initialState.workspaceDir);
+	// Once, before the loop: a dropped config file changes what this run does
+	// (the steer toggle lives there) and nothing else in the loop reads it.
+	if (config.problems.length > 0) notifyCtx(ctx, describeConfigProblems(config).join("\n"), "warning");
 	const llmSteerEnabled = options.llmSteerOverride ?? config.orchestrator.llm_steer_next_phase;
 
 	let state = initialState;

@@ -5,7 +5,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { discoverLibrary, listEntries, type LibraryIndexEntry } from "./library.ts";
-import { loadCodecartoConfig } from "./orchestrator-config.ts";
+import { describeConfigProblems, loadCodecartoConfig } from "./orchestrator-config.ts";
 import type { PipelinePhase, WorkspaceState } from "./types.ts";
 import { pathExists } from "./utils.ts";
 
@@ -133,9 +133,12 @@ export async function runPhasePreflight(
 	if (checks.has("requires-library")) {
 		const config = await loadCodecartoConfig(state.workspaceDir);
 		if (!config.library.path) {
+			// When a config file was dropped, that — not a missing key — is the
+			// likeliest reason there is no path; say so ahead of the example.
+			const problems = config.problems.length > 0 ? `${describeConfigProblems(config).join("\n")}\n` : "";
 			throw new PhasePreflightError(
 				phase.id,
-				"no library.path is configured. Create a library directory with a .codecarto-library marker file, then set library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml. Example config:\n  library:\n    path: ~/codecarto-library\n    publish_confirm: true",
+				`${problems}no library.path is configured. Create a library directory with a .codecarto-library marker file, then set library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml. Example config:\n  library:\n    path: ~/codecarto-library\n    publish_confirm: true`,
 			);
 		}
 		const marker = await discoverLibrary(config.library.path);

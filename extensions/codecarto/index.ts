@@ -59,6 +59,7 @@ import {
 	runBroadsideStatus,
 	runBroadsideSubmit,
 	statusText,
+	describeConfigProblems,
 	loadCodecartoConfig,
 	loadUsage,
 	loadYamlFile,
@@ -746,6 +747,9 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			}
 
 			const config = await loadCodecartoConfig(state.workspaceDir);
+			// A bad config file must not block a phase run, but it must not be
+			// silent either: the toggle read here may be the one it dropped.
+			if (config.problems.length > 0) notifyCtx(ctx, describeConfigProblems(config).join("\n"), "warning");
 			const llmSteerEnabled = flags.llmSteerOverride ?? config.orchestrator.llm_steer_next_phase;
 
 			lastFeedbackLines = [`Running ${phase.id} phase as sub-agent`];
@@ -1276,6 +1280,13 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (!state) return;
 
 			const config = await loadCodecartoConfig(state.workspaceDir);
+			// The library path, namespace, and confirm gate all come from the
+			// config, so a file that could not be used is a refusal, not a silent
+			// fallback to the other layer (#242). Same rule as codecarto_publish.
+			if (config.problems.length > 0) {
+				notifyCtx(ctx, ["Publish refused: the configuration has problems. Fix or remove the offending file, then retry.", ...describeConfigProblems(config)].join("\n"), "error");
+				return;
+			}
 			if (!config.library.path) {
 				notifyCtx(ctx, "No library.path is configured. Create a library directory with a .codecarto-library marker, then set library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml.", "error");
 				return;
@@ -1407,16 +1418,22 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					...(namespace ? {} : {}),
 				});
 
-				// Write the config to the user-global location
+				// Write library.path (and library.namespace when given) to the
+				// user-global config and nothing else — not publish_confirm, so
+				// initializing a library does not change how publish behaves on
+				// MCP (#244). A config file that cannot be parsed is left alone;
+				// the error lands in the catch below.
 				const configPath = resolveUserConfigPath();
 				await writeLibraryConfig(configPath, libraryPath, namespace);
+				const written = namespace ? "library.path and library.namespace" : "library.path";
 
 				const msg = result.alreadyExisted
 					? `Library already exists at ${libraryPath} (marker preserved). Config updated.`
 					: `Created library at ${libraryPath} with marker "${result.marker.name}".`;
-				lastFeedbackLines = [msg, `Config written to ${configPath}`];
+				const configLine = `Wrote ${written} to ${configPath}; other keys untouched`;
+				lastFeedbackLines = [msg, configLine];
 				notifyCtx(ctx, msg, "info");
-				notifyCtx(ctx, `Config written to ${configPath}`, "info");
+				notifyCtx(ctx, configLine, "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				notifyCtx(ctx, `Library init failed: ${message}`, "error");
@@ -1445,10 +1462,17 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				const marker = await discoverLibrary(config.library.path);
 				lines.push(`  Library marker: ${marker ? `found ("${marker.name}", namespaced: ${marker.namespaced})` : "MISSING — run /codecarto-library-init"}`);
 			}
+			// A file that could not be used is the one thing this command exists
+			// to surface; /codecarto-publish refuses while any is listed (#242).
+			lines.push(...describeConfigProblems(config));
 
 			lastFeedbackLines = lines;
 			if (state) setUiState(ctx, state, lastFeedbackLines);
-			notifyCtx(ctx, "Configuration shown in status widget.", "info");
+			if (config.problems.length > 0) {
+				notifyCtx(ctx, describeConfigProblems(config).join("\n"), "warning");
+			} else {
+				notifyCtx(ctx, "Configuration shown in status widget.", "info");
+			}
 		},
 	});
 

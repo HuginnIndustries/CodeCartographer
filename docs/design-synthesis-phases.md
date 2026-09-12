@@ -113,7 +113,7 @@ Each follows the existing model: pipeline YAML entry + `SKILL.md` under `.codeca
 
 ```yaml
 library:
-  path: .codecarto/library    # or absolute path
+  path: ~/codecarto-library    # absolute or ~-prefixed; relative paths are refused
   auto_register: true
 ```
 
