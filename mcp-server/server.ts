@@ -33,6 +33,7 @@ import {
 	BROADSIDE_LENS_IDS,
 	BROADSIDE_SKILL_NAME,
 	type BroadsideLensId,
+	backupWorkspaceState,
 	canonicalPath,
 	copyPackagedWorkspace,
 	collectResultText,
@@ -226,15 +227,23 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 		broadsideOnly = entries.length === 0 && (await pathExists(join(targetWorkspaceDir, BROADSIDE_DIR)));
 	}
 
-	if (targetExists && !sameWorkspace && !broadsideOnly) {
+	if (targetExists && !broadsideOnly) {
 		if (!args.force) {
 			throw new McpError(
 				ErrorCode.InvalidRequest,
-				`A .codecarto/ directory already exists at ${targetWorkspaceDir}. Pass force: true to back it up and reinitialize. Warning: this moves all existing findings, handoffs, usage data, closeouts, and phase progress to a .codecarto-backup-TIMESTAMP/ directory.`,
+				sameWorkspace
+					? `The .codecarto/ at ${targetWorkspaceDir} is CodeCartographer's own packaged template (a checkout install), and it holds workspace state. Pass force: true to move that state — status, findings, handoffs, usage data, closeouts, dashboard — to a .codecarto-backup-TIMESTAMP/ directory and reinitialize; the framework files stay in place. Consider codecarto_open to reattach without resetting.`
+					: `A .codecarto/ directory already exists at ${targetWorkspaceDir}. Pass force: true to back it up and reinitialize. Warning: this moves all existing findings, handoffs, usage data, closeouts, and phase progress to a .codecarto-backup-TIMESTAMP/ directory.`,
 			);
 		}
 		const backupDir = join(cwd, `.codecarto-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`);
-		await rename(targetWorkspaceDir, backupDir);
+		if (sameWorkspace) {
+			// The template cannot be renamed away — it is what init copies from —
+			// so its session state is moved out file by file instead (#245).
+			await backupWorkspaceState(targetWorkspaceDir, backupDir);
+		} else {
+			await rename(targetWorkspaceDir, backupDir);
+		}
 	}
 
 	if (!(await pathExists(targetWorkspaceDir))) {

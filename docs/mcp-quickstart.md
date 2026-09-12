@@ -178,7 +178,7 @@ The analysis pipeline works fully in drop-in mode. Library publish and synthesis
 
 ## Troubleshooting
 
-- **`codecarto_init` says the workspace exists** — pass `force: true` to overwrite (backs up the old `.codecarto/` first).
+- **`codecarto_init` says the workspace exists** — pass `force: true` to overwrite (backs up the old `.codecarto/` first). On a CodeCartographer checkout, whose `.codecarto/` is the packaged template itself, force moves the workspace state (status, findings, handoffs, closeouts, usage, dashboard) to the backup and leaves the framework files in place.
 - **`codecarto_next` returns "no eligible phase"** — all phases are complete. Check `codecarto_status`.
 - **`codecarto_validate` returns FAIL** — open the phase's output file, fix the gap, re-run validation. The pipeline won't advance past a FAIL.
 - **Agent can't find the MCP server** — confirm `codecarto-mcp` is on your `PATH` (`which codecarto-mcp`). If not, reinstall globally or use the full path in the config.
