@@ -150,3 +150,91 @@ test("chomping works on sequence block scalars too", () => {
 	assert.deepEqual(parseSimpleYaml("k:\n  - >\n    a\n").k, ["a\n"]);
 	assert.deepEqual(parseSimpleYaml("k:\n  - >-\n    a\n").k, ["a"]);
 });
+
+// ---------- layouts the self-audit found rejected or mangled (#246) ----------
+//
+// Every expectation below was checked against a spec-compliant parser
+// (PyYAML) before being pinned. The two invalid layouts at the end are the
+// audit's probes C and C2: they are not valid YAML, so they still fail — but
+// the message now names the line and the construct instead of "indentation".
+
+test("a block sequence at the same indent as its key is that key's value, and nothing after it is lost", () => {
+	// This parsed as `items: null` and, at the top level, silently dropped
+	// every line after it — `next` never existed as far as the reader knew.
+	assert.deepEqual(parseSimpleYaml("items:\n- id: x\n  kind: y\nnext: 1\n"), { items: [{ id: "x", kind: "y" }], next: 1 });
+	// Nested, the same layout threw the indentation error.
+	assert.deepEqual(
+		parseSimpleYaml("outer:\n  items:\n  - id: x\n    kind: y\n  other: 2\n"),
+		{ outer: { items: [{ id: "x", kind: "y" }], other: 2 } },
+	);
+});
+
+test("a plain scalar continues onto more-indented lines and folds like a block scalar", () => {
+	// Probe D. A model wrapping a long closeout_summary produces exactly this.
+	assert.deepEqual(parseSimpleYaml("k: first line\n  second line\n"), { k: "first line second line" });
+	assert.deepEqual(
+		parseSimpleYaml("closeout_summary: The phase mapped the\n  core modules and routed\n  two gaps.\nphase_id: architecture\n"),
+		{ closeout_summary: "The phase mapped the core modules and routed two gaps.", phase_id: "architecture" },
+	);
+	assert.deepEqual(parseSimpleYaml("k: first\n\n  third\nn: 1\n"), { k: "first\nthird", n: 1 }, "a blank line inside the run folds to a newline");
+	assert.deepEqual(parseSimpleYaml("k: see\n  https://example.com/x for details\n"), { k: "see https://example.com/x for details" }, "a colon without a following space is not a key");
+	assert.deepEqual(parseSimpleYaml("k: first\n  # a comment ends it\nn: 1\n"), { k: "first", n: 1 });
+	assert.deepEqual(parseSimpleYaml("k: first # trailing\n  second # also trailing\n"), { k: "first second" });
+});
+
+test("a plain scalar can start on the line after its key", () => {
+	assert.deepEqual(parseSimpleYaml("a:\n  just words\n"), { a: "just words" });
+	assert.deepEqual(
+		parseSimpleYaml("closeout_summary:\n  The phase mapped\n  the modules.\nphase_id: x\n"),
+		{ closeout_summary: "The phase mapped the modules.", phase_id: "x" },
+	);
+	assert.deepEqual(parseSimpleYaml('a:\n  "quoted"\nb: 1\n'), { a: "quoted", b: 1 });
+	assert.deepEqual(parseSimpleYaml("a:\n  b: 1\n"), { a: { b: 1 } }, "a nested mapping is still a mapping");
+});
+
+test("sequence items wrap the same way, including an item's first key", () => {
+	assert.deepEqual(parseSimpleYaml("items:\n  - first line\n    second line\n  - other\n"), { items: ["first line second line", "other"] });
+	assert.deepEqual(
+		parseSimpleYaml("items:\n  - id: a long value\n      that wraps\n    kind: y\n"),
+		{ items: [{ id: "a long value that wraps", kind: "y" }] },
+	);
+	assert.deepEqual(parseSimpleYaml("items:\n  -\n    plain text\n  - other\n"), { items: ["plain text", "other"] });
+});
+
+test("a sequence of sequences parses", () => {
+	assert.deepEqual(parseSimpleYaml("items:\n  - - a\n    - b\n  - - c\n"), { items: [["a", "b"], ["c"]] });
+});
+
+test("a quoted scalar does not continue, so a stray line after it is an error that names the line", () => {
+	assert.throws(() => parseSimpleYaml('k: "quoted"\n  more\n'), /^Error: YAML line 2: this line is indented 2 columns but the mapping it belongs to starts at column 0; .* — "more"$/);
+});
+
+test("tabs in indentation are an error rather than a mis-sliced key", () => {
+	// `\tb: 1` counted the tab as two columns and sliced one character: the key "".
+	assert.throws(() => parseSimpleYaml("a:\n\tb: 1\n"), /^Error: YAML line 2: tabs are not allowed in YAML indentation; use spaces — "b: 1"$/);
+});
+
+test("content after the top-level block ended is an error, not silently dropped", () => {
+	assert.throws(() => parseSimpleYaml("- a\nb: 1\n"), /^Error: YAML line 2: unexpected content after the document's top-level block ended .* — "b: 1"$/);
+});
+
+test("a sequence item where a mapping entry was expected names the construct", () => {
+	const pattern = /^Error: YAML line \d: a sequence item where a mapping entry was expected; a list that belongs to the key above must be indented under it, or sit at that key's own column — "- [bc]"$/;
+	assert.throws(() => parseSimpleYaml("a: 1\n- b\n"), pattern);
+	assert.throws(() => parseSimpleYaml("a:\n  b: 1\n  - c\n"), pattern);
+});
+
+test("the audit's invalid probes C and C2 still fail, naming the line and the construct", () => {
+	// A sibling key deeper than the first key is not valid YAML (PyYAML:
+	// "mapping values are not allowed here"). The old message said only
+	// "Invalid YAML indentation near: kind: y".
+	for (const [label, text] of [["C", "items:\n  - id: x\n     kind: y\n"], ["C2", "items:\n  - id: x\n      kind: y\n"]]) {
+		assert.throws(
+			() => parseSimpleYaml(text),
+			/^Error: YAML line 3: this line is indented [56] columns but the mapping it belongs to starts at column 4; a sibling key must align with the first key, and a wrapped value must not contain ": " — "kind: y"$/,
+			label,
+		);
+	}
+	assert.throws(() => parseSimpleYaml("dup: one\ndup: two\n"), /^Error: YAML line 2: Duplicate YAML key: dup — "dup: two"$/);
+	assert.throws(() => parseSimpleYaml("a: 1\nb\n"), /^Error: YAML line 2: expected a mapping entry \("key: value"\) — "b"$/);
+});
