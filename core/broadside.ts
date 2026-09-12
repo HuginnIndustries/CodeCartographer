@@ -37,7 +37,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dirname, join, relative } from "node:path";
-import { atomicWriteFile, pathExists, sleep } from "./utils.ts";
+import { atomicWriteFile, GIT_TIMEOUT_MS, pathExists, sleep } from "./utils.ts";
 import { describeRedactions, isSecretFile, redactSecrets } from "./secrets.ts";
 import { acquireLock } from "./status.ts";
 import { loadYamlFile } from "./yaml.ts";
@@ -86,6 +86,7 @@ export type BroadsideLensId = (typeof BROADSIDE_LENS_IDS)[number];
 
 export const BROADSIDE_POLL_INTERVAL_MS = 15_000;
 export const BROADSIDE_DEFAULT_POLL_BUDGET_MS = 25 * 60 * 1000;
+
 /**
  * The run expense limit in USD a repository gets before it configures one.
  * Pi asks a human before submitting over the estimate; the MCP surface cannot,
@@ -1318,10 +1319,11 @@ async function listRepoFiles(targetDir: string): Promise<{ files: string[]; snap
 		const listed = await execFileAsync(
 			"git",
 			["-C", targetDir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-			{ maxBuffer: 64 * 1024 * 1024 },
+			{ maxBuffer: 64 * 1024 * 1024, timeout: GIT_TIMEOUT_MS },
 		);
 		const deleted = await execFileAsync("git", ["-C", targetDir, "ls-files", "-z", "--deleted"], {
 			maxBuffer: 64 * 1024 * 1024,
+			timeout: GIT_TIMEOUT_MS,
 		});
 		const gone = new Set(deleted.stdout.split("\0").filter(Boolean));
 		const files = listed.stdout.split("\0").filter((path) => path && !gone.has(path));
@@ -1333,7 +1335,7 @@ async function listRepoFiles(targetDir: string): Promise<{ files: string[]; snap
 
 async function gitHead(targetDir: string): Promise<string | null> {
 	try {
-		const { stdout } = await execFileAsync("git", ["-C", targetDir, "rev-parse", "HEAD"], { maxBuffer: 1024 * 1024 });
+		const { stdout } = await execFileAsync("git", ["-C", targetDir, "rev-parse", "HEAD"], { maxBuffer: 1024 * 1024, timeout: GIT_TIMEOUT_MS });
 		return stdout.trim() || null;
 	} catch {
 		return null;
@@ -1342,7 +1344,7 @@ async function gitHead(targetDir: string): Promise<string | null> {
 
 async function gitDirty(targetDir: string): Promise<boolean> {
 	try {
-		const { stdout } = await execFileAsync("git", ["-C", targetDir, "status", "--porcelain"], { maxBuffer: 1024 * 1024 });
+		const { stdout } = await execFileAsync("git", ["-C", targetDir, "status", "--porcelain"], { maxBuffer: 1024 * 1024, timeout: GIT_TIMEOUT_MS });
 		return stdout.trim().length > 0;
 	} catch {
 		return false;
@@ -1360,7 +1362,7 @@ async function changedFilesSince(targetDir: string, baseHead: string | null): Pr
 		const { stdout } = await execFileAsync(
 			"git",
 			["-C", targetDir, "diff", "--name-only", baseHead, "HEAD"],
-			{ maxBuffer: 64 * 1024 * 1024 },
+			{ maxBuffer: 64 * 1024 * 1024, timeout: GIT_TIMEOUT_MS },
 		);
 		return new Set(stdout.split("\n").filter(Boolean));
 	} catch {
@@ -1383,7 +1385,7 @@ async function walkFiles(
 		return out;
 	}
 	for (const entry of entries) {
-		if (entry.name.startsWith(".") && entry.name !== ".github") continue;
+		if (entry.name.startsWith(".")) continue;
 		if (entry.isDirectory()) {
 			if (SKIP_DIR_NAMES.has(entry.name)) continue;
 			if (depth > 8) continue;
@@ -2058,10 +2060,22 @@ function buildBroadsideConfig(raw: Record<string, unknown>): BroadsideConfig {
 
 // ---------- model catalog, pricing, benchmarks ----------
 
+/** The catalog cache schema this build writes; a file from another is not read. */
+export const BROADSIDE_CATALOG_CACHE_SCHEMA = 3;
+
+/**
+ * Schema 3 stamps each entry with its own `fetched_at`. Schema 2 carried one
+ * stamp for the file, so writing one freshly fetched model rewrote it and
+ * every other cached model's price inherited a fresh 24 h TTL — a stale price
+ * could persist indefinitely (self-audit mech 1.9). A schema-2 file is still
+ * read, with the file's stamp standing in for each entry's; anything else is
+ * treated as absent, which is what checking the version you write is for
+ * (sem 5.10).
+ */
 type CatalogCacheFile = {
 	schema_version: number;
 	fetched_at: string;
-	models: Record<string, CatalogEntry>;
+	models: Record<string, CatalogEntry & { fetched_at?: string }>;
 };
 
 async function readCatalogCache(broadsideDir: string): Promise<CatalogCacheFile | null> {
@@ -2069,11 +2083,18 @@ async function readCatalogCache(broadsideDir: string): Promise<CatalogCacheFile 
 	if (!(await pathExists(cachePath))) return null;
 	try {
 		const parsed = JSON.parse(await readFile(cachePath, "utf8")) as CatalogCacheFile;
-		if (!parsed || typeof parsed !== "object" || typeof parsed.models !== "object") return null;
+		if (!parsed || typeof parsed !== "object" || !parsed.models || typeof parsed.models !== "object") return null;
+		if (parsed.schema_version !== BROADSIDE_CATALOG_CACHE_SCHEMA && parsed.schema_version !== 2) return null;
 		return parsed;
 	} catch {
 		return null;
 	}
+}
+
+/** When a cached entry was fetched: its own stamp, or the file's for a schema-2 cache. */
+function catalogEntryFetchedAt(cache: CatalogCacheFile, model: string): number {
+	const stamp = cache.models[model]?.fetched_at ?? cache.fetched_at;
+	return new Date(stamp).getTime();
 }
 
 async function writeCatalogCache(broadsideDir: string, cache: CatalogCacheFile): Promise<void> {
@@ -2163,7 +2184,7 @@ export async function resolveCatalogEntry(
 	// constants below are what we fall back to when the network is unavailable.
 	const cache = await readCatalogCache(broadsideDir);
 	const cached = cache?.models[model];
-	if (cached && Date.now() - new Date(cache!.fetched_at).getTime() < BROADSIDE_CATALOG_CACHE_TTL_MS) {
+	if (cache && cached && Date.now() - catalogEntryFetchedAt(cache, model) < BROADSIDE_CATALOG_CACHE_TTL_MS) {
 		return { model, source: "cache", entry: cached };
 	}
 
@@ -2196,12 +2217,17 @@ export async function resolveCatalogEntry(
 	}
 
 	if (live) {
+		const now = new Date().toISOString();
 		const updated: CatalogCacheFile = {
-			schema_version: 2,
-			fetched_at: new Date().toISOString(),
-			models: { ...(cache?.models ?? {}) },
+			schema_version: BROADSIDE_CATALOG_CACHE_SCHEMA,
+			fetched_at: now,
+			// Other entries keep their own stamps (a schema-2 file's entries
+			// inherit the file's, once, on this upgrade); only this model is fresh.
+			models: Object.fromEntries(
+				Object.entries(cache?.models ?? {}).map(([id, entry]) => [id, { ...entry, fetched_at: entry.fetched_at ?? cache!.fetched_at }]),
+			),
 		};
-		updated.models[model] = live;
+		updated.models[model] = { ...live, fetched_at: now };
 		await writeCatalogCache(broadsideDir, updated);
 		return { model, source: "live", entry: live };
 	}
@@ -2313,8 +2339,9 @@ export async function listBatchModels(
 	entries.sort((a, b) => a.inputPerM + a.outputPerM - (b.inputPerM + b.outputPerM));
 
 	// Persist the catalog so the next submit's pricing resolution hits cache.
-	const cache: CatalogCacheFile = { schema_version: 2, fetched_at: new Date().toISOString(), models: {} };
-	for (const entry of entries) cache.models[entry.id] = entry;
+	const fetchedAt = new Date().toISOString();
+	const cache: CatalogCacheFile = { schema_version: BROADSIDE_CATALOG_CACHE_SCHEMA, fetched_at: fetchedAt, models: {} };
+	for (const entry of entries) cache.models[entry.id] = { ...entry, fetched_at: fetchedAt };
 	await writeCatalogCache(broadsideDir, cache);
 
 	const benchmarks = opts.includeBenchmarks ? await fetchCodingBenchmarks(apiKey, fetcher) : null;
@@ -2387,6 +2414,15 @@ export async function fetchBatch(
  * charged, so callers must come back for it rather than retire it.
  */
 export const BROADSIDE_DEAD_BATCH_STATUSES: string[] = ["failed", "expired", "cancelled", "auth-failed"];
+
+/**
+ * Batch entry statuses collect never polls again: the dead ones above, plus
+ * `completed`, plus the two a submit assigns without a batch (`skipped`: no
+ * matching files; `rejected`: the provider refused it). The 0.19.1 changelog
+ * called the dead set "a named constant rather than two hand-maintained
+ * lists"; this set was still three literal copies (self-audit sem 5.8).
+ */
+export const BROADSIDE_TERMINAL_ENTRY_STATUSES: string[] = ["completed", ...BROADSIDE_DEAD_BATCH_STATUSES, "skipped", "rejected"];
 
 export async function pollBatchUntilTerminal(
 	batchId: string,
@@ -2683,7 +2719,9 @@ export async function runBroadsideSubmit(
 		);
 	}
 
-	const state = await loadBroadsideState(broadsideDir);
+	// Read before anything is posted: a state.json that cannot be read refuses
+	// the run here (#233), while persistBroadsideRun below merges by run id.
+	await loadBroadsideState(broadsideDir);
 	const runId = new Date().toISOString().replace(/[:.]/g, "-");
 	const run: BroadsideRun = {
 		id: runId,
@@ -2710,7 +2748,6 @@ export async function runBroadsideSubmit(
 			skippedFiles: info.secretFilesSkipped.length,
 		},
 	};
-	state.runs.push(run);
 	await persistBroadsideRun(broadsideDir, run);
 
 	const requestsByCustomId: Record<string, BatchRequest> = {};
@@ -3066,7 +3103,7 @@ export async function runBroadsideCollect(
 			lensOutcomes[lensId] = { status: entry?.status ?? "failed", resultCount: 0 };
 			continue;
 		}
-		if (["completed", "failed", "expired", "cancelled", "auth-failed", "skipped", "rejected"].includes(entry.status)) {
+		if (BROADSIDE_TERMINAL_ENTRY_STATUSES.includes(entry.status)) {
 			totalCost += entry.cost ?? 0;
 			resultCount += entry.resultCount ?? 0;
 			lensOutcomes[lensId] = { status: entry.status, cost: entry.cost, resultCount: entry.resultCount };
@@ -3210,7 +3247,7 @@ export async function runBroadsideCollect(
 	if ((wantSynthesis || wantTriage) && allLensResults.length > 0) {
 		const allTerminal = run.lenses.every((lensId) => {
 			const entry = run.batches[lensId];
-			return entry && ["completed", "failed", "expired", "cancelled", "auth-failed", "skipped", "rejected"].includes(entry.status);
+			return entry && BROADSIDE_TERMINAL_ENTRY_STATUSES.includes(entry.status);
 		});
 		if (allTerminal && (postPassUnfinished(run.synthesis) || postPassUnfinished(run.triage))) {
 			const findingsText = allLensResults
@@ -3329,7 +3366,7 @@ export async function runBroadsideCollect(
 
 	const terminal = run.lenses.every((lensId) => {
 		const entry = run.batches[lensId];
-		return entry && ["completed", "failed", "expired", "cancelled", "auth-failed", "skipped", "rejected"].includes(entry.status);
+		return entry && BROADSIDE_TERMINAL_ENTRY_STATUSES.includes(entry.status);
 	});
 	run.status = terminal ? (resultCount > 0 ? "completed" : "failed") : "partial";
 	run.totalCost = totalCost;

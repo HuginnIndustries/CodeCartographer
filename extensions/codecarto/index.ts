@@ -1,5 +1,4 @@
 import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -34,6 +33,7 @@ import {
 	describeDanglingCarryForward,
 	describeMissingCompletedOutputs,
 	describeStuckPipeline,
+	expandTilde,
 	getPipelineLabel,
 	getWorkspaceState,
 	isWithinPath,
@@ -1491,13 +1491,12 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const libraryPath = pathArg.startsWith("~") ? join(homedir(), pathArg.slice(1)) : resolve(pathArg);
+			// The same expansion the config loader applies, so `~user/x` and a
+			// bare `~` mean the same thing everywhere (self-audit mech 6.14).
+			const libraryPath = resolve(expandTilde(pathArg));
 
 			try {
-				const result = await initLibrary(libraryPath, {
-					namespaced: !!namespace,
-					...(namespace ? {} : {}),
-				});
+				const result = await initLibrary(libraryPath, { namespaced: !!namespace });
 
 				// Write library.path (and library.namespace when given) to the
 				// user-global config and nothing else — not publish_confirm, so

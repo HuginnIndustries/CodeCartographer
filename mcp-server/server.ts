@@ -161,8 +161,12 @@ async function optionalCwd(cwd: unknown): Promise<string | null> {
 }
 
 async function requireWorkspace(cwd: string): Promise<WorkspaceState> {
+	// What getWorkspaceState throws is the user's to fix — a status.yaml that
+	// does not parse, a missing `pipeline:`, a pipeline file that is not there
+	// — so it is InvalidRequest, not the InternalError a host would retry or
+	// report as a server bug (self-audit mech 2.8).
 	const state = await getWorkspaceState(cwd).catch((error) => {
-		throw new McpError(ErrorCode.InternalError, error instanceof Error ? error.message : String(error));
+		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
 	if (!state) {
 		throw new McpError(
@@ -989,7 +993,7 @@ export async function handleLibraryReindex(args: Record<string, unknown>) {
 	);
 }
 
-export async function handleLibraryInit(args: { library_path: string; name?: string; namespace?: string; cwd?: string }) {
+export async function handleLibraryInit(args: { library_path: string; name?: string; namespace?: string }) {
 	if (!args.library_path || typeof args.library_path !== "string") {
 		throw new McpError(ErrorCode.InvalidParams, "library_path is required.");
 	}

@@ -211,3 +211,11 @@ export function compareDottedVersions(a: string, b: string): number | null {
 	}
 	return 0;
 }
+
+/**
+ * Every git subprocess gets this. A hung git — a credential helper waiting
+ * on a prompt, a slow filesystem — used to hang a publish or a Broad-Side
+ * submit indefinitely while every fetch carried a 30 s timeout (self-audit
+ * sem 3.12).
+ */
+export const GIT_TIMEOUT_MS = 30_000;

@@ -34,7 +34,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { acquireLock } from "./status.ts";
-import { atomicWriteFile, canonicalPath, isPlainObject, normalizeForComparison, pathExists, uniqueTempSuffix } from "./utils.ts";
+import { atomicWriteFile, canonicalPath, GIT_TIMEOUT_MS, isPlainObject, normalizeForComparison, pathExists, uniqueTempSuffix } from "./utils.ts";
 import { parseSimpleYaml, stringifySimpleYaml } from "./yaml.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -1337,7 +1337,9 @@ interface GitRunResult {
 
 function runGit(cwd: string, args: string[]): Promise<GitRunResult> {
 	return new Promise<GitRunResult>((resolvePromise) => {
-		const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+		// Bounded like every fetch: a credential helper waiting on a prompt
+		// used to hang publish or source-repo resolution for good (sem 3.12).
+		const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: GIT_TIMEOUT_MS });
 		let stdout = "";
 		let stderr = "";
 		child.stdout.on("data", (b: Buffer) => {
