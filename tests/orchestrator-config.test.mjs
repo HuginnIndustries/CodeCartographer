@@ -78,12 +78,16 @@ test("loadCodecartoConfig reads orchestrator.llm_steer_next_phase: true", async 
 	}
 });
 
-test("loadCodecartoConfig falls back to defaults on malformed YAML", async () => {
+test("loadCodecartoConfig falls back to defaults on a mis-shaped section and says so", async () => {
 	const noUser = await withNoUserConfig();
 	const { workspaceDir, cleanup } = await makeWorkspace("orchestrator: [not, a, mapping]\n");
 	try {
 		const config = await loadCodecartoConfig(workspaceDir);
 		assert.equal(config.orchestrator.llm_steer_next_phase, false);
+		// The fallback is no longer silent (#242): the dropped section is reported.
+		assert.deepEqual(config.problems, [
+			{ path: join(workspaceDir, CONFIG_RELATIVE_PATH), message: "orchestrator must be a mapping; the section was ignored" },
+		]);
 	} finally {
 		await cleanup();
 		await noUser.cleanup();
@@ -166,7 +170,7 @@ test("workspace library config overrides user-global", async () => {
 	}
 });
 
-test("malformed user-global config is silently ignored", async () => {
+test("a mis-shaped user-global library section is dropped, reported, and overridden by the workspace", async () => {
 	const noUser = await withMockedUserConfig("library: [not, a, mapping]\n");
 	const { workspaceDir, cleanup } = await makeWorkspace(
 		"library:\n  path: /abs/workspace-lib\n",
@@ -175,6 +179,7 @@ test("malformed user-global config is silently ignored", async () => {
 		const config = await loadCodecartoConfig(workspaceDir);
 		assert.equal(config.library.path, resolve("/abs/workspace-lib"));
 		assert.equal(config.library.publish_confirm, true);  // fell back to default
+		assert.deepEqual(config.problems, [{ path: noUser.path, message: "library must be a mapping; the section was ignored" }]);
 	} finally {
 		await cleanup();
 		await noUser.cleanup();

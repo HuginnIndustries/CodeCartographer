@@ -103,7 +103,7 @@ import {
 import { applyAmendment } from "../core/amendment.ts";
 import { appendUsageRun } from "../core/usage.ts";
 import { initLibrary } from "../core/library.ts";
-import { type CodecartoConfig, loadUserConfig, resolveUserConfigPath } from "../core/orchestrator-config.ts";
+import { type CodecartoConfig, describeConfigProblems, loadUserConfig, resolveUserConfigPath } from "../core/orchestrator-config.ts";
 import { writeDashboard } from "../extensions/codecarto/dashboard-writer.ts";
 
 // ---------- input helpers ----------
@@ -523,7 +523,7 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 
 // ---------- library helpers ----------
 
-async function resolveLibraryPath(args: { library_path?: unknown }, cwd: string | null): Promise<string> {
+function resolveLibraryPath(args: { library_path?: unknown }, config: CodecartoConfig): string {
 	const explicit = typeof args.library_path === "string" && args.library_path.trim() !== ""
 		? args.library_path.trim()
 		: null;
@@ -533,13 +533,7 @@ async function resolveLibraryPath(args: { library_path?: unknown }, cwd: string 
 		}
 		return explicit;
 	}
-	if (cwd) {
-		// loadCodecartoConfig merges user-global under per-workspace and tolerates
-		// a missing workspace file, so a single call covers both cases.
-		const workspaceDir = join(cwd, ".codecarto");
-		const config = await loadCodecartoConfig(workspaceDir);
-		if (config.library.path) return config.library.path;
-	}
+	if (config.library.path) return config.library.path;
 	throw new McpError(
 		ErrorCode.InvalidParams,
 		"library_path is required (pass it explicitly, or pass cwd and configure library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml).",
@@ -557,6 +551,20 @@ async function loadEffectiveConfig(cwd: string | null): Promise<CodecartoConfig>
 	// it is read through is the one optionalCwd validated, never a raw argument.
 	if (!cwd) return loadUserConfig();
 	return loadCodecartoConfig(join(cwd, ".codecarto"));
+}
+
+/**
+ * The library tools answer from the config — its path, its namespace, its
+ * confirm gate — so a config file that could not be used in full is a
+ * refusal, not a silent fallback to whatever the other layer says (#242).
+ * The message names each file and key; codecarto_config shows the same list.
+ */
+function refuseOnConfigProblems(config: CodecartoConfig, tool: string): void {
+	if (config.problems.length === 0) return;
+	throw new McpError(
+		ErrorCode.InvalidRequest,
+		[`${tool} refused: the configuration has problems. Fix or remove the offending file, then retry.`, ...describeConfigProblems(config)].join("\n"),
+	);
 }
 
 function asStringArray(value: unknown, fieldName: string): string[] {
@@ -715,7 +723,9 @@ export async function handlePublish(args: Record<string, unknown>) {
 	// First, before anything is read through it: cwd is a containment root
 	// for spec_path below and the source of the config that gates the write.
 	const cwd = await optionalCwd(args.cwd);
-	const libraryPath = await resolveLibraryPath(args, cwd);
+	const config = await loadEffectiveConfig(cwd);
+	refuseOnConfigProblems(config, "codecarto_publish");
+	const libraryPath = resolveLibraryPath(args, config);
 	const marker = await discoverLibrary(libraryPath);
 	if (!marker) {
 		throw new McpError(
@@ -786,7 +796,6 @@ export async function handlePublish(args: Record<string, unknown>) {
 	// opt-out, and a host that never configured the key keeps the behavior it
 	// had. Runs after every argument check so the preview names the resolved
 	// slug and namespace, and before publishEntry so nothing is written.
-	const config = await loadEffectiveConfig(cwd);
 	if (config.library.publish_confirm && config.library.publish_confirm_configured && args.confirm !== true) {
 		const preview = await previewPublishVersion(libraryPath, spec, { slug, namespace }, { forceNewVersion });
 		const label = `${namespace ? `${namespace}/` : ""}${slug}`;
@@ -867,7 +876,9 @@ export async function handlePublish(args: Record<string, unknown>) {
 }
 
 export async function handleLibraryList(args: Record<string, unknown>) {
-	const libraryPath = await resolveLibraryPath(args, await optionalCwd(args.cwd));
+	const config = await loadEffectiveConfig(await optionalCwd(args.cwd));
+	refuseOnConfigProblems(config, "codecarto_library_list");
+	const libraryPath = resolveLibraryPath(args, config);
 	const marker = await discoverLibrary(libraryPath);
 	if (!marker) {
 		throw new McpError(
@@ -911,7 +922,9 @@ export async function handleLibraryList(args: Record<string, unknown>) {
 }
 
 export async function handleLibraryReindex(args: Record<string, unknown>) {
-	const libraryPath = await resolveLibraryPath(args, await optionalCwd(args.cwd));
+	const config = await loadEffectiveConfig(await optionalCwd(args.cwd));
+	refuseOnConfigProblems(config, "codecarto_library_reindex");
+	const libraryPath = resolveLibraryPath(args, config);
 	const marker = await discoverLibrary(libraryPath);
 	if (!marker) {
 		throw new McpError(
@@ -957,11 +970,18 @@ export async function handleLibraryInit(args: { library_path: string; name?: str
 
 	// Write config to user-global location
 	const configPath = resolveUserConfigPath();
-	await writeLibraryConfig(configPath, libraryPath, args.namespace ?? null);
+	// Writes library.path (and library.namespace when given) and nothing else:
+	// in particular it does not set publish_confirm, so initializing a library
+	// does not switch the codecarto_publish confirm gate on (#244). A config
+	// file that cannot be parsed is left alone and reported.
+	await writeLibraryConfig(configPath, libraryPath, args.namespace ?? null).catch((error) => {
+		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+	});
+	const written = args.namespace ? "library.path and library.namespace" : "library.path";
 
 	const msg = result.alreadyExisted
-		? `Library already exists at ${libraryPath} (marker preserved). Config written to ${configPath}.`
-		: `Created library at ${libraryPath} with marker "${result.marker.name}". Config written to ${configPath}.`;
+		? `Library already exists at ${libraryPath} (marker preserved). Wrote ${written} to ${configPath}; other keys untouched.`
+		: `Created library at ${libraryPath} with marker "${result.marker.name}". Wrote ${written} to ${configPath}; other keys untouched.`;
 
 	return textResult(msg, {
 		libraryPath,
@@ -1034,6 +1054,9 @@ export async function handleConfig(args: { cwd?: string }) {
 			`  Library marker: ${markerStatus}`,
 			`  User-global config: ${userConfigPath}`,
 			`  Workspace config: ${workspaceConfigPath ?? "(no cwd provided)"}`,
+			// A file that could not be used is the one thing this tool exists
+			// to surface; the library tools refuse while any is listed (#242).
+			...describeConfigProblems(config),
 		].join("\n"),
 		{
 			libraryPath: config.library.path,
@@ -1042,6 +1065,7 @@ export async function handleConfig(args: { cwd?: string }) {
 			llmSteerNextPhase: config.orchestrator.llm_steer_next_phase,
 			userConfigPath,
 			workspaceConfigPath,
+			problems: config.problems,
 		},
 	);
 }
