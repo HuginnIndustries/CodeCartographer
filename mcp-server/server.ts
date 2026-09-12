@@ -1501,7 +1501,7 @@ const TOOLS = [
 	{
 		name: "codecarto_complete",
 		description:
-			"Mark a phase complete. Requires the phase output's validation to be PASS or PASS WITH GAPS. Atomically updates status.yaml under a file lock, appends to THREAD_LOG.md, and creates a closeout stub from the template if one does not yet exist. If phase is omitted, completes the next eligible phase.",
+			"Mark a phase complete. Requires the phase output's validation to be PASS or PASS WITH GAPS and applies the phase handoff at scratch/handoffs/<phase>.yaml. Atomically updates status.yaml under a file lock, appends one THREAD_LOG.md entry, and writes the phase's closeout: the handoff's closeout_content (plus its decisions) overwrites the canonical <date>-<phase>.md when supplied; otherwise a stub is copied from the template only if no closeout exists yet. If phase is omitted, completes the next eligible phase.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -1743,7 +1743,7 @@ const TOOLS = [
 				},
 				api_key: {
 					type: "string",
-					description: "OpenRouter API key. Prefer the OPENROUTER_API_KEY environment variable or .codecarto/broadside/config.yaml.",
+					description: "OpenRouter API key. A value passed here is recorded wherever the host logs tool calls; prefer the OPENROUTER_API_KEY environment variable of the server process. (api_key in .codecarto/broadside/config.yaml also works, but that file is tracked, so a key there is committed with it.)",
 				},
 				run_id: {
 					type: "string",

@@ -31,6 +31,17 @@ Since 0.14.1, `textResult` carries the rendered text in `structuredContent` unde
 
 Update the table above whenever a client's behavior is actually observed. An entry here should cite what was run, not what was assumed — the Codex row is what an honest unknown looks like.
 
+## Trust posture: the host is trusted
+
+The MCP server and the Pi extension both run as the user, in the user's process, driven by an agent the user chose. They do not defend against that agent or that host — they defend the *repository* from an LLM's mistakes (the write sandbox, the containment roots, the completion gates). Four consequences follow, recorded here so nobody has to rediscover them (self-audit L6):
+
+- **Any absolute, existing directory is a valid `cwd`.** `codecarto_init` creates `.codecarto/` there and `codecarto_refresh_scaffold` overwrites framework files under it. There is no allowlist and, on MCP, no confirmation — the host asked, and the host is trusted. A host that wants a fence puts it in front of the tool call.
+- **`api_key` as a tool argument lands in the host's logs.** Whatever the host records about tool calls — transcripts, traces, replay files — gets the key. The Pi slash command refuses a key argument for this reason; the MCP tool accepts one because some hosts cannot set environment variables, and its description says what happens. `OPENROUTER_API_KEY` in the server process's environment is the place for it.
+- **A committed `.codecarto/workflow/config.yaml` can widen the Pi write sandbox.** Its `library.path`, when it names a directory carrying a `.codecarto-library` marker, is admitted as a write root — that is what publishing into a library needs. A cloned repository can therefore ship both the marker and the config that points at it. Relative values are refused (#243), so the widening is at least explicit and absolute; review `library.path` in a repository you did not create before running a phase from it.
+- **The Broad-Side config can hold the key, and it is tracked.** `.codecarto/broadside/config.yaml` has an `api_key` slot, and the ignore rules init writes deliberately keep that file tracked (`!broadside/config.yaml`) so a repository's model and lens routing travel with it. A key written there is committed with it — the template says so beside the slot. Keep the key in the environment and the file for the routing.
+
+None of this is a defect to fix in the server: a tool that second-guessed its host would be unusable from every client above. It is the boundary, stated.
+
 ## Why this file exists
 
 #94 survived four releases with every gate green. The smoke test and the unit tests both read `content[0].text` directly: they proved the payload existed, never that it survived a client reading the other field. The bug was only found by calling a tool through a client nobody on the project had written.
