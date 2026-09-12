@@ -1,8 +1,8 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { compact, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { canonicalPath, getWorkspaceState, isWithinPath } from "../../core/index.ts";
+import { canonicalPath, getWorkspaceState, isWithinPath, resolveExistingPrefix } from "../../core/index.ts";
 
 const PHASE_SESSION_PREFIX = "CodeCartographer phase: ";
 
@@ -73,7 +73,9 @@ export function phaseCompactionExtension(pi: ExtensionAPI): void {
 		if (event.toolName === "edit" || event.toolName === "write") {
 			const inputPath = typeof event.input.path === "string" ? event.input.path : "";
 			const strippedPath = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
-			const targetPath = await canonicalPath(resolve(ctx.cwd, strippedPath));
+			// Same containment as the parent extension's hook (#223): follow the
+			// existing prefix through symlinks, then append the unborn tail.
+			const targetPath = await resolveExistingPrefix(strippedPath, ctx.cwd);
 			const allowedRoot = await canonicalPath(join(ctx.cwd, ".codecarto"));
 			if (!isWithinPath(targetPath, allowedRoot)) {
 				return {

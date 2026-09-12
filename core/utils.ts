@@ -1,11 +1,10 @@
 // General-purpose helpers used by yaml/status/prompts and by wrapper-specific
 // path-boundary enforcement (Pi tool interception, MCP cwd validation).
 
-import { access } from "node:fs/promises";
+import { access, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
-import { join, normalize, resolve } from "node:path";
-import { realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
 
 export function sleep(ms: number): Promise<void> {
 	return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
@@ -47,24 +46,56 @@ export function isWithinPath(path: string, root: string): boolean {
 }
 
 /**
- * Symlink-aware version of isWithinPath. Resolves symlinks on both the path
- * and root before comparing, preventing bypass via symlinks inside the
- * allowed root that point outside it.
+ * Resolve a path the way the kernel will when something is written to it:
+ * every component that already exists is followed through symlinks
+ * (`realpath`), and the not-yet-existing tail is appended lexically. A `..`
+ * is applied to the *resolved* prefix, not the spelled one, because
+ * `link/..` means the link target's parent on disk. A relative `path` is
+ * taken against `base` without normalisation for the same reason.
  *
- * Falls back to lexical isWithinPath if realpath fails (e.g., path does not
- * exist yet), which is safe for write targets that haven't been created.
+ * `realpath` alone throws for a file that does not exist yet, and a lexical
+ * fallback let `.codecarto/link/new.md` through when `link` was a symlink to
+ * somewhere outside the workspace — the file landed outside (#223).
+ */
+export async function resolveExistingPrefix(path: string, base: string = process.cwd()): Promise<string> {
+	const raw = isAbsolute(path) ? path : `${base}${sep}${path}`;
+	const { root } = parse(raw);
+	const segments = raw
+		.slice(root.length)
+		.split(/[\\/]+/)
+		.filter((segment) => segment !== "" && segment !== ".");
+	let current = await canonicalPath(root || sep);
+	const tail: string[] = [];
+	for (const segment of segments) {
+		if (segment === "..") {
+			if (tail.length > 0) tail.pop();
+			else current = dirname(current);
+			continue;
+		}
+		if (tail.length > 0) {
+			// Once one component is missing, nothing below it can exist either.
+			tail.push(segment);
+			continue;
+		}
+		try {
+			current = await realpath(join(current, segment));
+		} catch {
+			tail.push(segment);
+		}
+	}
+	return tail.length === 0 ? current : join(current, ...tail);
+}
+
+/**
+ * Symlink-aware version of isWithinPath for paths that may not exist yet:
+ * the existing prefix of `path` is resolved through symlinks
+ * ({@link resolveExistingPrefix}), the root through `realpath`, and the two
+ * are compared lexically. A symlinked ancestor that points outside the root
+ * fails whether or not the target file exists.
  */
 export async function isWithinPathResolved(path: string, root: string): Promise<boolean> {
-	try {
-		const resolvedPath = await realpath(path);
-		const resolvedRoot = await realpath(root);
-		return isWithinPath(resolvedPath, resolvedRoot);
-	} catch {
-		// If realpath fails (path doesn't exist yet, broken symlink, etc.),
-		// fall back to lexical check. For write targets this is safe because
-		// the parent directory should already be within the root.
-		return isWithinPath(path, root);
-	}
+	const [resolvedPath, resolvedRoot] = await Promise.all([resolveExistingPrefix(path), canonicalPath(root)]);
+	return isWithinPath(resolvedPath, resolvedRoot);
 }
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
