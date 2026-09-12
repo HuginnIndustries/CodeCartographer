@@ -1,0 +1,145 @@
+schema_version: 1
+phase_id: defect-scan-mechanical
+owner_notes:
+  - >-
+    40 findings (0 critical, 7 high, 17 medium, 16 low) across passes 1, 2, 6. The high
+    group clusters in two places: the hand-rolled YAML round trip (core/yaml.ts emits
+    scalar-looking strings unquoted; a digit-only repo name bricks status.yaml on reload) and
+    Broad-Side's silent-default posture on MCP (no max_cost by default, a config typo removes a
+    configured cap, a corrupt state.json is overwritten, wait_seconds 0 becomes a 25-minute
+    block).
+  - >-
+    Runtime evidence was cheap and decisive: the repo's own suite passes 696/696 on a pristine
+    clone but 678/696 in this clone after one phase of outputs, because codecarto_init copies
+    findings from the live packaged template — the same defect that lets a checkout install
+    seed every new workspace with someone else's findings. Four node probes against
+    core/yaml.ts upgraded three findings from inference to observed fact.
+  - >-
+    .codecarto/.gitignore is absent from the npm tarball (npm pack --dry-run, 0 matches), so
+    npm-installed workspaces do not get the ignore rules that keep dashboard.html and the usage
+    log (absolute session paths) out of git; checkout installs do get them, and those ignore
+    every findings file. Which behavior a user gets depends on the install path.
+open_questions:
+  - id: q-pi-ctx-invalidation
+    kind: needs-runtime-test
+    description: >-
+      Does running a phase through createAgentSession (not ctx.newSession) invalidate the
+      orchestrator's ExtensionContext so that ctx.cwd throws afterwards? The code's own comments
+      disagree (agent-runner.ts:2-3 vs auto-runner.ts:321-323 and index.ts:755-760), and
+      auto-runner.ts:170,387 still read ctx.cwd after a sub-agent while sibling sites capture
+      cwd beforehand.
+    deferred_reason: >-
+      Only a real Pi session with a real sub-agent settles it; the test harness cannot spawn one
+      (tests/pi-command-handlers.test.mjs:170-177) and no SDK source was read.
+carry_forward:
+  - id: mech-CF1
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: >-
+      core/status.ts:424-426 release() removes the lock file unconditionally; after another
+      process breaks a stale lock (:433-437) and takes its own, the original holder's release
+      deletes the new holder's lock.
+    deferred_reason: Lock and race analysis is semantic pass 3.
+  - id: mech-CF2
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: >-
+      core/utils.ts:57-68 isWithinPathResolved falls back to a lexical check when the target
+      does not exist; a not-yet-existing file under a symlinked directory inside .codecarto/
+      passes the Pi write guard at extensions/codecarto/index.ts:436-448.
+      tests/symlink-sandbox.test.mjs covers only existing paths.
+    deferred_reason: Trust-boundary analysis is semantic pass 4.
+  - id: mech-CF3
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: >-
+      mcp-server/server.ts:704-708 handlePublish adds join(args.cwd, ".codecarto") to the
+      spec_path containment roots without validating cwd is absolute when library_path is
+      supplied; a relative cwd resolves against the server process directory.
+    deferred_reason: Containment analysis is semantic pass 4.
+  - id: mech-CF4
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    derives_from: q-pi-ctx-invalidation
+    description: >-
+      extensions/codecarto/auto-runner.ts:170 and :387 read ctx.cwd after a phase sub-agent has
+      run, while :321-323 and index.ts:755-760 capture cwd beforehand because the ctx is said to
+      be invalidated. If invalidation is real, --auto crashes at its first validation; if not,
+      the captured-cwd sites are dead defensive code. One candidate answer to
+      q-pi-ctx-invalidation; no settled action until runtime evidence closes the question.
+    deferred_reason: Needs the runtime answer plus pass 3/5 framing.
+  - id: mech-CF5
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: >-
+      core/broadside.ts:2678 runBroadsideCollect always targets state.runs[last]; a submit that
+      lands between a collect's load and its persist retargets the collect to the new run. The
+      lost-update fix at :1721-1741 protects the file, not the run selection.
+    deferred_reason: Interleaving analysis is semantic pass 3.
+  - id: mech-CF6
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: >-
+      core/library.ts publishEntry (:588-726) and reindex (:933-993) take no cross-process lock;
+      two publishes of one slug can compute the same nextVersion from listVersionDirs, and the
+      index can be written from a partial view.
+    deferred_reason: Race analysis is semantic pass 3.
+carry_forward_closures: []
+open_question_closures: []
+post_pipeline: []
+decisions:
+  - >-
+    The scan used runtime evidence in addition to reading: npm ci + npm test in the scratch
+    clone (twice, once on a pristine second clone), node probe scripts importing core/yaml.ts
+    and core/status.ts, and npm pack --dry-run. None modifies source; node_modules/ now exists
+    in the clone. Findings resting on these cite the command in their Defect cell.
+  - >-
+    Severity for Broad-Side findings assumes the MCP posture (no human confirm hook); the same
+    defects on Pi are one severity lower because the spend dialog intervenes.
+proposed_conventions:
+  - name: cheap-runtime-probe-before-severity
+    rule: >-
+      When a finding rests on how a parser, serializer, or normalizer treats an input, run a
+      one-line probe against the module before assigning severity and evidence level; cite the
+      probe output in the finding. Reading alone left three of this phase's findings at
+      strong inference; probes settled all three as observed fact in under a minute.
+    evidence: >-
+      defect-scan-mechanical §Runtime probes A2, B2, C, D; the repo's tests load .ts directly
+      with --experimental-strip-types, so probes need no build.
+closeout_summary: >-
+  40 mechanical findings (7 high): YAML round-trip coercion bricks digit-named repos, init
+  copies live findings from the template (18/696 tests fail after one phase), .gitignore not
+  shipped, Broad-Side unguarded by default on MCP; six items routed to the semantic scan.
+closeout_content: |-
+  # Closeout — defect-scan-mechanical
+
+  ## Summary
+
+  - Primary output: `findings/defect-scan-mechanical/mechanical-defects.md` (PASS, 8/8).
+  - 40 findings: 0 critical, 7 high, 17 medium, 16 low (pass 1: 15, pass 2: 11, pass 6: 14).
+  - Highs: (1) `core/yaml.ts` emits scalar-looking strings unquoted, so a digit-only repo
+    name breaks every later load; (2) `copyPackagedWorkspace` does not exclude findings, so
+    a checkout install seeds new workspaces with existing findings and validation passes on
+    them — reproduced as 18 test failures in this clone vs 0 on a pristine one; (3)
+    `.codecarto/.gitignore` is not in the npm tarball; (4) `wait_seconds: 0` on collect becomes
+    a 25-minute block; (5) no `max_cost` by default on MCP; (6) a malformed Broad-Side config
+    silently drops a configured cap; (7) a corrupt `state.json` is overwritten, orphaning paid
+    runs.
+  - Runtime evidence: two test-suite runs, four YAML/status probes, one `npm pack --dry-run`,
+    all recorded in the report's §Runtime probes.
+
+  ## Routed
+
+  - mech-CF1..CF6 → defect-scan-semantic (lock release ownership, symlink fallback in the
+    write guard, publish containment root, ctx invalidation, collect run selection, library
+    publish races).
+  - q-pi-ctx-invalidation registered (needs-runtime-test); mech-CF4 derives from it.
+
+  ## Coverage
+
+  - All of core/, mcp-server/, extensions/codecarto/ scanned; tests executed and excerpted;
+    dashboard CSS/inline script and demo scripts skipped.
+
+  ## Proposed Conventions
+
+  - cheap-runtime-probe-before-severity (staged by completion).

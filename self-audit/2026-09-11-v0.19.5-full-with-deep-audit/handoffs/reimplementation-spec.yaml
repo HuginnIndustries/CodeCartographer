@@ -1,0 +1,114 @@
+schema_version: 1
+phase_id: reimplementation-spec
+owner_notes:
+  - >-
+    Language-agnostic variant, selected by the run's instructions rather than the interactive
+    Strategic Alignment Hook (the user was not in the loop by design); recorded in the spec
+    front matter and validation block so an opinionated rerun is traceable.
+  - >-
+    Kernel of six concept modules (workspace store, dialect, engine, validator, gate, prompt
+    assembler) over five ports, with an acceptance harness built before any adapter; the
+    eleven high defects are rules R-S1..R-S11 and named H-tests, the mediums are R-M rules
+    with M-tests, and the lows are non-goals or a docs pass. No deep reads below the bundle
+    were needed.
+  - >-
+    The template's Carry-Forward guidance for this phase (targets spike/delta/amendment) is
+    not usable: completion refuses any target_phase outside the active pipeline, so the five
+    spikes are recorded as post_pipeline entries of kind spike instead.
+open_questions:
+  - id: q-findings-commit-policy
+    kind: needs-maintainer-decision
+    description: >-
+      Should findings outputs be committed by default? Today it depends on the install path
+      (D-M16: npm installs get no ignore file, checkout installs ignore every finding); the
+      spec assumes committed-with-opt-out.
+    deferred_reason: Product decision, not derivable from code.
+  - id: q-publish-confirm-on-init
+    kind: needs-maintainer-decision
+    description: >-
+      Should library-init enable the RPC confirm gate by writing publish_confirm: true
+      (D-M15)? The spec assumes "write only what was asked".
+    deferred_reason: Product decision.
+  - id: q-opinionated-rerun
+    kind: needs-maintainer-decision
+    description: >-
+      Whether to rerun reimplementation-spec with the opinionated template once a target stack
+      is chosen; this run took the language-agnostic default without asking.
+    deferred_reason: The interactive hook was not answerable in this run.
+carry_forward: []
+carry_forward_closures:
+  - port-CF1
+  - port-CF2
+open_question_closures: []
+post_pipeline:
+  - id: spike-openrouter-fixture
+    kind: spike
+    description: >-
+      Capture one live Broad-Side submit + poll exchange (key redacted) as a fixture; settles
+      q-openrouter-batch-envelope and pins the batch adapter's parser.
+  - id: spike-codex-envelope
+    kind: spike
+    description: >-
+      Call one prose tool through a running Codex and record which result field it surfaces;
+      settles q-codex-envelope-preference (spec scenario C4).
+  - id: spike-pi-sandbox-e2e
+    kind: spike
+    description: >-
+      Drive spec scenario H1 (symlinked directory, non-existent target) through a real Pi
+      session so the hook's actual input.path shape is exercised, not only the containment
+      helper.
+  - id: spike-windows-atomicity
+    kind: spike
+    description: >-
+      Test rename-over-open-file and O_EXCL semantics on Windows for the port's atomic-write
+      and lock primitives; decides whether the spec's platform assumption widens.
+  - id: spike-session-disposal
+    kind: spike
+    description: >-
+      Measure what an undisposed child session retains on the Pi host across a seven-phase
+      auto run; converts D-M19 from inference to measurement.
+decisions:
+  - >-
+    The reimplementation-spec variant was chosen (language-agnostic) without the interactive
+    Strategic Alignment Hook because the run's instructions forbid pausing for the user; the
+    choice, its reason, and the three unresolved product decisions are recorded so an
+    opinionated rerun can supersede them.
+  - >-
+    Spikes are recorded as post_pipeline entries rather than the carry_forward targets the
+    template suggests (spike/delta/amendment), because completion refuses any target_phase
+    outside the active pipeline; the template guidance contradicts the gate.
+proposed_conventions: []
+closeout_summary: >-
+  Language-agnostic spec: six-module kernel over five ports, kernel-first build in twelve
+  milestones, eleven high defects as normative rules with named tests, 30 scenarios plus the
+  contracts list by reference, five spikes and three maintainer decisions recorded; port-CF1
+  and port-CF2 closed. Pipeline complete.
+closeout_content: |-
+  # Closeout — reimplementation-spec
+
+  ## Summary
+
+  - Primary output: `findings/reimplementation-spec/reimplementation-spec.md` (PASS, 8/8).
+  - Variant language-agnostic, run-instructed default (front matter).
+  - Kernel K1-K6 over ports P1-P5, adapters A1-A5, extensions X1-X6, delivery D1-D4; layer
+    split; 21 required behaviors folding every defect disposition into normative rules;
+    byte-for-byte vs re-encodable persisted state; dependency stances; twelve kernel-first
+    milestones with three scope tiers; 30 acceptance scenarios (11 H, 12 M, 7 C) plus the
+    32 contract scenarios by reference; non-goals; five spikes.
+
+  ## Routed and closed
+
+  - Closed port-CF1 (strategic assumptions recorded) and port-CF2 (rings and H-tests).
+  - Registered q-findings-commit-policy, q-publish-confirm-on-init, q-opinionated-rerun
+    (needs-maintainer-decision).
+  - post_pipeline: spike-openrouter-fixture, spike-codex-envelope, spike-pi-sandbox-e2e,
+    spike-windows-atomicity, spike-session-disposal.
+
+  ## Coverage
+
+  - Bundle read in full; no lower-level deep reads needed; synthesis phases and lens prompt
+    wording remain PARTIAL as inherited.
+
+  ## Proposed Conventions
+
+  - None this phase.

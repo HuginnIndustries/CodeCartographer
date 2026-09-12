@@ -1,0 +1,117 @@
+schema_version: 1
+phase_id: contracts
+owner_notes:
+  - >-
+    All 22 MCP tools and 20 Pi commands have nine-field contracts; the same core path serves
+    both, and every divergence is either deliberate (Pi asks, MCP refuses; Pi executes next,
+    MCP returns text; Pi derives publish inputs) or one of four accidental ones (dashboard on
+    MCP switch_pipeline, library-init path/tilde handling, config warning before activation,
+    the shared wait_seconds bug). Tests are the executable contract: 20 files read in full.
+  - >-
+    Eleven doc/code conflicts recorded; the load-bearing one is MANUAL.md still describing the
+    pre-0.12 drop-in contract (LLM edits status.yaml and THREAD_LOG, parallel sessions overwrite
+    each other) while GUIDE.md forbids it and completion locks. In pure drop-in mode the MANUAL
+    path is the only one that exists, so the conflict is real for drop-in users.
+  - >-
+    q-pi-ctx-invalidation was answerable by reading: the Pi SDK (0.85.1) invalidates a ctx only
+    in AgentSession.dispose() and reload(); createAgentSession never disposes the parent. The
+    extension's stale-ctx defenses therefore guard against a user /new or /reload mid-run, not
+    against running a phase. mech-CF4 stays routed with that corrected framing.
+open_questions:
+  - id: q-codex-envelope-preference
+    kind: needs-runtime-test
+    description: >-
+      Which MCP result field does Codex surface to its model, content[0].text or
+      structuredContent? docs/client-surfaces.md:27 records it as unknown. Both fields carry the
+      text since 0.14.1, so no contract depends on the answer, but the "any MCP-capable agent"
+      claim rests on it.
+    deferred_reason: >-
+      Only observable by calling a prose tool (codecarto_next) through a running Codex; the SDK
+      deserializing the field proves it parses it, not which it prefers.
+carry_forward:
+  - id: contracts-CF1
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: >-
+      Doc/code conflicts from behavioral-contracts.md §Doc/Test Conflicts #1-#7 and #10 are
+      candidate pass-5 findings: MCP switch_pipeline does not re-render the dashboard although
+      the README says every state change does (server.ts:316-341 vs index.ts:645); README claims
+      "No JavaScript" for a dashboard that embeds a script (core/dashboard.ts:628-666); MANUAL
+      Step 4/5 and Multi-Session tell the LLM to edit status.yaml and THREAD_LOG and warn that
+      parallel sessions overwrite each other; MANUAL Step 2 names full-with-audit as default;
+      mcp-quickstart:147 says the mechanical scan covers security/concurrency/API; quickstart:182
+      quotes a completion message the server does not emit; README promises dashboard
+      session-file links the renderer refuses.
+    deferred_reason: >-
+      Classifying documented-versus-actual behavior as defects with severity and action is the
+      semantic pass's pass-5 rubric.
+  - id: contracts-CF2
+    kind: defer-to-phase
+    target_phase: porting
+    description: >-
+      The surface parity table in findings/public-surfaces/public-surfaces.md §2026-09-11
+      contracts separates deliberate divergences from accidental ones; a port must decide which
+      to preserve (Pi's confirm dialogs and sub-agent execution are surface ergonomics; the
+      dashboard-on-switch and library-init path handling gaps are not).
+    deferred_reason: Which divergences survive a port is a porting-synthesis judgment.
+carry_forward_closures:
+  - arch-CF3
+open_question_closures:
+  - id: q-pi-ctx-invalidation
+    evidence: >-
+      The Pi SDK's own source, node_modules/@earendil-works/pi-coding-agent@0.85.1
+      dist/core/agent-session.js:584-595 (dispose) and :2217-2221 (reload) are the only callers
+      of ExtensionRunner.invalidate (dist/core/extensions/runner.js:396-405); createAgentSession
+      constructs a separate session and never disposes the parent. Recorded in
+      behavioral-contracts.md §High-Value Behaviors and runtime-lifecycle.md §2026-09-11 contracts.
+post_pipeline: []
+decisions:
+  - >-
+    Contracts are written at operation granularity (one table per operation, Pi deltas inline)
+    rather than one table per surface entry, because the two surfaces share one core path for
+    every operation; the parity table in public-surfaces.md records the divergences.
+  - >-
+    Where documentation and tests disagree, the test is treated as the contract and the conflict
+    is listed rather than resolved; the eleven conflicts are routed to the semantic pass for
+    defect classification rather than fixed in prose here.
+  - >-
+    A needs-runtime-test question was closed on the external system's own source (the Pi SDK in
+    node_modules) rather than a live probe, on the SKILL's definition that an external-behavior
+    claim is settled by "a runtime probe or that system's own source".
+proposed_conventions: []
+closeout_summary: >-
+  22 MCP tools and 20 Pi commands contracted with defaults, side effects, errors, recovery;
+  32 black-box scenarios; 11 doc/code conflicts routed to the semantic pass; arch-CF3 closed;
+  q-pi-ctx-invalidation closed on SDK source; surface parity routed to porting.
+closeout_content: |-
+  # Closeout — contracts
+
+  ## Summary
+
+  - Primary output: `findings/contracts/behavioral-contracts.md` (PASS, 7/7).
+  - Sixteen contract tables cover every MCP tool and Pi command; TUI-only behaviors and
+    storage formats in compact tables; 32 black-box acceptance scenarios, three of which pin
+    current defects (Overall-line decoration, switch-pipeline current_phase, digit-named repo).
+  - Security model: no auth; trust boundary is the absolute cwd plus write containment to
+    .codecarto/, the configured library, and the user-global config; Pi adds a tool sandbox.
+  - Eleven documentation-versus-code conflicts recorded; MANUAL.md still teaches the pre-0.12
+    hand-edit contract.
+  - Secondary outputs appended: public-surfaces (parity table), config-model (doc precedence
+    notes), runtime-lifecycle (auto decision matrix, SDK invalidation sites), state-and-storage
+    (per-operation write matrix).
+
+  ## Routed and closed
+
+  - Closed arch-CF3 (per-command contracts) and q-pi-ctx-invalidation (Pi SDK source).
+  - contracts-CF1 → defect-scan-semantic (doc/code conflicts as pass-5 candidates).
+  - contracts-CF2 → porting (surface parity decisions).
+  - q-codex-envelope-preference registered (needs-runtime-test).
+
+  ## Coverage
+
+  - Docs read in full: README, MANUAL, mcp-quickstart, client-surfaces, CHANGELOG 0.19.x.
+  - Tests read in full: 20 files; the rest by name. Library-format spec left to protocols.
+
+  ## Proposed Conventions
+
+  - None this phase.

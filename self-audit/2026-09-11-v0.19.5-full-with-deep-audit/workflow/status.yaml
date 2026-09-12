@@ -1,0 +1,158 @@
+project_name: codecarto-self
+pipeline: workflow/pipeline-full-with-deep-audit.yaml
+current_phase: complete
+last_updated: "2026-09-12T01:57:07.552Z"
+schema_version: 1
+phases:
+  architecture:
+    status: complete
+    owner_notes:
+      - "Completed via codecarto_complete."
+      - "Primary output: .codecarto/findings/architecture/architecture-map.md"
+      - "Validation: PASS"
+      - "Execution strategy: inline (single Claude Code chat driving the MCP tools, executing phases itself, holding the orchestrator duties at each boundary). Seeded CONVENTIONS.md and DECISIONS.md from templates per GUIDE §First-Time Project Setup even though closeouts/ was non-empty — the one closeout present is this repository's own shipped 2026-05-02 entry, not a prior run against this clone."
+      - "Shape: 19 core modules (9,447 lines) with no internal import cycles, wrapped by an MCP server (22 tools, 1,753 lines) and a Pi extension (20 commands, 4,099 lines); 52 test files with 639 tests were inventoried but not read this phase. The only runtime npm dependency is the MCP SDK; every YAML file goes through the hand-rolled parser in core/yaml.ts."
+      - "Two boundary facts the CLAUDE.md architecture note does not state: mcp-server/server.ts:105 imports extensions/codecarto/dashboard-writer.ts, and both wrappers import four core modules directly instead of through core/index.ts. Neither is a bug; both are porting decisions (routed as arch-CF2)."
+    outputs_present:
+      - findings/architecture/architecture-map.md
+    open_questions: []
+    carry_forward: []
+  defect-scan-mechanical:
+    status: complete
+    owner_notes:
+      - "Completed via codecarto_complete."
+      - "Primary output: .codecarto/findings/defect-scan-mechanical/mechanical-defects.md"
+      - "Validation: PASS"
+      - "40 findings (0 critical, 7 high, 17 medium, 16 low) across passes 1, 2, 6. The high group clusters in two places: the hand-rolled YAML round trip (core/yaml.ts emits scalar-looking strings unquoted; a digit-only repo name bricks status.yaml on reload) and Broad-Side's silent-default posture on MCP (no max_cost by default, a config typo removes a configured cap, a corrupt state.json is overwritten, wait_seconds 0 becomes a 25-minute block)."
+      - "Runtime evidence was cheap and decisive: the repo's own suite passes 696/696 on a pristine clone but 678/696 in this clone after one phase of outputs, because codecarto_init copies findings from the live packaged template — the same defect that lets a checkout install seed every new workspace with someone else's findings. Four node probes against core/yaml.ts upgraded three findings from inference to observed fact."
+      - ".codecarto/.gitignore is absent from the npm tarball (npm pack --dry-run, 0 matches), so npm-installed workspaces do not get the ignore rules that keep dashboard.html and the usage log (absolute session paths) out of git; checkout installs do get them, and those ignore every findings file. Which behavior a user gets depends on the install path."
+    outputs_present:
+      - findings/defect-scan-mechanical/mechanical-defects.md
+    open_questions: []
+    carry_forward: []
+  contracts:
+    status: complete
+    owner_notes:
+      - "Completed via codecarto_complete."
+      - "Primary output: .codecarto/findings/contracts/behavioral-contracts.md"
+      - "Validation: PASS"
+      - "All 22 MCP tools and 20 Pi commands have nine-field contracts; the same core path serves both, and every divergence is either deliberate (Pi asks, MCP refuses; Pi executes next, MCP returns text; Pi derives publish inputs) or one of four accidental ones (dashboard on MCP switch_pipeline, library-init path/tilde handling, config warning before activation, the shared wait_seconds bug). Tests are the executable contract: 20 files read in full."
+      - "Eleven doc/code conflicts recorded; the load-bearing one is MANUAL.md still describing the pre-0.12 drop-in contract (LLM edits status.yaml and THREAD_LOG, parallel sessions overwrite each other) while GUIDE.md forbids it and completion locks. In pure drop-in mode the MANUAL path is the only one that exists, so the conflict is real for drop-in users."
+      - "q-pi-ctx-invalidation was answerable by reading: the Pi SDK (0.85.1) invalidates a ctx only in AgentSession.dispose() and reload(); createAgentSession never disposes the parent. The extension's stale-ctx defenses therefore guard against a user /new or /reload mid-run, not against running a phase. mech-CF4 stays routed with that corrected framing."
+    outputs_present:
+      - findings/contracts/behavioral-contracts.md
+    open_questions:
+      -
+        id: q-codex-envelope-preference
+        kind: needs-runtime-test
+        description: "Which MCP result field does Codex surface to its model, content[0].text or structuredContent? docs/client-surfaces.md:27 records it as unknown. Both fields carry the text since 0.14.1, so no contract depends on the answer, but the \"any MCP-capable agent\" claim rests on it."
+        deferred_reason: "Only observable by calling a prose tool (codecarto_next) through a running Codex; the SDK deserializing the field proves it parses it, not which it prefers."
+    carry_forward: []
+  protocols:
+    status: complete
+    owner_notes:
+      - "Completed via codecarto_complete."
+      - "Primary output: .codecarto/findings/protocols/protocols-and-state.md"
+      - "Validation: PASS"
+      - "Nine boundaries, 22 catalog entries. The framework's real wire protocol is markdown: the validation block (last \"## Validation\" heading, any 4-cell row, an exact Overall literal), the coverage ledger (five fixed bullet labels, sub-bullets folded with \"; \"), and the findings tables (header must contain \"evidence level\" and \"action\") are the contract the host LLM must satisfy, and all three are substring/regex parses."
+      - "Six independent schema-version axes exist (status, handoff/amendment, scaffold version, library marker+index, broadside state and catalog cache, usage log); only the first two refuse anything, the scaffold version gates two rules by threshold, the rest are written and never read. The catalog cache is written as schema 2 with no reader check."
+      - "Completion's transaction writes the closeout, THREAD_LOG line, DECISIONS rows, and CONVENTIONS proposals inside the updater, before the status.yaml temp+rename (completion.ts:502 vs workspace.ts:365-370); a failure between them leaves the log asserting a completion the status does not record. Routed to the semantic pass with five other protocol drifts."
+    outputs_present:
+      - findings/protocols/protocols-and-state.md
+    open_questions:
+      -
+        id: q-openrouter-batch-envelope
+        kind: needs-fixture-capture
+        description: "The OpenRouter batch submit (HTTP 202 {id, status}) and poll ({status, request_counts, results[].response.body.choices[0].message.content, usage.cost, error}) shapes in protocols-and-state.md E19 are asserted only by core/broadside.ts's parser and by test fakes that mirror it; no captured live exchange is checked in."
+        deferred_reason: "Needs one recorded submit + poll exchange (key redacted) saved as a fixture so the parser is tested against the peer rather than against itself."
+    carry_forward: []
+  defect-scan-semantic:
+    status: complete
+    owner_notes:
+      - "Completed via codecarto_complete."
+      - "Primary output: .codecarto/findings/defect-scan-semantic/semantic-defects.md"
+      - "Validation: PASS"
+      - "38 findings (0 critical, 4 high, 15 medium, 19 low) across passes 3, 4, 5. Four of the highs were reproduced by runtime probes rather than argued from reading: the symlink write-guard bypass for not-yet-existing files, the lock release that deletes another holder's lock after a stale break, the pid+millisecond temp-name collision that silently loses concurrent usage appends and a concurrent publish, and a stuck DAG reported as \"pipeline complete\" by completion, status, next, the skill gate, and amendments."
+      - "All nine routed items closed: arch-CF4, mech-CF1..CF6, contracts-CF1, proto-CF1. mech-CF5 (collect retargeting) did not reproduce and is recorded as a design limitation; mech-CF4 took a settled action because its question was closed on the SDK source in contracts."
+      - "Pass 4 found no XSS or injection path in the dashboard; the real trust-boundary issues are the LLM-driven write sandbox (symlink fallback), an unvalidated skill name that reaches a path join, and earlier-phase findings text spliced into later prompts without delimiters."
+    outputs_present:
+      - findings/defect-scan-semantic/semantic-defects.md
+    open_questions: []
+    carry_forward: []
+  porting:
+    status: complete
+    owner_notes:
+      - "Completed via codecarto_complete."
+      - "Primary output: .codecarto/findings/porting/reverse-engineering-bundle.md"
+      - "Validation: PASS"
+      - "The bundle reconciles 78 defect findings (40 mechanical, 38 semantic) into 11 high roots, 28 medium rows, and 7 low groups, each with a disposition and a design consequence; three overlaps merged (mech 1.3/6.2/6.3 = sem 5.13/5.14/5.15) and the usage-log root (mech 2.3 + sem 3.2/3.3) unified. No disposition is \"verify at runtime\": neither open question in this run underlies a defect claim."
+      - "The port's kernel is six concept modules (workspace store, document dialect, pipeline engine, artifact validator, handoff/completion gate, prompt assembler) that the tests already drive without either shell; the shells are adapters. The one shared-layer gap is a state-store primitive (owned lock + unique-suffix atomic write) that eight writers hand-roll today."
+      - "Preserve byte-for-byte: status/handoff/amendment schemas, template paths, the three line formats, the library format, Broad-Side state. May re-encode with tests re-pinned: usage log, dashboard island, catalog cache, narration cache, checkpoints. The YAML dialect must stay a read-superset and the emitter must quote whatever the reader would coerce."
+    outputs_present:
+      - findings/porting/reverse-engineering-bundle.md
+    open_questions: []
+    carry_forward: []
+  reimplementation-spec:
+    status: complete
+    owner_notes:
+      - "Completed via codecarto_complete."
+      - "Primary output: .codecarto/findings/reimplementation-spec/reimplementation-spec.md"
+      - "Validation: PASS"
+      - "Language-agnostic variant, selected by the run's instructions rather than the interactive Strategic Alignment Hook (the user was not in the loop by design); recorded in the spec front matter and validation block so an opinionated rerun is traceable."
+      - "Kernel of six concept modules (workspace store, dialect, engine, validator, gate, prompt assembler) over five ports, with an acceptance harness built before any adapter; the eleven high defects are rules R-S1..R-S11 and named H-tests, the mediums are R-M rules with M-tests, and the lows are non-goals or a docs pass. No deep reads below the bundle were needed."
+      - "The template's Carry-Forward guidance for this phase (targets spike/delta/amendment) is not usable: completion refuses any target_phase outside the active pipeline, so the five spikes are recorded as post_pipeline entries of kind spike instead."
+    outputs_present:
+      - findings/reimplementation-spec/reimplementation-spec.md
+    open_questions:
+      -
+        id: q-findings-commit-policy
+        kind: needs-maintainer-decision
+        description: "Should findings outputs be committed by default? Today it depends on the install path (D-M16: npm installs get no ignore file, checkout installs ignore every finding); the spec assumes committed-with-opt-out."
+        deferred_reason: "Product decision, not derivable from code."
+      -
+        id: q-publish-confirm-on-init
+        kind: needs-maintainer-decision
+        description: "Should library-init enable the RPC confirm gate by writing publish_confirm: true (D-M15)? The spec assumes \"write only what was asked\"."
+        deferred_reason: "Product decision."
+      -
+        id: q-opinionated-rerun
+        kind: needs-maintainer-decision
+        description: "Whether to rerun reimplementation-spec with the opinionated template once a target stack is chosen; this run took the language-agnostic default without asking."
+        deferred_reason: "The interactive hook was not answerable in this run."
+    carry_forward: []
+next_actions:
+  - "All phases complete. Review findings; post-pipeline skills: codecarto_list_skills then codecarto_skill on MCP, /codecarto-list-skills then /codecarto-skill on Pi."
+  - "5 open question(s) and 5 post-pipeline item(s) remain — apply resolutions with codecarto_amend on MCP, /codecarto-amend on Pi (write scratch/amendments/<slug>.yaml from templates/amendment.yaml)."
+  - "Publish the finished spec to a library: codecarto_publish on MCP, /codecarto-publish on Pi (create one with codecarto_library_init on MCP, /codecarto-library-init on Pi; see the library guide topic)."
+  - "Dashboard: .codecarto/dashboard.html (refreshed on completion and amendment; re-render on demand with codecarto_dashboard on MCP, /codecarto-dashboard on Pi). Usage totals: codecarto_usage on MCP, /codecarto-usage on Pi."
+post_pipeline:
+  -
+    id: spike-openrouter-fixture
+    kind: spike
+    description: "Capture one live Broad-Side submit + poll exchange (key redacted) as a fixture; settles q-openrouter-batch-envelope and pins the batch adapter's parser."
+    source_phase: reimplementation-spec
+    status: pending
+  -
+    id: spike-codex-envelope
+    kind: spike
+    description: "Call one prose tool through a running Codex and record which result field it surfaces; settles q-codex-envelope-preference (spec scenario C4)."
+    source_phase: reimplementation-spec
+    status: pending
+  -
+    id: spike-pi-sandbox-e2e
+    kind: spike
+    description: "Drive spec scenario H1 (symlinked directory, non-existent target) through a real Pi session so the hook's actual input.path shape is exercised, not only the containment helper."
+    source_phase: reimplementation-spec
+    status: pending
+  -
+    id: spike-windows-atomicity
+    kind: spike
+    description: "Test rename-over-open-file and O_EXCL semantics on Windows for the port's atomic-write and lock primitives; decides whether the spec's platform assumption widens."
+    source_phase: reimplementation-spec
+    status: pending
+  -
+    id: spike-session-disposal
+    kind: spike
+    description: "Measure what an undisposed child session retains on the Pi host across a seven-phase auto run; converts D-M19 from inference to measurement."
+    source_phase: reimplementation-spec
+    status: pending
