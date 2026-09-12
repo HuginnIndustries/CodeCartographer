@@ -89,6 +89,28 @@ export function resolvePipelineChoice(input: string): string | null {
 	return trimmed.endsWith(".yaml") ? trimmed : null;
 }
 
+/** What an Overall line can say; MISSING is the validator's own word for an absent output. */
+type OverallVerdict = Exclude<ValidationResult["overall"], "MISSING">;
+
+/**
+ * Read the verdict off a `**Overall:**` line, tolerating decoration around
+ * it: `**Overall:** PASS (6/6)`, `**Overall:** **PASS WITH GAPS** — see §3`,
+ * `**Overall**: \`PASS\`.`, a leading list marker. The verdict is whatever the
+ * value starts with; anything after it is commentary. Returns null for a
+ * line that is not an Overall line at all, and `{ verdict: null }` for one
+ * whose value does not start with a verdict, so the caller can say which
+ * line it could not read rather than reporting a bare FAIL (#247).
+ */
+export function parseOverallLine(line: string): { verdict: OverallVerdict | null } | null {
+	const match = /^(?:[-*>]\s+)?\*\*Overall(?::\*\*|\*\*:)\s*(.*)$/i.exec(line.trim());
+	if (!match) return null;
+	const value = (match[1] ?? "").replace(/^[\s*_`]+/, "").toUpperCase();
+	if (/^PASS WITH GAPS(?![A-Z])/.test(value)) return { verdict: "PASS WITH GAPS" };
+	if (/^PASS(?![A-Z])/.test(value)) return { verdict: "PASS" };
+	if (/^FAIL(?![A-Z])/.test(value)) return { verdict: "FAIL" };
+	return { verdict: null };
+}
+
 export async function validatePhaseOutput(state: WorkspaceState, phaseId?: string): Promise<ValidationResult> {
 	const phase = resolvePhase(state, phaseId);
 	if (!phase) {
@@ -145,6 +167,10 @@ export async function validatePhaseOutput(state: WorkspaceState, phaseId?: strin
 	const validationContent = content.slice(validationHeadingIndex);
 	const rows: Array<{ criterion: string; result: string; evidence: string }> = [];
 	let overall: ValidationResult["overall"] = "FAIL";
+	const errors: string[] = [];
+	// The last **Overall:** line wins; what it said is remembered so the error
+	// can quote it when the verdict could not be read or was FAIL.
+	let overallLine: { text: string; verdict: OverallVerdict | null } | null = null;
 
 	for (const rawLine of validationContent.split(/\r?\n/)) {
 		const line = rawLine.trim();
@@ -162,16 +188,20 @@ export async function validatePhaseOutput(state: WorkspaceState, phaseId?: strin
 			}
 		}
 
-		const overallMatch = line.match(/^\*\*Overall:\*\*\s*(.+)$/i);
-		if (overallMatch?.[1]) {
-			const normalizedOverall = overallMatch[1].trim().toUpperCase();
-			if (normalizedOverall === "PASS") overall = "PASS";
-			else if (normalizedOverall === "PASS WITH GAPS") overall = "PASS WITH GAPS";
-			else overall = "FAIL";
+		const parsed = parseOverallLine(line);
+		if (parsed) {
+			overallLine = { text: line, verdict: parsed.verdict };
+			overall = parsed.verdict ?? "FAIL";
 		}
 	}
 
-	const errors: string[] = [];
+	if (!overallLine) {
+		errors.push("No **Overall:** line found in the ## Validation block. End the block with `**Overall:** PASS`, `**Overall:** PASS WITH GAPS`, or `**Overall:** FAIL`.");
+	} else if (overallLine.verdict === null) {
+		errors.push(`Could not read the verdict on the Overall line: "${overallLine.text}". It must start with PASS, PASS WITH GAPS, or FAIL; anything after the verdict is ignored.`);
+	} else if (overallLine.verdict === "FAIL") {
+		errors.push(`The Overall line says FAIL: "${overallLine.text}".`);
+	}
 	const gaps = rows
 		.filter((row) => row.result.toUpperCase().includes("PARTIAL"))
 		.map((row) => `${row.criterion}: ${row.evidence}`);
