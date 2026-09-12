@@ -136,6 +136,15 @@ export type JsonSchemaDef = {
 	schema: Record<string, unknown>;
 };
 
+/**
+ * Where the file list and the file contents both came from — one source, so
+ * a run's results correspond to one state of the repository (#248).
+ * `working-tree`: git's view of the checkout (tracked plus untracked files,
+ * ignore rules applied, files deleted on disk left out); `walk`: a bounded
+ * directory walk, for a target that is not a git repository.
+ */
+export type RepoSnapshotSource = "working-tree" | "walk";
+
 export type RepoInfo = {
 	name: string;
 	path: string;
@@ -147,6 +156,9 @@ export type RepoInfo = {
 	fileCounts: Record<string, number>;
 	sourceGlob: string;
 	sourceExts: string[];
+	/** How many slurpable files carry one of `sourceExts`; zero means no lens has code to scan. */
+	sourceFileCount: number;
+	snapshot: RepoSnapshotSource;
 };
 
 export type FileSlice = {
@@ -275,6 +287,10 @@ export type BroadsideRun = {
 	sourceDirty?: boolean;
 	/** When incremental, the previous run's HEAD this run diffs against. */
 	baseHead?: string | null;
+	/** Where the scanned files and their contents were read from (#248). */
+	snapshot?: RepoSnapshotSource;
+	/** The language the lenses scanned as. */
+	language?: string;
 };
 
 export type BroadsideStateFile = {
@@ -391,6 +407,14 @@ export type BroadsideSubmitResult = {
 		expirationDate?: string | null;
 	};
 	incremental: BroadsideIncrementalOutcome;
+	/** What was scanned: the language the lenses ran as and the snapshot the files came from. */
+	repo: {
+		language: string;
+		sourceFiles: number;
+		snapshot: RepoSnapshotSource;
+		sourceHead: string | null;
+		sourceDirty: boolean;
+	};
 };
 
 export type BroadsideCollectResult = {
@@ -1167,14 +1191,25 @@ const SKIP_FILE_EXTENSIONS = new Set([
 	".bpe",
 ]);
 
-const MANIFEST_CANDIDATES = [
-	["go.mod", "go"],
-	["package.json", "typescript"],
-	["Cargo.toml", "rust"],
-	["pyproject.toml", "python"],
-	["setup.py", "python"],
-	["requirements.txt", "python"],
+/**
+ * Manifest files and the languages each one can mean. `package.json` covers
+ * both TypeScript and JavaScript; which of the two a repository is comes from
+ * counting its source files, not from the manifest.
+ */
+const MANIFEST_CANDIDATES: ReadonlyArray<readonly [string, readonly string[]]> = [
+	["go.mod", ["go"]],
+	["package.json", ["typescript", "javascript"]],
+	["Cargo.toml", ["rust"]],
+	["pyproject.toml", ["python"]],
+	["setup.py", ["python"]],
+	["requirements.txt", ["python"]],
 ];
+
+/** The languages Broad-Side can scan; anything else is refused at submit. */
+export const BROADSIDE_LANGUAGES = ["go", "python", "rust", "typescript", "javascript"] as const;
+
+/** Chars of the entry-point file and the manifest that ride in the architecture prompt (#249). */
+const REPO_INFO_FILE_CAP = 20_000;
 
 const SOURCE_SPECS: Record<string, { glob: string; exts: string[] }> = {
 	go: { glob: "**/*.go", exts: [".go"] },
@@ -1184,15 +1219,29 @@ const SOURCE_SPECS: Record<string, { glob: string; exts: string[] }> = {
 	javascript: { glob: "**/*.js", exts: [".js", ".jsx"] },
 };
 
-async function listRepoFiles(targetDir: string): Promise<string[]> {
-	// git ls-tree is the fast path; fall back to a bounded walk for non-git trees.
+/**
+ * The files a run scans, and where they came from. Contents are always read
+ * from the working tree, so the list is the working tree's too: tracked files
+ * plus untracked ones git does not ignore, minus files deleted on disk. The
+ * list used to come from `git ls-tree HEAD`, so a run mixed the committed
+ * file list with uncommitted contents and never saw an untracked file (#248).
+ * A target that is not a git repository gets a bounded walk.
+ */
+async function listRepoFiles(targetDir: string): Promise<{ files: string[]; snapshot: RepoSnapshotSource }> {
 	try {
-		const { stdout } = await execFileAsync("git", ["-C", targetDir, "ls-tree", "-r", "--name-only", "HEAD"], {
+		const listed = await execFileAsync(
+			"git",
+			["-C", targetDir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+			{ maxBuffer: 64 * 1024 * 1024 },
+		);
+		const deleted = await execFileAsync("git", ["-C", targetDir, "ls-files", "-z", "--deleted"], {
 			maxBuffer: 64 * 1024 * 1024,
 		});
-		return stdout.split("\n").filter(Boolean);
+		const gone = new Set(deleted.stdout.split("\0").filter(Boolean));
+		const files = listed.stdout.split("\0").filter((path) => path && !gone.has(path));
+		return { files, snapshot: "working-tree" };
 	} catch {
-		return walkFiles(targetDir, targetDir, 0, 30_000);
+		return { files: await walkFiles(targetDir, targetDir, 0, 30_000), snapshot: "walk" };
 	}
 }
 
@@ -1265,25 +1314,49 @@ async function walkFiles(
 	return out;
 }
 
-function detectLanguage(fileCounts: Record<string, number>, manifestPath: string | null): string {
-	if (manifestPath) {
-		for (const [candidate, lang] of MANIFEST_CANDIDATES) {
-			if (manifestPath === candidate) return lang;
+function sourceFileCount(language: string, fileCounts: Record<string, number>): number {
+	return (SOURCE_SPECS[language]?.exts ?? []).reduce((sum, ext) => sum + (fileCounts[ext] ?? 0), 0);
+}
+
+/**
+ * The language the lenses scan as. The manifests present name the candidates
+ * (all of them, not the first one found: a Python service with a
+ * `package.json` for its docs tooling is not a TypeScript repository), and
+ * among candidates the one with the most source files wins; without a
+ * manifest, the language with the most source files; without any source
+ * file, `unknown` — which submit refuses rather than scanning nothing and
+ * paying for it (#250). Ties keep manifest order.
+ */
+function detectLanguage(fileCounts: Record<string, number>, manifestPaths: string[]): string {
+	const candidates: string[] = [];
+	for (const [candidate, languages] of MANIFEST_CANDIDATES) {
+		if (!manifestPaths.includes(candidate)) continue;
+		for (const language of languages) if (!candidates.includes(language)) candidates.push(language);
+	}
+	const pool = candidates.length > 0 ? candidates : [...BROADSIDE_LANGUAGES];
+	let best: string | null = null;
+	let bestCount = -1;
+	for (const language of pool) {
+		const count = sourceFileCount(language, fileCounts);
+		if (count > bestCount) {
+			best = language;
+			bestCount = count;
 		}
 	}
-	const counts: Record<string, number> = {
-		go: fileCounts[".go"] ?? 0,
-		python: fileCounts[".py"] ?? 0,
-		rust: fileCounts[".rs"] ?? 0,
-		typescript: (fileCounts[".ts"] ?? 0) + (fileCounts[".tsx"] ?? 0),
-		javascript: fileCounts[".js"] ?? 0,
-	};
-	const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
-	return best && best[1] > 0 ? best[0] : "unknown";
+	if (bestCount > 0) return best!;
+	// A manifest with no source files behind it still names the language;
+	// submit reports the empty count. No manifest and no source: unknown.
+	return candidates[0] ?? "unknown";
+}
+
+/** Cut a file that rides whole in a prompt down to the cap, saying so (#249). */
+function capForPrompt(content: string, cap: number): string {
+	if (content.length <= cap) return content;
+	return `${content.slice(0, cap)}\n… [truncated: ${cap.toLocaleString()} of ${content.length.toLocaleString()} chars shown]\n`;
 }
 
 export async function collectRepoInfo(targetDir: string): Promise<RepoInfo> {
-	const allFiles = await listRepoFiles(targetDir);
+	const { files: allFiles, snapshot } = await listRepoFiles(targetDir);
 
 	const fileCounts: Record<string, number> = {};
 	for (const f of allFiles) {
@@ -1298,25 +1371,36 @@ export async function collectRepoInfo(targetDir: string): Promise<RepoInfo> {
 		sortedCounts[ext] = n;
 	}
 
-	let manifest: { path: string; content: string } | null = null;
+	// Every manifest present counts toward language detection; the first one
+	// found is the one the architecture prompt shows.
+	const manifestPaths: string[] = [];
 	for (const [candidate] of MANIFEST_CANDIDATES) {
-		const p = join(targetDir, candidate);
-		if (await pathExists(p)) {
-			try {
-				manifest = { path: candidate, content: await readFile(p, "utf8") };
-			} catch {
-				manifest = null;
-			}
-			break;
+		if (await pathExists(join(targetDir, candidate))) manifestPaths.push(candidate);
+	}
+	const language = detectLanguage(sortedCounts, manifestPaths);
+	// Show the manifest that belongs to the detected language when there is
+	// one, so a polyglot repo's prompt does not open with the other stack's file.
+	const manifestPath = manifestPaths.find((path) => MANIFEST_CANDIDATES.find(([candidate]) => candidate === path)?.[1].includes(language))
+		?? manifestPaths[0]
+		?? null;
+	let manifest: { path: string; content: string } | null = null;
+	if (manifestPath) {
+		try {
+			manifest = { path: manifestPath, content: capForPrompt(await readFile(join(targetDir, manifestPath), "utf8"), REPO_INFO_FILE_CAP) };
+		} catch {
+			manifest = null;
 		}
 	}
 
+	// Read whole and unbounded before, and then estimated at a flat 6,000
+	// chars: a large entry point shipped in full while the cap was checked
+	// against a number that had nothing to do with it (#249).
 	let mainFile = "";
-	for (const candidate of ["main.go", "main.py", "src/main.rs", "src/index.ts", "index.ts"]) {
+	for (const candidate of ["main.go", "main.py", "src/main.rs", "src/index.ts", "index.ts", "src/index.js", "index.js"]) {
 		const p = join(targetDir, candidate);
 		if (await pathExists(p)) {
 			try {
-				mainFile = await readFile(p, "utf8");
+				mainFile = capForPrompt(await readFile(p, "utf8"), REPO_INFO_FILE_CAP);
 			} catch {
 				mainFile = "";
 			}
@@ -1336,9 +1420,11 @@ export async function collectRepoInfo(targetDir: string): Promise<RepoInfo> {
 
 	const fileTree = buildFileTree(allFiles);
 
-	const language = detectLanguage(sortedCounts, manifest?.path ?? null);
-	const sourceSpec = SOURCE_SPECS[language] ?? SOURCE_SPECS.go;
+	// An unknown language used to fall through to Go's globs, so the code
+	// lenses matched nothing and the run paid for empty batches (#250).
+	const sourceSpec = SOURCE_SPECS[language] ?? { glob: "", exts: [] };
 	const name = targetDir.split(/[\\/]/).filter(Boolean).pop() ?? "repo";
+	const sourceFiles = allFiles.filter((path) => isSlurpable(path) && sourceSpec.exts.some((ext) => path.toLowerCase().endsWith(ext))).length;
 
 	return {
 		name,
@@ -1351,6 +1437,8 @@ export async function collectRepoInfo(targetDir: string): Promise<RepoInfo> {
 		fileCounts: sortedCounts,
 		sourceGlob: sourceSpec.glob,
 		sourceExts: sourceSpec.exts,
+		sourceFileCount: sourceFiles,
+		snapshot,
 	};
 }
 
@@ -1448,7 +1536,7 @@ function resolveSliceMode(lens: LensDefinition, files: CollectedFile[], totalCha
 }
 
 function collectLensFiles(allFiles: string[], lens: LensDefinition, info: RepoInfo): CollectedFile[] {
-	const globs = lens.globsFor(info);
+	const globs = lens.globsFor(info).filter(Boolean);
 	if (globs.length === 0) return [];
 	const out: CollectedFile[] = [];
 	for (const f of allFiles) {
@@ -1491,7 +1579,10 @@ async function slurpFileList(
 		let content = "";
 		try {
 			content = await readFile(join(targetDir, file.relPath), "utf8");
-		} catch {
+		} catch (error) {
+			// The listing is the working tree's, so this is a race with a
+			// concurrent delete rather than a listed-but-deleted file; skip it.
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
 			content = "[BINARY or UNREADABLE]";
 		}
 		const block = `=== ${file.relPath} ===\n${content}\n`;
@@ -1521,7 +1612,7 @@ export async function gatherSlices(targetDir: string, lens: LensDefinition, info
 		// Repo-info lens (architecture): the prompt is built from info alone.
 		return [{ moduleName: "root", content: "", fileCount: 0, chars: 0, files: [] }];
 	}
-	const allFiles = await listRepoFiles(targetDir);
+	const { files: allFiles } = await listRepoFiles(targetDir);
 	const files = collectLensFiles(allFiles, lens, info);
 	const totalChars = await sumFileSizes(targetDir, files);
 	const mode = resolveSliceMode(lens, files, totalChars);
@@ -1603,7 +1694,15 @@ export function estimateCost(
 	outputTokens: number;
 	cost: number;
 } {
-	const sliceChars = slices.reduce((sum, s) => sum + (lens.maxChars === 0 ? 6000 : s.chars), 0);
+	// With repo info, size each request from the user prompt that would be
+	// sent, which is what the architecture lens is made of: it used to be
+	// estimated at a flat 6,000 chars while the entry point, manifest, README
+	// excerpt and file tree it carries ran to whatever they ran to (#249).
+	// Without info, the slice content alone is what the old signature covered.
+	const sliceChars = slices.reduce(
+		(sum, s) => sum + (info ? lens.userPrompt(info, s.content, s.moduleName).length : lens.maxChars === 0 ? 6000 : s.chars),
+		0,
+	);
 	// The system prompt and the response schema ride on every request, so they
 	// are paid once per slice rather than once per lens.
 	const perRequestOverhead = info
@@ -2184,6 +2283,21 @@ export async function runBroadsideSubmit(
 	} = {},
 ): Promise<BroadsideSubmitResult> {
 	const info = await collectRepoInfo(cwd);
+	// Before pricing, before the network, before any state write: a run on a
+	// language the lenses cannot scan used to submit empty batches and pay for
+	// them (#250).
+	if (info.language === "unknown") {
+		throw new Error(
+			`Broad-Side could not tell what language this repository is: no ${MANIFEST_CANDIDATES.map(([candidate]) => candidate).join(", ")} ` +
+			`and no source files in a language the lenses can scan (${BROADSIDE_LANGUAGES.join(", ")}). Nothing was submitted.`,
+		);
+	}
+	if (info.sourceFileCount === 0) {
+		throw new Error(
+			`Broad-Side found no ${info.language} source files to scan (detected from ${info.manifest?.path ?? "the file counts"}; ` +
+			`the lenses look for ${info.sourceExts.join(", ")}). Nothing was submitted.`,
+		);
+	}
 	const lensIds = opts.lenses ?? BROADSIDE_LENS_IDS;
 	const broadsideDir = broadsideDirFor(cwd);
 	const model = opts.model ?? BROADSIDE_MODEL;
@@ -2355,6 +2469,8 @@ export async function runBroadsideSubmit(
 		sourceHead,
 		sourceDirty,
 		baseHead,
+		snapshot: info.snapshot,
+		language: info.language,
 	};
 	state.runs.push(run);
 	await persistBroadsideRun(broadsideDir, run);
@@ -2438,6 +2554,13 @@ export async function runBroadsideSubmit(
 			expirationDate: defaultEntry.expirationDate ?? null,
 		},
 		incremental: incrementalOutcome,
+		repo: {
+			language: info.language,
+			sourceFiles: info.sourceFileCount,
+			snapshot: info.snapshot,
+			sourceHead,
+			sourceDirty,
+		},
 	};
 }
 
@@ -3120,6 +3243,11 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		const override = entry.model ? ` on ${entry.model}` : "";
 		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})${override}`);
 	}
+	if (result.repo) {
+		const head = result.repo.sourceHead ? ` at ${result.repo.sourceHead.slice(0, 8)}${result.repo.sourceDirty ? " (dirty)" : ""}` : "";
+		const source = result.repo.snapshot === "working-tree" ? `working tree${head}` : "directory walk (not a git repository)";
+		lines.push(`Scanned as ${result.repo.language}: ${result.repo.sourceFiles} source file(s) from the ${source}.`);
+	}
 	const incremental = result.incremental;
 	if (incremental?.requested) {
 		lines.push(
@@ -3246,6 +3374,12 @@ export function statusText(state: BroadsideStateFile): string {
 	const lines: string[] = [];
 	for (const run of [...state.runs].reverse().slice(0, 3)) {
 		lines.push(`Run ${run.id} — ${run.status}`);
+		// Recorded since #248; a run from an older version has neither field.
+		if (run.language || run.snapshot) {
+			const head = run.sourceHead ? ` at ${run.sourceHead.slice(0, 8)}${run.sourceDirty ? " (dirty)" : ""}` : "";
+			const source = run.snapshot === "walk" ? "directory walk" : run.snapshot ? `working tree${head}` : "unknown source";
+			lines.push(`  scanned as ${run.language ?? "unknown"} from the ${source}`);
+		}
 		for (const lensId of BROADSIDE_LENS_IDS) {
 			const entry = run.batches[lensId];
 			if (!entry) continue;
