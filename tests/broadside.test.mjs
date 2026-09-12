@@ -449,12 +449,19 @@ test("state writes leave no temp file behind", async () => {
 	}
 });
 
-test("corrupt state files degrade to defaults, not crashes", async () => {
+test("a corrupt state file is refused and preserved, never read as empty (#233)", async () => {
+	// It used to degrade to defaults, and the next checkpoint wrote that empty
+	// state over the file — losing the batch ids of every paid, in-flight run.
 	const dir = await mkdtemp(join(tmpdir(), "broadside-corrupt-"));
 	try {
 		await writeFile(join(dir, "state.json"), "{ this is not json");
-		const state = await loadBroadsideState(dir);
-		assert.equal(state.runs.length, 0);
+		await assert.rejects(loadBroadsideState(dir), /^BroadsideStateError: Broad-Side state .*state\.json could not be parsed \(.*\)\. A copy is preserved at .*state\.json\.corrupt-[0-9a-f]{8}; the file is not overwritten\./);
+		const copies = (await readdir(dir)).filter((name) => name.startsWith("state.json.corrupt-"));
+		assert.equal(copies.length, 1);
+		assert.equal(await readFile(join(dir, copies[0]), "utf8"), "{ this is not json");
+		await assert.rejects(loadBroadsideState(dir));
+		assert.equal((await readdir(dir)).filter((name) => name.startsWith("state.json.corrupt-")).length, 1, "the same content is preserved once");
+		assert.equal(await readFile(join(dir, "state.json"), "utf8"), "{ this is not json", "nothing wrote over it");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

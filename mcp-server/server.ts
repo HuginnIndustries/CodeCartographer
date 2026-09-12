@@ -32,6 +32,9 @@ import {
 	broadsideDirFor,
 	BROADSIDE_LENS_IDS,
 	BROADSIDE_SKILL_NAME,
+	type BroadsideConfig,
+	BroadsideConfigError,
+	defaultBroadsideConfig,
 	type BroadsideLensId,
 	backupWorkspaceState,
 	canonicalPath,
@@ -1254,20 +1257,40 @@ export async function handleBroadside(args: {
 		throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${action}. Valid actions: submit, collect, status, models.`);
 	}
 
-	const config = await loadBroadsideConfig(broadsideDirFor(cwd));
+	// A config.yaml that exists but cannot be read refuses every action that
+	// would act on it (#232); status only reads recorded runs, so it answers
+	// and says the file is unreadable. A corrupt state.json refuses even that:
+	// there is nothing trustworthy to report and nothing may write over it (#233).
+	let config: BroadsideConfig;
+	let configWarning: string | null = null;
+	try {
+		config = await loadBroadsideConfig(broadsideDirFor(cwd));
+	} catch (error) {
+		if (!(error instanceof BroadsideConfigError) || action !== "status") {
+			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		}
+		config = defaultBroadsideConfig();
+		configWarning = error.message;
+	}
 
 	if (action === "status") {
-		const { state } = await runBroadsideStatus(cwd);
-		return textResult(statusText(state), { state });
+		const { state } = await runBroadsideStatus(cwd).catch((error) => {
+			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		});
+		const lines = [statusText(state)];
+		if (configWarning) lines.push(`Warning: ${configWarning}`);
+		return textResult(lines.join("\n"), { state, ...(configWarning ? { configWarning } : {}) });
 	}
 
 	const apiKey = resolveBroadsideApiKey(args.api_key, config);
 	// Every run knob resolves the same way: explicit parameter, else the repo's
 	// config.yaml default, else the shipped default baked into loadBroadsideConfig.
-	const waitSeconds = typeof args.wait_seconds === "number" && args.wait_seconds > 0
+	// An explicit 0 means "poll once and return": it used to fall through to
+	// the config default and, as undefined, to the 25-minute budget (#230).
+	const waitSeconds = typeof args.wait_seconds === "number" && args.wait_seconds >= 0
 		? args.wait_seconds
 		: config.waitSeconds;
-	const waitMs = waitSeconds > 0 ? waitSeconds * 1000 : undefined;
+	const waitMs = waitSeconds * 1000;
 	const includeSynthesis = args.include_synthesis ?? config.includeSynthesis;
 	const includeTriage = args.include_triage ?? config.includeTriage;
 	const retryTruncated = args.retry_truncated ?? config.retryTruncated;
@@ -1298,7 +1321,9 @@ export async function handleBroadside(args: {
 			lenses = config.defaultLenses;
 		}
 
-		const maxCost = typeof args.max_cost === "number" && args.max_cost > 0 ? args.max_cost : config.maxCost;
+		// An explicit 0 is "no limit" (#231); absent falls back to config.yaml,
+		// whose own default is BROADSIDE_DEFAULT_MAX_COST.
+		const maxCost = typeof args.max_cost === "number" && args.max_cost >= 0 ? args.max_cost : config.maxCost;
 
 		const result = await runBroadsideSubmit(cwd, apiKey, {
 			lenses,
@@ -1695,7 +1720,7 @@ const TOOLS = [
 				},
 				wait_seconds: {
 					type: "number",
-					description: "For submit: after submitting, poll up to this many seconds before returning. For collect: poll up to this many seconds before returning with partial state. Falls back to wait_seconds in .codecarto/broadside/config.yaml.",
+					description: "For submit: after submitting, poll up to this many seconds before returning. For collect: poll up to this many seconds before returning with partial state. 0 polls each in-flight batch once and returns without waiting. Falls back to wait_seconds in .codecarto/broadside/config.yaml (default 0).",
 				},
 				include_synthesis: {
 					type: "boolean",
@@ -1714,7 +1739,7 @@ const TOOLS = [
 				max_cost: {
 					type: "number",
 					description:
-						"Approximate run expense limit in USD. The submit action estimates the run cost from slice sizes and the configured model's per-token pricing (live OpenRouter lookup, cached 24h) and refuses to submit when the estimate exceeds the limit unless force is true. Falls back to max_cost in .codecarto/broadside/config.yaml.",
+						"Approximate run expense limit in USD. The submit action estimates the run cost from slice sizes and the configured model's per-token pricing (live OpenRouter lookup, cached 24h) and refuses to submit when the estimate exceeds the limit unless force is true. Falls back to max_cost in .codecarto/broadside/config.yaml, whose default is $1.00; pass 0 for no limit.",
 				},
 				force: {
 					type: "boolean",
