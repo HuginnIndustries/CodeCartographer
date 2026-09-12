@@ -31,7 +31,7 @@ Append this to the end of every primary output file:
 | 1 | [criterion text from pipeline.yaml] | PASS / PARTIAL / FAIL | [section reference or note] |
 | 2 | ... | ... | ... |
 
-**Validated by:** [session identifier or date]
+**Validated by:** [session identifier or date — YYYY-MM-DD in UTC, the clock every framework-written date uses]
 **Overall:** PASS / PASS WITH GAPS / FAIL
 ```
 

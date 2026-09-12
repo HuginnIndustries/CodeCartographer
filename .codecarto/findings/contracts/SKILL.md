@@ -20,7 +20,10 @@ Split the analysis by user-facing surface:
 - web UI
 - API or SDK
 - bot or background worker
-- storage or export formats
+- storage or export formats — as user-visible behavior (what is written where, when it changes, what
+  survives a restart). The byte-level catalog of on-disk and wire formats belongs to the protocols
+  phase; name the format here and let protocols own its shape, so the two phases do not each write
+  it.
 
 For each feature, capture a contract with these fields:
 - `feature`

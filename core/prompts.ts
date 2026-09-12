@@ -159,6 +159,13 @@ export async function buildPhasePrompt(
 	const preflight = options.preflight ?? await runPhasePreflight(state, phase);
 	const synthesisWorkflow = state.pipeline.workflow_name === "evidence-backed-project-synthesis";
 	const handoffTemplateExists = await pathExists(join(state.workspaceDir, "templates", "phase-handoff.yaml"));
+	// The framework's own three files are the first reads on every phase, and
+	// after the first phase they are the same three files. Say so, so a host
+	// that carries context across phases spends it on the phase's inputs
+	// rather than re-reading the guide (self-audit F5). status.yaml is the
+	// exception: completion rewrote it, and it is the cursor.
+	const laterPhase = Object.values(state.status.phases).some((phaseState) => phaseState.status === "complete");
+	const unchangedNote = laterPhase ? " (framework-owned; unchanged since your last phase unless the scaffold was refreshed — skim rather than re-read if you still hold it)" : "";
 	const lines = [
 		`Read .codecarto/GUIDE.md and continue the CodeCartographer workflow for the phase \`${phase.id}\`.`,
 		synthesisWorkflow
@@ -166,11 +173,11 @@ export async function buildPhasePrompt(
 			: "Work on this phase only. The analyzed source code is the repository outside .codecarto/.",
 		"",
 		"Required reads before analysis:",
-		"- .codecarto/GUIDE.md",
-		"- .codecarto/workflow/status.yaml",
+		`- .codecarto/GUIDE.md${unchangedNote}`,
+		`- .codecarto/workflow/status.yaml${laterPhase ? " (rewritten by the last completion; read it)" : ""}`,
 	];
 	if (handoffTemplateExists) {
-		lines.push("- .codecarto/templates/phase-handoff.yaml");
+		lines.push(`- .codecarto/templates/phase-handoff.yaml${unchangedNote}`);
 	}
 
 	const primaryOutput = phase.primary_output ? `.codecarto/${phase.primary_output}` : undefined;

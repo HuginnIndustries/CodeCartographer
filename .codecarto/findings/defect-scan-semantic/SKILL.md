@@ -17,6 +17,13 @@ The source code to analyze is in the parent directory (`../` relative to `.codec
 - `findings/protocols/protocols-and-state.md` — passes 3 and 5 need this for state machine and event-ordering analysis.
 - `findings/defect-scan-mechanical/mechanical-defects.md` — read so you do not re-flag what the mechanical phase already covered.
 
+**Read when a finding turns on it:** the source of a dependency the code trusts (under
+`node_modules/`, the vendored tree, or the SDK's published source), at the pinned version. The
+evidence rules allow "that system's own source" to settle an `external-behavior claim` about it,
+and passes 4 and 5 keep meeting claims of that shape — what a lock does on release, what a
+session runtime frees on dispose. Reading the pinned source is cheaper than a runtime probe and
+turns the claim into an `observed fact`; say which file and version you read.
+
 If any prerequisite is missing, stop and surface the gap. The semantic pass is the *paid-for* benefit of running the mechanical phase early; do not regress it by running the semantic pass blind.
 
 ## Pass Execution Order
@@ -39,7 +46,7 @@ Use the contracts and protocols outputs to decide emphasis:
 
 ## Evidence, Severity, and Action Classification
 
-Use the scheme from `findings/defect-scan/SKILL.md`. The severity and action sets are the same as the legacy defect-scan phase.
+Use the scheme from `findings/defect-scan/SKILL.md`. The severity and action sets are the same as the legacy defect-scan phase, including its rule for probe-confirmed findings: a cheap runtime probe before a `high` or `critical` settles the evidence level and may move the severity either way; it never promotes a finding for having been confirmed.
 
 When citing a contract or protocol violation, include the contract ID or state-machine reference from the upstream finding so the porting phase can trace the chain.
 

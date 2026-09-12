@@ -104,6 +104,21 @@
 
 ---
 
+## Runtime probes
+
+<!-- Optional, but the strongest evidence this report can carry. One row per probe you ran to
+     confirm or refute a finding before assigning its severity: a short script that drives the
+     code path and shows the wrong result, the lost write, the escaped path. Keep the scripts
+     under scratch/probes/ so the porting phase can rerun them, and put the finding's row number
+     in the Finding column so the two can be read together. A probe that did NOT reproduce the
+     read prediction is worth a row too — it is what lowers a severity honestly. -->
+
+| Probe | Finding | What it did | What it showed | Script |
+|---|---|---|---|---|
+| | | | | |
+
+---
+
 ## Open Questions
 
 <!-- Every finding whose Evidence Level is open question or external-behavior claim gets a row
