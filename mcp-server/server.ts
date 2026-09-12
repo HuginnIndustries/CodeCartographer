@@ -100,12 +100,12 @@ import {
 	validatePhaseOutput,
 	type WorkspaceState,
 	writeLibraryConfig,
+	writeDashboard,
 } from "../core/index.ts";
 import { applyAmendment } from "../core/amendment.ts";
 import { appendUsageRun } from "../core/usage.ts";
 import { initLibrary } from "../core/library.ts";
 import { type CodecartoConfig, describeConfigProblems, loadUserConfig, resolveUserConfigPath } from "../core/orchestrator-config.ts";
-import { writeDashboard } from "../extensions/codecarto/dashboard-writer.ts";
 
 // ---------- input helpers ----------
 
@@ -359,12 +359,18 @@ export async function handleSwitchPipeline(args: { cwd: string; pipeline: string
 	}
 
 	const result = await switchPipeline(cwd, pipelineChoice);
+	// The dashboard is rendered from the pipeline the switch just replaced;
+	// Pi re-rendered here and MCP did not, so the file showed the old phase
+	// list until the next completion (#254). Same best-effort call as
+	// completion and amendment make.
+	const dashboardPath = (await writeDashboard(cwd, PACKAGE_VERSION)) ? ".codecarto/dashboard.html" : undefined;
 	const lines = [`Switched pipeline: ${getPipelineLabel(pipelineChoice)}`];
 	if (result.carried.length > 0) lines.push(`Phases preserved (completed): ${result.carried.join(", ")}`);
 	if (result.newPhases.length > 0) lines.push(`New phases: ${result.newPhases.join(", ")}`);
 	if (result.dropped.length > 0) lines.push(`Phases not in new pipeline: ${result.dropped.join(", ")} (findings remain on disk)`);
 	lines.push(...describeDanglingCarryForward(result.dangling));
 	lines.push(`Current phase: ${result.state.status.current_phase}`);
+	if (dashboardPath) lines.push(`Dashboard refreshed: ${dashboardPath}`);
 
 	return textResult(lines.join("\n"), {
 		pipeline: getPipelineLabel(pipelineChoice),
@@ -373,6 +379,7 @@ export async function handleSwitchPipeline(args: { cwd: string; pipeline: string
 		newPhases: result.newPhases,
 		dropped: result.dropped,
 		dangling: result.dangling,
+		dashboardPath,
 	});
 }
 

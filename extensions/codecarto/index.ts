@@ -7,7 +7,6 @@ import { autoCompletePhase, buildAutoSummary, isPhaseRunning, runAuto, runSingle
 import { disposeAgentsWidget } from "./agent-widget.ts";
 import { parseDashboardFlags } from "./dashboard-flags.ts";
 import { narrateDashboard } from "./dashboard-narrator.ts";
-import { writeDashboard } from "./dashboard-writer.ts";
 import { parseBroadsideFlags, KNOWN_BROADSIDE_TOKENS } from "./broadside-flags.ts";
 import { parseNextFlags } from "./next-flags.ts";
 import { buildPiGuideMessage } from "./guide-framing.ts";
@@ -93,6 +92,7 @@ import {
 	validatePhaseOutput,
 	type WorkspaceState,
 	writeLibraryConfig,
+	writeDashboard,
 } from "../../core/index.ts";
 import { initLibrary } from "../../core/library.ts";
 import { resolveUserConfigPath, USER_CONFIG_DIR } from "../../core/orchestrator-config.ts";

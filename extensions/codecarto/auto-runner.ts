@@ -20,7 +20,6 @@ import { type PhaseActivity, clearPhase, finishPhase, getPhaseActivity, startPha
 import { buildSteeringMessage, rewritePhasePrompt } from "./agent-rewriter.ts";
 import { buildPhaseSummary } from "./agent-summary.ts";
 import { getAgentsWidget } from "./agent-widget.ts";
-import { writeDashboard } from "./dashboard-writer.ts";
 
 import {
 	appendUsageRun,
@@ -43,6 +42,7 @@ import {
 	type ValidationResult,
 	validatePhaseOutput,
 	type WorkspaceState,
+	writeDashboard,
 } from "../../core/index.ts";
 
 // ----------------------------------------------------------------------------
@@ -168,7 +168,9 @@ export async function runSinglePhase(
 			display: true,
 		});
 		void recordUsage(state.workspaceDir, phase.id, status, activity, result.sessionFile);
-		void writeDashboard(ctx.cwd, PACKAGE_VERSION);
+		// The phase's sub-agent replaced the session, so reading ctx.cwd here
+		// would throw (#201); the state captured before the run has the root.
+		void writeDashboard(state.cwd, PACKAGE_VERSION);
 
 		return {
 			status: result.aborted ? "aborted" : "completed",
@@ -195,7 +197,7 @@ export async function runSinglePhase(
 			display: true,
 		});
 		void recordUsage(state.workspaceDir, phase.id, "error", activity);
-		void writeDashboard(ctx.cwd, PACKAGE_VERSION);
+		void writeDashboard(state.cwd, PACKAGE_VERSION);
 
 		return { status: "error", activity, error: message };
 	} finally {
@@ -388,7 +390,7 @@ export async function runAuto(
 		if (phaseResult.status === "completed") {
 			// State must be refreshed because the sub-agent may have written
 			// findings to disk that the validator reads.
-			const stateForValidation = (await getWorkspaceState(ctx.cwd)) ?? state;
+			const stateForValidation = (await getWorkspaceState(autoCwd)) ?? state;
 			validation = await validatePhaseOutput(stateForValidation, phase.id);
 		}
 
