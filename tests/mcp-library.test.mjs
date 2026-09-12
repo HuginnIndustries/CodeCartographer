@@ -592,6 +592,34 @@ test("handleLibraryList filters by namespace and tag", async () => {
 	}
 });
 
+test("handleLibraryList's source_repo filter matches the way the publish guard compares (#257)", async () => {
+	const { libraryPath, cleanup } = await makeLib();
+	try {
+		await handlePublish(basePublishArgs(libraryPath, { slug: "alpha", source_repo: "https://github.com/Acme/Alpha.git" }));
+		await handlePublish(basePublishArgs(libraryPath, { slug: "beta", source_repo: "https://github.com/acme/beta" }));
+
+		// Each of these denotes the same repository as the recorded value; a raw
+		// string compare missed every one of them.
+		for (const spelling of [
+			"https://github.com/Acme/Alpha.git",
+			"https://github.com/acme/alpha",
+			"git@github.com:acme/alpha.git",
+			"ssh://git@github.com/Acme/Alpha",
+			"https://www.github.com/acme/alpha/",
+			"HTTPS://GITHUB.COM/ACME/ALPHA",
+		]) {
+			const result = await handleLibraryList({ library_path: libraryPath, source_repo: spelling });
+			assert.equal(result.structuredContent.count, 1, spelling);
+			assert.equal(result.structuredContent.entries[0].slug, "alpha", spelling);
+		}
+		// And a genuinely different repository still does not match.
+		const other = await handleLibraryList({ library_path: libraryPath, source_repo: "https://github.com/acme/alpha-fork" });
+		assert.equal(other.structuredContent.count, 0);
+	} finally {
+		await cleanup();
+	}
+});
+
 // ─── handleLibraryReindex ──────────────────────────────────────────────────
 
 test("handleLibraryReindex regenerates index.yaml", async () => {
