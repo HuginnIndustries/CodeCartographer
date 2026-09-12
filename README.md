@@ -271,11 +271,11 @@ Every state change re-renders `.codecarto/dashboard.html` — a self-contained s
 - Pipeline progress strip with per-phase status badges
 - Per-phase cards with output links, open questions, carry-forward routing, owner notes, last-run usage
 - Aggregate token and compaction telemetry + per-phase breakdown
-- Activity timeline with session-file links
+- Activity timeline of phase runs (tokens, duration, compactions)
 - Open questions roll-up grouped by source phase
 - Closeouts list (reverse-chronological) with relative-path links
 
-No JavaScript. No external assets. Light/dark via `prefers-color-scheme`. Works opened directly from `file://`.
+No external assets of any kind — nothing linked, nothing fetched. The file inlines two `<script>` blocks of its own (a JSON data island and the search/filter code), so it works opened directly from `file://`. Light/dark via `prefers-color-scheme`.
 
 **Opt-in narrative summary.** `/codecarto-dashboard --narrate` runs the orchestrator's model as a one-shot session that writes a 200–400 word executive summary citing specific findings from recent closeouts. Cached to `.codecarto/.dashboard-narration.local.md` and preserved across deterministic re-renders with a "(N runs since)" staleness note.
 

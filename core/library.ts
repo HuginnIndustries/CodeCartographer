@@ -1083,7 +1083,7 @@ async function writeIndexMarkdown(libraryRoot: string, index: LibraryIndex, mark
 	const lines: string[] = [];
 	lines.push(`# ${escapeMd(marker.name)} — Library Index`);
 	lines.push("");
-	lines.push(`_Generated ${index.generated_at}. Do not edit by hand — regenerate with \`codecarto library-reindex\`._`);
+	lines.push(`_Generated ${index.generated_at}. Do not edit by hand — regenerate with the \`codecarto_library_reindex\` MCP tool._`);
 	lines.push("");
 	// A single-tenant library has no namespaces but is still one namespace's
 	// worth of entries; count once so the noun agrees with the number shown.

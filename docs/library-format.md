@@ -481,7 +481,7 @@ rendering. For a namespaced library:
 ```markdown
 # james-personal-library — Library Index
 
-_Generated 2026-05-14T19:02:00.000Z. Do not edit by hand — regenerate with `codecarto library-reindex`._
+_Generated 2026-05-14T19:02:00.000Z. Do not edit by hand — regenerate with the `codecarto_library_reindex` MCP tool._
 
 **14 entries** across 1 namespace.
 

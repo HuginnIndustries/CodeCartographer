@@ -94,7 +94,7 @@ Here's how to decide:
 Use `workflow/pipeline-scout-first.yaml` (8 phases). The deep-audit run with a `broadside-scout` phase in front that turns the reconnaissance run into a routing brief every later phase reads. With no run on disk the brief is empty and the pipeline behaves exactly like the deep-audit variant.
 
 **"I want the full analysis with defect triage."** (default)
-Keep `workflow/pipeline-full-with-audit.yaml` (6 phases). Produces architecture, defect report, behavioral contracts, protocol notes, a porting synthesis, and a reimplementation spec. The defect findings feed into the porting phase so you can decide what to fix, port differently, or leave behind.
+Keep `workflow/pipeline-full-with-deep-audit.yaml` (7 phases). Produces architecture, a mechanical defect scan, behavioral contracts, protocol notes, a semantic defect scan that runs once the contracts and protocols exist, a porting synthesis, and a reimplementation spec. The defect findings feed into the porting phase so you can decide what to fix, port differently, or leave behind. `workflow/pipeline-full-with-audit.yaml` (6 phases) is the older single-scan variant.
 
 **"I want to port or rewrite but don't need a defect scan."**
 Use `workflow/pipeline.yaml` (5 phases). Same as above minus the defect scan. Remove the `defect-scan` block from `phases` in status.yaml.
@@ -186,7 +186,7 @@ Each output ends with a **validation block** showing which completion criteria p
 
 ## Evidence Levels
 
-Every finding in every output is tagged with one of four evidence levels:
+Every finding in every output is tagged with one of five evidence levels:
 
 - **Observed fact** — directly stated in docs, tests, schemas, types, or code. Highest confidence.
 - **Strong inference** — conclusion drawn from multiple observed facts. High confidence but not directly stated.
