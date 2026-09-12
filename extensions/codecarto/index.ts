@@ -20,6 +20,7 @@ import {
 	buildPhasePrompt,
 	buildSkillPrompt,
 	buildValidationSummary,
+	backupWorkspaceState,
 	canonicalPath,
 	copyPackagedWorkspace,
 	computePerPhaseTotals,
@@ -535,13 +536,22 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const targetExists = await pathExists(targetWorkspaceDir);
 			if (targetExists) {
 				const sameWorkspace = normalizeForComparison(await canonicalPath(targetWorkspaceDir)) === normalizeForComparison(await canonicalPath(sourceWorkspaceDir));
-				if (!sameWorkspace) {
-					const overwrite = await ctx.ui.confirm(
-						"CodeCartographer already exists — data will be lost",
-						"A .codecarto/ directory already exists in this repository. Re-initializing will back up the existing workspace to .codecarto-backup-TIMESTAMP/ and create a fresh one. All phase findings, handoffs, usage data, closeouts, and progress will be moved to the backup. Consider /codecarto-open to reattach without resetting. Continue?",
-					);
-					if (!overwrite) return;
-					const backupDir = join(ctx.cwd, `.codecarto-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+				// The packaged template itself (a checkout install) is an existing
+				// workspace like any other: ask, and back up. It cannot be renamed
+				// away — it is what init copies from — so its session state is
+				// moved out file by file instead (#245).
+				const overwrite = await ctx.ui.confirm(
+					"CodeCartographer already exists — data will be lost",
+					sameWorkspace
+						? "This .codecarto/ is CodeCartographer's own packaged template (a checkout install), and it holds workspace state. Re-initializing will move that state — status, findings, handoffs, usage data, closeouts, dashboard — to .codecarto-backup-TIMESTAMP/ and reset; the framework files stay in place. Consider /codecarto-open to reattach without resetting. Continue?"
+						: "A .codecarto/ directory already exists in this repository. Re-initializing will back up the existing workspace to .codecarto-backup-TIMESTAMP/ and create a fresh one. All phase findings, handoffs, usage data, closeouts, and progress will be moved to the backup. Consider /codecarto-open to reattach without resetting. Continue?",
+				);
+				if (!overwrite) return;
+				const backupDir = join(ctx.cwd, `.codecarto-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+				if (sameWorkspace) {
+					const moved = await backupWorkspaceState(targetWorkspaceDir, backupDir);
+					notifyCtx(ctx, `Moved ${moved.length} workspace state file${moved.length === 1 ? "" : "s"} to ${basename(backupDir)}/`, "info");
+				} else {
 					await rename(targetWorkspaceDir, backupDir);
 					notifyCtx(ctx, `Backed up existing workspace to ${basename(backupDir)}/`, "info");
 				}

@@ -4,7 +4,7 @@
 // atomic status-update primitive used by /codecarto-complete.
 
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, copyFile, cp, mkdir, readFile, readdir } from "node:fs/promises";
+import { appendFile, copyFile, cp, mkdir, readFile, readdir, rename } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock, applyHandoff, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
@@ -258,6 +258,44 @@ export async function copyPackagedWorkspace(
 		await mkdir(join(targetWorkspaceDir, name), { recursive: true });
 	}
 	await ensureWorkspaceGitignore(targetWorkspaceDir);
+}
+
+/**
+ * Move a workspace's session state out into `backupDir`, keeping relative
+ * paths: status, the usage log, every declared phase output, handoffs and
+ * checkpoints, closeouts, the dashboard, the orchestrator files, Broad-Side
+ * runs, and any lock or temp file — everything {@link isTemplatePath} says a
+ * session wrote rather than the framework shipped. Framework-owned files stay
+ * where they are, as do the directories, so the workspace keeps its shape.
+ *
+ * This is what a forced re-init does when `.codecarto/` is the packaged
+ * template itself (#245). A checkout's `.codecarto/` is the template and a
+ * live workspace at once, so the ordinary force — rename the directory away,
+ * copy the template in — would move the very files it copies from. Before
+ * this, that case skipped the backup entirely and reset status in place.
+ *
+ * @returns the workspace-relative paths moved, sorted.
+ */
+export async function backupWorkspaceState(workspaceDir: string, backupDir: string): Promise<string[]> {
+	const declaredOutputs = await listDeclaredOutputs(workspaceDir);
+	const moved: string[] = [];
+	const walk = async (dir: string, segments: string[]): Promise<void> => {
+		for (const entry of await readdir(dir, { withFileTypes: true })) {
+			const entrySegments = [...segments, entry.name];
+			const source = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				await walk(source, entrySegments);
+				continue;
+			}
+			if (isTemplatePath(entrySegments, declaredOutputs)) continue;
+			const destination = join(backupDir, ...entrySegments);
+			await mkdir(dirname(destination), { recursive: true });
+			await rename(source, destination);
+			moved.push(entrySegments.join("/"));
+		}
+	};
+	await walk(workspaceDir, []);
+	return moved.sort();
 }
 
 /**
