@@ -2,6 +2,48 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] — 2026-09-12
+
+The third and last release from the self-audit ([`self-audit/`](self-audit/2026-09-11-v0.19.5-full-with-deep-audit/), issues #223–#279): the six remaining highs, every low group, and the template notes from driving the pipeline. One issue stays open — #276, whether this repository should keep tracking its own `.codecarto/` workspace state — because that is a maintainer's call, not a defect. A minor because three guardrails now refuse where they used to proceed: a pipeline that cannot finish is reported as stuck rather than complete, Broad-Side ships with a spend cap, and an unreadable Broad-Side config or state file stops the run instead of being read as empty.
+
+### Added
+
+- **`codecarto_next` and `codecarto_phase` take `unattended: true`** — the MCP spelling of Pi's `--auto`. The reimplementation-spec phase's Strategic Alignment Hook then defaults to language-agnostic and records `selection: auto-default` instead of asking which variant to build; an autonomous host driving the audit had nobody to ask and improvised. The prompt is byte-identical to what Pi's `--auto` builds. #270.
+
+- **Broad-Side `collect` can target a run:** `run_id` on the MCP tool, `--run=<id>` on the slash command (`status` lists the ids). With two runs in flight, collect always read the most recent, so an older run's paid results were unreachable once a newer submit existed. #268.
+
+- **The pipeline engine has a third answer.** `resolvePipelineOutcome` returns eligible, complete, or stuck — a stuck pipeline names each blocked phase and the dependency keeping it there, whether that dependency is missing from the pipeline or itself blocked (a cycle). `isPipelineComplete` and `describeStuckPipeline` alongside. #228.
+
+- **Both defect templates gain a `## Runtime probes` section**, and the severity rubric says what a probe does: it settles the evidence level and may move the severity either way, and never promotes a finding for having been confirmed. The mechanical scan's prerequisites name the manifest, compiler config, CI workflows, and ignore files its pass 6 is about; the semantic scan may read a trusted dependency's pinned source; the porting phase reads each scan's probes first. #275, #279.
+
+### Changed
+
+- **A pipeline that cannot finish is stuck, not complete.** A DAG whose remaining phase depended on a phase the file never declared reported "Phase: complete", "Progress: 1/2", and unlocked the post-pipeline skills and amendments. Status on both surfaces now shows `Pipeline state: stuck` with the sentence; `codecarto_next` and `/codecarto-next` refuse (an error, since a host looping on `next` would read a text answer as done); skills, list-skills, and amendments refuse; completion and a switch leave the cursor on the first blocked phase rather than writing the terminal routing; the auto runner ends with a `stuck` outcome of its own. #228.
+
+- **Broad-Side ships with a spend cap of $1.00.** The MCP surface cannot ask a human before spending and had no default limit, so a host calling submit with the stock config spent whatever the estimate came to. The cap applies wherever neither `config.yaml` nor the call sets one; an explicit `max_cost: 0`, in the file or on the call, is no limit; over the cap submit refuses with the per-lens breakdown unless forced or approved, exactly as a configured cap did. #231.
+
+- **An unreadable Broad-Side config or state file refuses the run.** A `config.yaml` that existed but failed to parse was treated like an absent one — defaults, no cap, no lens routing, no message — so a typo removed the user's own guard; it now throws `BroadsideConfigError`, submit/collect/models refuse on both surfaces, and `status` answers with a warning. A `state.json` that could not be parsed was read as empty and the next checkpoint wrote that empty state over it, losing the batch ids of every paid, in-flight run; it now throws `BroadsideStateError` after preserving the file as `state.json.corrupt-<hash>`, and nothing writes over it until someone looks. #232, #233.
+
+- **`wait_seconds: 0` means what the documentation said.** An explicit 0 — and the default, which is 0 — became undefined on the way into core and, there, the 25-minute poll budget, so every collect without a wait polled for half an hour. Both wrappers pass 0 through; collect polls each in-flight batch once and returns. #230.
+
+- **Phase prompts after the first phase mark the three framework-owned reads.** GUIDE.md and the handoff template are annotated as unchanged since the last phase and skimmable; `status.yaml` as rewritten by completion. Same text on both surfaces. #274.
+
+- **Template notes.** The spec template's Carry-Forward comment states completion's rule (a later active phase, or `post_pipeline`) instead of naming targets completion refuses (#271); VALIDATE.md and GUIDE.md name UTC as the clock for every date, so a host's `**Validated by:**` line stops landing a day before its closeout (#272); the protocols phase owns the storage-format catalog and contracts names formats as behavior (#277); the porting template's Defect Synthesis lets completeness win over "one screen", grouping lows by root (#278).
+
+### Fixed
+
+- **A digit-named repository bricked its workspace.** The YAML emitter wrote `"2048"`, `"true"`, `"null"`, `"1.5"` bare and the reader returned a number, a boolean, or nothing; a repository whose directory is all digits got `project_name: 2048` and the next load threw `project_name?.trim is not a function`. The emitter quotes any string the reader would coerce (the reader is the oracle), the readers coerce scalar text instead of assuming it, and a `status.yaml` written before the fix loads and is rewritten quoted on its next write. A seeded round-trip property test pins the pair. #225.
+
+- **The first decision row completion appends to DECISIONS.md is separated from the paragraph above it**, so renderers stop folding it into the prose. #273.
+
+- **User-fixable workspace errors are `InvalidRequest`, not `InternalError`**, on every MCP tool: an unparseable `status.yaml`, a missing `pipeline:`, a pipeline file that is not there. Hosts no longer treat a config problem as a server bug to retry. #263.
+
+- **The child session's phase-id match admits every id `assertSafePhaseId` admits** (`.`, `_`, capitals), so a custom pipeline using such ids keeps its bash block, write confinement, and checkpointing. Every git subprocess carries the 30 s timeout every fetch already had. Pi's library-init expands `~` with the shared helper. #263, #264.
+
+- **The catalog cache stamps each model separately** (schema 3, with a schema check on read that the writer never had), so fetching one model no longer renews every other cached price's 24 h TTL. The batch statuses collect never polls again are one constant instead of three literal copies. #266.
+
+- **The library list's `source_repo` filter, docs drift, and the trusted-host posture.** `docs/client-surfaces.md` states what the server trusts and does not; the README no longer claims a JavaScript-free dashboard or session-file links that never rendered; MANUAL names the right default pipeline and five evidence levels; the quickstart describes what each scan covers; `INDEX.md` stops naming a CLI that does not exist; the `codecarto_complete` and `api_key` descriptions say what happens. #265, #267.
+
 ## [0.20.0] — 2026-09-12
 
 The second release from the self-audit ([`self-audit/`](self-audit/2026-09-11-v0.19.5-full-with-deep-audit/), issues #223–#279). 0.19.6 shipped the four fixes the review ranked first; this one closes every medium in its queue, #235–#261, as seventeen PRs (#287–#303). A minor rather than a patch because three things changed on purpose: library-init no longer switches the MCP publish gate on, a repository Broad-Side cannot scan is refused before it costs anything, and a config file the loader cannot use now stops the library tools instead of being quietly dropped.
