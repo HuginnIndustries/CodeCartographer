@@ -49,17 +49,93 @@ export function getNextEligiblePhase(state: WorkspaceState): PipelinePhase | nul
 	return null;
 }
 
+/** One phase the pipeline cannot reach, and the dependencies keeping it there. */
+export interface BlockedPhase {
+	phaseId: string;
+	/** Each unmet `depends_on` entry, with why it will not clear on its own. */
+	missing: Array<{ dependencyId: string; reason: "not-in-pipeline" | "blocked" }>;
+}
+
+/**
+ * What the pipeline can do next. `getNextEligiblePhase` returned null both
+ * when every phase was complete and when the remaining phases waited on a
+ * dependency that would never clear, and every consumer read null as
+ * complete: a DAG with an unmet dependency reported 1/2 complete and unlocked
+ * the post-pipeline skills (#228). The third outcome is the difference.
+ */
+export type PipelineOutcome =
+	| { kind: "eligible"; phase: PipelinePhase }
+	| { kind: "complete" }
+	| { kind: "stuck"; blocked: BlockedPhase[] };
+
+export function resolvePipelineOutcome(state: WorkspaceState): PipelineOutcome {
+	const phase = getNextEligiblePhase(state);
+	if (phase) return { kind: "eligible", phase };
+	const phaseMap = getPhaseMap(state.pipeline);
+	const isComplete = (phaseId: string) => state.status.phases[phaseId]?.status === "complete";
+	const incomplete = state.pipeline.phase_order.filter((phaseId) => !isComplete(phaseId));
+	if (incomplete.length === 0) return { kind: "complete" };
+	// Nothing is eligible and something is incomplete, so every incomplete
+	// phase has an unmet dependency. Each one is either a phase this pipeline
+	// does not declare, or one of the blocked phases themselves (a cycle, or a
+	// chain back to one).
+	const blocked: BlockedPhase[] = incomplete.map((phaseId) => ({
+		phaseId,
+		missing: (phaseMap.get(phaseId)?.depends_on ?? [])
+			.filter((dependencyId) => !isComplete(dependencyId))
+			.map((dependencyId) => ({
+				dependencyId,
+				reason: state.pipeline.phase_order.includes(dependencyId) ? "blocked" : "not-in-pipeline",
+			})),
+	}));
+	return { kind: "stuck", blocked };
+}
+
+/** True when every phase in the active pipeline is complete. */
+export function isPipelineComplete(state: WorkspaceState): boolean {
+	return resolvePipelineOutcome(state).kind === "complete";
+}
+
+/**
+ * One sentence both surfaces print for a stuck pipeline, naming each blocked
+ * phase and the dependency keeping it there. The pipeline file is the thing to
+ * fix — or switch away from — so the sentence says so.
+ */
+export function describeStuckPipeline(blocked: BlockedPhase[]): string {
+	const parts = blocked.map((entry) => {
+		const deps = entry.missing.map((m) =>
+			m.reason === "not-in-pipeline" ? `${m.dependencyId}, which is not in this pipeline` : `${m.dependencyId}, which is itself blocked`,
+		);
+		return `${entry.phaseId} depends on ${deps.join(" and ") || "nothing it can reach"}`;
+	});
+	return `Pipeline is stuck: ${parts.join("; ")}. No phase can run until the pipeline file's depends_on is fixed (or switch pipelines with codecarto_switch_pipeline / /codecarto-switch-pipeline).`;
+}
+
 /**
  * Point `current_phase` and `next_actions` at whatever the engine finds
- * eligible now, or at the terminal routing when nothing is. Completion and a
- * pipeline switch both derive the cursor this way (#236), so status.yaml never
- * disagrees with the phase records it sits beside. Returns the eligible phase.
+ * eligible now, at the terminal routing when every phase is complete, or at
+ * the first blocked phase with the stuck sentence when nothing can run.
+ * Completion and a pipeline switch both derive the cursor this way (#236), so
+ * status.yaml never disagrees with the phase records it sits beside. Returns
+ * the eligible phase, or null.
  */
 export function recomputeCursor(state: WorkspaceState): PipelinePhase | null {
-	const next = getNextEligiblePhase(state);
-	state.status.current_phase = next?.id ?? "complete";
-	state.status.next_actions = next ? [beginPhaseAction(next)] : buildTerminalNextActions(state.status);
-	return next;
+	const outcome = resolvePipelineOutcome(state);
+	if (outcome.kind === "eligible") {
+		state.status.current_phase = outcome.phase.id;
+		state.status.next_actions = [beginPhaseAction(outcome.phase)];
+		return outcome.phase;
+	}
+	if (outcome.kind === "stuck") {
+		// The cursor stays on the first phase that cannot run; "complete" is
+		// reserved for the state where nothing is left (#228).
+		state.status.current_phase = outcome.blocked[0]?.phaseId ?? "complete";
+		state.status.next_actions = [describeStuckPipeline(outcome.blocked)];
+		return null;
+	}
+	state.status.current_phase = "complete";
+	state.status.next_actions = buildTerminalNextActions(state.status);
+	return null;
 }
 
 /**

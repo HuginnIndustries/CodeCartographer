@@ -33,7 +33,7 @@ import {
 	type EntryGeneration,
 	describeDanglingCarryForward,
 	describeMissingCompletedOutputs,
-	getNextEligiblePhase,
+	describeStuckPipeline,
 	getPipelineLabel,
 	getWorkspaceState,
 	isWithinPath,
@@ -53,6 +53,7 @@ import {
 	listScaffoldRefreshFiles,
 	listMissingCompletedOutputs,
 	listSkillNames,
+	resolvePipelineOutcome,
 	resolveSkillName,
 	loadAmendmentFile,
 	loadBroadsideConfig,
@@ -143,9 +144,22 @@ function formatUsageDuration(ms: number): string {
 	return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
 }
 
+/**
+ * The phase the status line and session name show: the eligible phase, the
+ * first blocked phase when the pipeline is stuck, or "complete" — never
+ * "complete" for a pipeline that cannot finish (#228).
+ */
+function currentPhaseLabel(state: WorkspaceState): string {
+	const outcome = resolvePipelineOutcome(state);
+	if (outcome.kind === "eligible") return outcome.phase.id;
+	if (outcome.kind === "stuck") return outcome.blocked[0]?.phaseId ?? "stuck";
+	return "complete";
+}
+
 function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): string[] {
-	const nextPhase = getNextEligiblePhase(state);
-	const currentPhase = nextPhase?.id ?? state.status.current_phase ?? "complete";
+	const outcome = resolvePipelineOutcome(state);
+	const nextPhase = outcome.kind === "eligible" ? outcome.phase : null;
+	const currentPhase = currentPhaseLabel(state);
 	const pipelineLabel = getPipelineLabel(state.status.pipeline);
 	const completedCount = state.pipeline.phase_order.filter((phaseId) => state.status.phases[phaseId]?.status === "complete").length;
 	const terminalOpenQuestions = Object.values(state.status.phases).reduce((sum, phase) => sum + (phase.open_questions?.length ?? 0), 0);
@@ -156,7 +170,7 @@ function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): str
 	const lines = [
 		"CodeCartographer",
 		`Phase: ${currentPhase}`,
-		`Pipeline state: ${currentPhase === "complete" ? "complete" : "in progress"}`,
+		`Pipeline state: ${outcome.kind === "eligible" ? "in progress" : outcome.kind}`,
 		`Pipeline: ${pipelineLabel}`,
 		`Progress: ${completedCount}/${state.pipeline.phase_order.length} complete`,
 		`Open questions (terminal unresolved): ${terminalOpenQuestions}`,
@@ -164,6 +178,7 @@ function buildStatusLines(state: WorkspaceState, extraLines: string[] = []): str
 		`Post-pipeline work: ${postPipelinePending} pending`,
 		`Next: ${nextAction}`,
 	];
+	if (outcome.kind === "stuck") lines.push(describeStuckPipeline(outcome.blocked));
 
 	const scaffoldNotice = describeScaffoldStaleness(state);
 	if (scaffoldNotice) lines.push(`Scaffold: ${scaffoldNotice}`);
@@ -184,7 +199,7 @@ function setUiState(ctx: ExtensionContext | ExtensionCommandContext, state: Work
 	}
 
 	const theme = ctx.ui.theme;
-	const currentPhase = getNextEligiblePhase(state)?.id ?? state.status.current_phase ?? "complete";
+	const currentPhase = currentPhaseLabel(state);
 	ctx.ui.setStatus(STATUS_LINE_ID, `${theme.fg("accent", "CC")} ${theme.fg("dim", currentPhase)}`);
 	ctx.ui.setWidget(STATUS_WIDGET_ID, buildStatusLines(state, extraLines));
 }
@@ -386,7 +401,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		const state = await readWorkspaceState(ctx, false);
 		setUiState(ctx, state, extraLines ?? lastFeedbackLines);
 		if (state) {
-			const phaseId = getNextEligiblePhase(state)?.id ?? state.status.current_phase;
+			const phaseId = currentPhaseLabel(state);
 			if (phaseId) pi.setSessionName(`CodeCartographer: ${phaseId}`);
 		}
 		return state;
@@ -611,13 +626,16 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const state = await ensureWorkspaceState(ctx);
 			if (!state) return;
 
-			const nextPhase = getNextEligiblePhase(state)?.id ?? "complete";
+			const outcome = resolvePipelineOutcome(state);
+			const nextPhase = currentPhaseLabel(state);
 			// Same check codecarto_status makes: a phase complete in status.yaml
 			// whose report is not on disk (#259).
 			const missingOutputs = describeMissingCompletedOutputs(await listMissingCompletedOutputs(state));
 			lastFeedbackLines = [`Current phase: ${nextPhase}`, `Pipeline: ${getPipelineLabel(state.status.pipeline)}`, ...missingOutputs];
 			setUiState(ctx, state, lastFeedbackLines);
-			if (missingOutputs.length > 0) {
+			if (outcome.kind === "stuck") {
+				notifyCtx(ctx, `CodeCartographer phase: ${nextPhase}. ${describeStuckPipeline(outcome.blocked)}`, "error");
+			} else if (missingOutputs.length > 0) {
 				notifyCtx(ctx, `CodeCartographer phase: ${nextPhase}. ${missingOutputs[0]}`, "warning");
 			} else {
 				notifyCtx(ctx, `CodeCartographer phase: ${nextPhase}`, "info");
@@ -723,7 +741,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						// the readout tracks progress live instead of staying frozen
 						// at the initial phase until the whole auto run finishes.
 						setUiState(ctx, advancedState, [`Auto pipeline${flags.strict ? " (strict)" : ""} running…`]);
-						const phaseId = getNextEligiblePhase(advancedState)?.id ?? advancedState.status.current_phase;
+						const phaseId = currentPhaseLabel(advancedState);
 						if (phaseId) pi.setSessionName(`CodeCartographer: ${phaseId}`);
 					},
 				});
@@ -739,13 +757,21 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const phase = getNextEligiblePhase(state);
-			if (!phase) {
+			const outcome = resolvePipelineOutcome(state);
+			if (outcome.kind === "stuck") {
+				const message = describeStuckPipeline(outcome.blocked);
+				lastFeedbackLines = [message];
+				setUiState(ctx, state, lastFeedbackLines);
+				notifyCtx(ctx, message, "error");
+				return;
+			}
+			if (outcome.kind === "complete") {
 				lastFeedbackLines = ["All phases complete."];
 				setUiState(ctx, state, lastFeedbackLines);
 				notifyCtx(ctx, "All CodeCartographer phases are complete.", "info");
 				return;
 			}
+			const phase = outcome.phase;
 
 			let preflight: PhasePreflightResult;
 			try {
@@ -992,12 +1018,16 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			const state = await ensureWorkspaceState(ctx);
 			if (!state) return;
 
-			const nextPhase = getNextEligiblePhase(state);
-			if (nextPhase) {
+			const outcome = resolvePipelineOutcome(state);
+			if (outcome.kind === "eligible") {
 				notifyCtx(ctx, 
-					`Cannot run skill: pipeline is not complete (next phase: ${nextPhase.id}). Finish the pipeline before running post-pipeline skills.`,
+					`Cannot run skill: pipeline is not complete (next phase: ${outcome.phase.id}). Finish the pipeline before running post-pipeline skills.`,
 					"error",
 				);
+				return;
+			}
+			if (outcome.kind === "stuck") {
+				notifyCtx(ctx, `Cannot run skill: the pipeline is not complete. ${describeStuckPipeline(outcome.blocked)}`, "error");
 				return;
 			}
 
@@ -1042,12 +1072,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				? [`Available skills (${skills.length}):`, ...skills.map((name) => `  - ${name}`)]
 				: ["No skills installed."];
 
-			const nextPhase = getNextEligiblePhase(state);
+			const outcome = resolvePipelineOutcome(state);
 			if (skills.length > 0) {
 				lines.push(
-					nextPhase
-						? `Post-pipeline skills unlock when the pipeline completes (next phase: ${nextPhase.id}).`
-						: "Run one with /codecarto-skill <name>.",
+					outcome.kind === "eligible"
+						? `Post-pipeline skills unlock when the pipeline completes (next phase: ${outcome.phase.id}).`
+						: outcome.kind === "stuck"
+							? `Post-pipeline skills unlock when the pipeline completes, and it cannot: ${describeStuckPipeline(outcome.blocked)}`
+							: "Run one with /codecarto-skill <name>.",
 				);
 			}
 
@@ -1652,10 +1684,14 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				notifyCtx(ctx, error instanceof Error ? error.message : String(error), "error");
 				return;
 			}
-			const nextPhase = getNextEligiblePhase(state);
-			if (nextPhase) {
+			const outcome = resolvePipelineOutcome(state);
+			if (outcome.kind === "stuck") {
+				notifyCtx(ctx, `Cannot amend: the pipeline is not complete. ${describeStuckPipeline(outcome.blocked)}`, "error");
+				return;
+			}
+			if (outcome.kind === "eligible") {
 				notifyCtx(ctx, 
-					`Cannot amend: the pipeline is not complete (next phase: ${nextPhase.id}). `
+					`Cannot amend: the pipeline is not complete (next phase: ${outcome.phase.id}). `
 						+ "Resolve open questions and routed items through that phase's handoff (open_question_closures / carry_forward_closures) instead.",
 					"error",
 				);
