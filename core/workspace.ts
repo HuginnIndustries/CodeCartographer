@@ -8,7 +8,7 @@ import { appendFile, copyFile, cp, mkdir, readFile, readdir, rename } from "node
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPipelineLabel, recomputeCursor } from "./pipeline.ts";
-import { acquireLock, applyHandoff, autoAssignIds, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
+import { acquireLock, applyHandoff, autoAssignIds, createEmptyStatus, normalizeStatus, parseHandoff, textOf } from "./status.ts";
 import type { CarryForwardEntry, PhaseHandoff, PipelineFile, PostPipelineEntry, StatusFile, WorkspaceState } from "./types.ts";
 import { atomicWriteFile, compareDottedVersions, newlineIfUnterminated, pathExists } from "./utils.ts";
 import { loadYamlFile, stringifySimpleYaml } from "./yaml.ts";
@@ -74,7 +74,7 @@ export async function getWorkspaceState(cwd: string): Promise<WorkspaceState | n
 	if (!(await pathExists(statusPath))) return null;
 
 	const rawStatus = await loadYamlFile<StatusFile>(statusPath);
-	const pipelineRelativePath = rawStatus.pipeline?.trim();
+	const pipelineRelativePath = (textOf(rawStatus.pipeline) ?? "").trim();
 	if (!pipelineRelativePath) {
 		throw new Error(`Missing pipeline in ${relative(cwd, statusPath) || statusPath}`);
 	}

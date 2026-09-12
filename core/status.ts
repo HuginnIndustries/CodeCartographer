@@ -30,8 +30,27 @@ export function assertSafePhaseId(phaseId: string): void {
 	}
 }
 
+/**
+ * A YAML scalar as text: strings as written, numbers and booleans spelled
+ * back out. Files written before #225 hold owner notes such as `2048` or
+ * `true` bare, which the reader returns as a number or a boolean; dropping
+ * or crashing on those would lose real state, so they are read as the text
+ * they were. Anything else (null, arrays, objects) has no text.
+ */
+export function textOf(value: unknown): string | null {
+	if (typeof value === "string") return value;
+	if (typeof value === "number" || typeof value === "boolean") return String(value);
+	return null;
+}
+
+/** Like {@link textOf}, trimmed, and "" for a value that has no text. */
+function trimmedText(value: unknown): string {
+	return (textOf(value) ?? "").trim();
+}
+
 export function ensureArray(value: unknown): string[] {
-	return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+	if (!Array.isArray(value)) return [];
+	return value.map(textOf).filter((entry): entry is string => entry !== null);
 }
 
 function coerceEntry(value: unknown, allowTargetPhase: boolean): OpenQuestionEntry | CarryForwardEntry | null {
@@ -43,16 +62,16 @@ function coerceEntry(value: unknown, allowTargetPhase: boolean): OpenQuestionEnt
 	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 	const raw = value as Record<string, unknown>;
 	const entry: CarryForwardEntry = {};
-	if (typeof raw.id === "string" && raw.id.trim()) entry.id = raw.id.trim();
-	if (typeof raw.kind === "string" && raw.kind.trim()) entry.kind = raw.kind.trim();
-	if (typeof raw.description === "string" && raw.description.trim()) entry.description = raw.description.trim();
-	if (typeof raw.deferred_reason === "string" && raw.deferred_reason.trim()) entry.deferred_reason = raw.deferred_reason.trim();
-	if (allowTargetPhase && typeof raw.target_phase === "string" && raw.target_phase.trim()) entry.target_phase = raw.target_phase.trim();
+	if (trimmedText(raw.id)) entry.id = trimmedText(raw.id);
+	if (trimmedText(raw.kind)) entry.kind = trimmedText(raw.kind);
+	if (trimmedText(raw.description)) entry.description = trimmedText(raw.description);
+	if (trimmedText(raw.deferred_reason)) entry.deferred_reason = trimmedText(raw.deferred_reason);
+	if (allowTargetPhase && trimmedText(raw.target_phase)) entry.target_phase = trimmedText(raw.target_phase);
 	// derives_from rides the same flag as target_phase: it is a carry-forward
 	// concept only — the id of the open question this routed item answers one
 	// candidate of (#122, #186). An open_questions entry has nothing to derive
 	// from, so the field is dropped there rather than silently carried.
-	if (allowTargetPhase && typeof raw.derives_from === "string" && raw.derives_from.trim()) entry.derives_from = raw.derives_from.trim();
+	if (allowTargetPhase && trimmedText(raw.derives_from)) entry.derives_from = trimmedText(raw.derives_from);
 	return Object.keys(entry).length > 0 ? entry : null;
 }
 
@@ -232,11 +251,13 @@ export function normalizeStatus(status: StatusFile, pipeline: PipelineFile, pipe
 		}
 	}
 
+	// Coerced, not assumed: a status.yaml written before #225 spells a
+	// digit-named project bare, and the reader returns a number for it.
 	return {
-		project_name: status.project_name?.trim() || basename(cwd),
-		pipeline: status.pipeline?.trim() || pipelinePath,
-		current_phase: status.current_phase?.trim() || pipeline.phase_order[0] || "complete",
-		last_updated: status.last_updated?.trim() || "",
+		project_name: trimmedText(status.project_name) || basename(cwd),
+		pipeline: trimmedText(status.pipeline) || pipelinePath,
+		current_phase: trimmedText(status.current_phase) || pipeline.phase_order[0] || "complete",
+		last_updated: trimmedText(status.last_updated) || "",
 		schema_version: typeof status.schema_version === "number" ? status.schema_version : 1,
 		phases,
 		next_actions: ensureArray(status.next_actions),

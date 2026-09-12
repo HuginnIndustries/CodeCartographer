@@ -516,7 +516,15 @@ export function formatYamlScalar(value: unknown): string {
 	if (isPlainObject(value)) return Object.keys(value).length === 0 ? "{}" : JSON.stringify(value);
 	const stringValue = String(value);
 	if (stringValue === "") return '""';
-	if (/^[A-Za-z0-9_./-]+$/.test(stringValue)) return stringValue;
+	// Bare only when the reader would hand the same string back. The charset
+	// keeps out spaces, quotes, `#` and `:`; the round-trip check keeps out the
+	// strings the reader coerces — "2048", "true", "null", "1.5" — which used
+	// to go out bare and come back as a number, a boolean, or nothing, until a
+	// repository named `2048` bricked its workspace on `project_name.trim`
+	// (#225). A lone `-` is a sequence marker inside a list, so it is quoted too.
+	if (/^[A-Za-z0-9_./-]+$/.test(stringValue) && stringValue !== "-" && parseYamlScalar(stringValue) === stringValue) {
+		return stringValue;
+	}
 	return JSON.stringify(stringValue);
 }
 
