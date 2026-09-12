@@ -194,9 +194,10 @@ async function buildMcpPhasePrompt(
 	state: WorkspaceState,
 	phase: PipelineFile["phases"][number],
 	forced: boolean,
+	auto = false,
 ): Promise<string> {
 	try {
-		return await buildPhasePrompt(state, phase, forced);
+		return await buildPhasePrompt(state, phase, forced, { auto });
 	} catch (error) {
 		if (error instanceof PhasePreflightError) {
 			throw new McpError(ErrorCode.InvalidRequest, error.message);
@@ -402,7 +403,7 @@ export async function handleSwitchPipeline(args: { cwd: string; pipeline: string
 	});
 }
 
-export async function handleNext(args: { cwd: string }) {
+export async function handleNext(args: { cwd: string; unattended?: boolean }) {
 	const cwd = await validateCwd(args.cwd);
 	const state = await requireWorkspace(cwd);
 	const outcome = resolvePipelineOutcome(state);
@@ -417,11 +418,15 @@ export async function handleNext(args: { cwd: string }) {
 			complete: true,
 		});
 	}
-	const prompt = await buildMcpPhasePrompt(state, outcome.phase, false);
-	return textResult(prompt, { phase: outcome.phase.id, forced: false });
+	// `unattended` is the MCP spelling of Pi's --auto: nobody is there to
+	// answer the reimplementation-spec phase's Strategic Alignment Hook, so
+	// the prompt carries the auto-default instruction instead (#270).
+	const unattended = args.unattended === true;
+	const prompt = await buildMcpPhasePrompt(state, outcome.phase, false, unattended);
+	return textResult(prompt, { phase: outcome.phase.id, forced: false, unattended });
 }
 
-export async function handlePhase(args: { cwd: string; phase: string }) {
+export async function handlePhase(args: { cwd: string; phase: string; unattended?: boolean }) {
 	if (typeof args.phase !== "string" || !args.phase.trim()) {
 		throw new McpError(ErrorCode.InvalidParams, "phase is required");
 	}
@@ -431,8 +436,9 @@ export async function handlePhase(args: { cwd: string; phase: string }) {
 	if (!phase) {
 		throw new McpError(ErrorCode.InvalidParams, `Unknown phase: ${args.phase}`);
 	}
-	const prompt = await buildMcpPhasePrompt(state, phase, true);
-	return textResult(prompt, { phase: phase.id, forced: true });
+	const unattended = args.unattended === true;
+	const prompt = await buildMcpPhasePrompt(state, phase, true, unattended);
+	return textResult(prompt, { phase: phase.id, forced: true, unattended });
 }
 
 export async function handleValidate(args: { cwd: string; phase?: string }) {
@@ -1468,7 +1474,13 @@ const TOOLS = [
 			"Return the prompt text for the next eligible CodeCartographer phase. The host should feed this prompt back to the agent or display it to the user.",
 		inputSchema: {
 			type: "object",
-			properties: { cwd: { type: "string", description: "Absolute path to the target repository." } },
+			properties: {
+				cwd: { type: "string", description: "Absolute path to the target repository." },
+				unattended: {
+					type: "boolean",
+					description: "Set when no user is in the loop to answer the prompt's questions (an autonomous run). The reimplementation-spec prompt then defaults to the language-agnostic variant and records selection: auto-default instead of asking which variant to build, and every interactive hook is suppressed. Same as Pi's /codecarto-next --auto.",
+				},
+			},
 			required: ["cwd"],
 		},
 	},
@@ -1481,6 +1493,7 @@ const TOOLS = [
 			properties: {
 				cwd: { type: "string", description: "Absolute path to the target repository." },
 				phase: { type: "string", description: "Phase id from the active pipeline." },
+				unattended: { type: "boolean", description: "As for codecarto_next: no user is in the loop, so interactive hooks default and record their choice instead of asking." },
 			},
 			required: ["cwd", "phase"],
 		},

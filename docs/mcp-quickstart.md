@@ -120,7 +120,7 @@ opencode uses an `mcp` key with its own shape — not `mcpServers`, and `command
 In the repo you want to understand, ask your agent to run the pipeline. The canonical flow:
 
 1. **`codecarto_init`** — copies `.codecarto/` into the repo, picks the pipeline variant.
-2. **`codecarto_next`** — returns the next phase's prompt. Your agent runs it (reads source, writes findings).
+2. **`codecarto_next`** — returns the next phase's prompt. Your agent runs it (reads source, writes findings). Pass `unattended: true` when no user is in the loop: the `reimplementation-spec` phase then takes the language-agnostic default and records `selection: auto-default` instead of asking which variant to build — the MCP spelling of Pi's `--auto`.
 3. **Write the phase handoff** at `.codecarto/scratch/handoffs/<phase-id>.yaml` — owner notes, open questions, and any routing to a later phase. The framework owns `status.yaml`, the closeouts, and `THREAD_LOG.md`; this file is how a session proposes changes to them.
 4. **`codecarto_validate`** — reads the `## Validation` table the phase wrote at the end of its output (its own PASS/PARTIAL/FAIL per completion criterion), runs two cross-checks (findings' evidence/action pairing; declared secondary outputs present), and reports PASS, PASS WITH GAPS, FAIL, or MISSING. It does not judge the criteria itself.
 5. **`codecarto_complete`** — applies the handoff to `status.yaml` and writes the closeout and log entry.
