@@ -9,7 +9,11 @@ const PHASE_SESSION_PREFIX = "CodeCartographer phase: ";
 export function phaseIdFromSessionName(sessionName: string | undefined): string | null {
 	if (!sessionName?.startsWith(PHASE_SESSION_PREFIX)) return null;
 	const phaseId = sessionName.slice(PHASE_SESSION_PREFIX.length).trim();
-	return /^[a-z0-9][a-z0-9-]*$/.test(phaseId) ? phaseId : null;
+	// The same alphabet assertSafePhaseId admits (core/status.ts). A narrower
+	// match here silently dropped the bash block, write confinement, and
+	// checkpointing for a custom pipeline whose ids used `.`, `_`, or a capital
+	// (self-audit mech 6.11).
+	return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(phaseId) ? phaseId : null;
 }
 
 export function buildPhaseCompactionInstructions(phaseId: string, primaryOutput?: string): string {
