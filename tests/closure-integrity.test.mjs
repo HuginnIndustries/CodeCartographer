@@ -491,8 +491,8 @@ test("E: a completed phase's declared gaps reach the next phase's prompt", async
 		const prompt = await buildPhasePrompt(after, contractsPhase, false);
 		assert.match(prompt, /Upstream phases declared these coverage gaps/);
 		assert.match(prompt, /must either close the gap with cited new evidence of its own or inherit its uncertainty/);
-		assert.match(prompt, /^ {2}- architecture \(skipped scope\): vendored dependencies under third_party\/$/m);
-		assert.match(prompt, /^ {2}- architecture \(known blind spots\): the encoded search-proxy command was not fully decoded$/m);
+		assert.match(prompt, /^ {2}- architecture \(skipped scope\): «vendored dependencies under third_party\/»$/m);
+		assert.match(prompt, /^ {2}- architecture \(known blind spots\): «the encoded search-proxy command was not fully decoded»$/m);
 		// Non-gating and surface-agnostic: it is a duty bullet, and both
 		// surfaces get it from buildPhasePrompt.
 		const auto = await buildPhasePrompt(after, contractsPhase, false, { auto: true });

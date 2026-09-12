@@ -205,7 +205,7 @@ test("prompt duties block lists pending proposals and re-triage questions after 
 	const prompt = await core.buildPhasePrompt(after, phase, true);
 	assert.match(prompt, /CONVENTIONS\.md has \d+ pending proposal/);
 	assert.match(prompt, /Re-triage these open questions' kind labels/);
-	assert.match(prompt, /arch-OQ9 \(needs-maintainer-decision, from architecture\) Is the loopback-only bind intentional\?/);
+	assert.match(prompt, /arch-OQ9 \(needs-maintainer-decision, from architecture\) «Is the loopback-only bind intentional\?»/);
 	assert.match(prompt, /Contradiction sweep:/);
 
 	const autoPrompt = await core.buildPhasePrompt(after, phase, true, { auto: true });
