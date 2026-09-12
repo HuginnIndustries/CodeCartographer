@@ -314,6 +314,73 @@ export function closureEvidenceGateActive(scaffoldVersion: string | undefined | 
 	return comparison !== null && comparison >= 0;
 }
 
+/**
+ * Whether `text` names one of `ids` as a whole token: the id must not run
+ * straight into another id character on either side, so `arch-CF2` matches
+ * "routed as `arch-CF2`" and not "arch-CF20".
+ */
+function mentionsAnyId(text: string, ids: Iterable<string>): boolean {
+	for (const id of ids) {
+		let from = 0;
+		while (true) {
+			const at = text.indexOf(id, from);
+			if (at === -1) break;
+			const before = at === 0 ? "" : text[at - 1];
+			const after = text[at + id.length] ?? "";
+			if (!/[A-Za-z0-9_-]/.test(before) && !/[A-Za-z0-9_-]/.test(after)) return true;
+			from = at + 1;
+		}
+	}
+	return false;
+}
+
+/**
+ * Turn each PARTIAL validation row into a `needs-maintainer-decision`
+ * question on the phase, unless the row's criterion or evidence cell names an
+ * entry the workspace already tracks: an open question, carry-forward, or
+ * post-pipeline item, from this handoff or an earlier phase. VALIDATE.md asks
+ * the phase to name the tracking entry in the evidence cell; honouring it is
+ * what stops a routed gap from also becoming a duplicate question that every
+ * later phase re-triages and someone must close (#239).
+ *
+ * Runs after the handoff has been applied. That is also what keeps the auto
+ * ids distinct from the handoff's: both `autoAssignIds` from `oq-<phase>-1`,
+ * and assigning the gaps first let a later id-less handoff question replace a
+ * gap under the same id.
+ */
+function addPartialRowQuestions(status: NormalizedStatus, phaseId: string, rows: ValidationResult["rows"]): void {
+	const phase = status.phases[phaseId];
+	if (!phase) return;
+	const trackedIds = new Set<string>();
+	for (const phaseState of Object.values(status.phases)) {
+		for (const entry of [...(phaseState.open_questions ?? []), ...(phaseState.carry_forward ?? [])]) {
+			if (entry.id) trackedIds.add(entry.id);
+		}
+	}
+	for (const entry of status.post_pipeline) {
+		if (entry.id) trackedIds.add(entry.id);
+	}
+	const gapEntries: OpenQuestionEntry[] = [];
+	for (const row of rows) {
+		if (!row.result.toUpperCase().includes("PARTIAL")) continue;
+		if (mentionsAnyId(`${row.criterion} ${row.evidence}`, trackedIds)) continue;
+		const candidate: OpenQuestionEntry = {
+			kind: "needs-maintainer-decision",
+			description: row.criterion || "Partial validation gap",
+			deferred_reason: row.evidence || "Marked PARTIAL by validation",
+		};
+		// Idempotent across re-runs of completion: the same gap is one question.
+		if (phase.open_questions.some((entry) => entry.description === candidate.description && entry.deferred_reason === candidate.deferred_reason)) continue;
+		gapEntries.push(candidate);
+	}
+	if (gapEntries.length === 0) return;
+	// Reserve every id already on the phase so the new ones skip them; the
+	// placeholders keep autoAssignIds from touching the existing entries.
+	const reserved = phase.open_questions.filter((entry) => entry.id).map((entry) => ({ id: entry.id }));
+	autoAssignIds([...reserved, ...gapEntries], "oq", phaseId);
+	phase.open_questions.push(...gapEntries);
+}
+
 export async function completeValidatedPhase(
 	cwd: string,
 	validation: ValidationResult,
@@ -464,20 +531,6 @@ export async function completeValidatedPhase(
 			open_questions: [],
 			carry_forward: [],
 		};
-		const gapEntries: OpenQuestionEntry[] = lockedValidation.rows
-			.filter((row) => row.result.toUpperCase().includes("PARTIAL"))
-			.map((row) => ({
-				kind: "needs-maintainer-decision",
-				description: row.criterion || "Partial validation gap",
-				deferred_reason: row.evidence || "Marked PARTIAL by validation",
-			}));
-		autoAssignIds(gapEntries, "oq", validation.phaseId);
-		const mergedOpenQuestions = [...existingPhase.open_questions];
-		for (const candidate of gapEntries) {
-			if (!mergedOpenQuestions.some((entry) => entry.description === candidate.description && entry.deferred_reason === candidate.deferred_reason)) {
-				mergedOpenQuestions.push(candidate);
-			}
-		}
 		nextStatus.phases[validation.phaseId] = {
 			status: "complete",
 			owner_notes: uniqueStrings([
@@ -487,10 +540,13 @@ export async function completeValidatedPhase(
 				`Validation: ${lockedValidation.overall}`,
 			]),
 			outputs_present: uniqueStrings([...existingPhase.outputs_present, validation.primaryOutput]),
-			open_questions: mergedOpenQuestions,
+			open_questions: [...existingPhase.open_questions],
 			carry_forward: existingPhase.carry_forward ?? [],
 		};
 		if (handoff) applyHandoff(nextStatus, handoff);
+		// After the handoff, so a gap the handoff routed is recognised as
+		// tracked and the ids the handoff introduced are known (#239).
+		addPartialRowQuestions(nextStatus, validation.phaseId, lockedValidation.rows);
 		nextStatus.last_updated = completionTimestamp;
 		const nextWorkspace: WorkspaceState = { ...lockedState, status: nextStatus };
 		const nextEligible = getNextEligiblePhase(nextWorkspace);

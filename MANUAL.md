@@ -171,7 +171,7 @@ When all phases are complete, `status.yaml` will show `current_phase: complete`.
 | `findings/porting/reverse-engineering-bundle.md` | Everything synthesized into a porting-oriented view — what matters, what's risky, and what to build first. |
 | `findings/reimplementation-spec/reimplementation-spec.md` | The build plan — concept-level modules, required behaviors, implementation sequence, acceptance scenarios, and known unknowns. |
 
-Each output ends with a **validation block** showing which completion criteria passed, partially passed, or failed. If anything is PARTIAL, the gaps are documented in the validation block and in `status.yaml` under `open_questions`.
+Each output ends with a **validation block** showing which completion criteria passed, partially passed, or failed. If anything is PARTIAL, the gap is documented in the validation block and tracked in `status.yaml`: as the `open_questions` or `carry_forward` entry the row's Evidence cell names, or — when it names none — as an open question completion adds for it.
 
 **Secondary outputs** (in `findings/public-surfaces/`, `findings/runtime-lifecycle/`, etc.) contain overflow notes that accumulated across multiple phases. Check these if the primary outputs reference them.
 
