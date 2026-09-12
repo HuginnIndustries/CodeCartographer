@@ -130,3 +130,105 @@ test("readSpecArg accepts inline spec regardless of allowedRoots", async () => {
 	const out = await readSpecArg({ spec: "inline spec body" }, []);
 	assert.equal(out, "inline spec body");
 });
+
+// ── cwd is validated before it becomes a root (self-audit #241) ──────────────
+// A relative cwd resolved against the MCP server process's working directory,
+// not the caller's, and became a containment root for spec_path there before
+// anything checked it. Now every library tool validates an optional cwd the
+// way the workflow tools validate a required one, first.
+
+const { handleLibraryList, handleLibraryReindex } = await import("../mcp-server/server.ts");
+const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+
+const isInvalidParams = (pattern) => (err) => {
+	assert.ok(err instanceof McpError, "expected McpError");
+	assert.equal(err.code, ErrorCode.InvalidParams);
+	assert.match(err.message, pattern);
+	return true;
+};
+
+test("codecarto_publish refuses a relative cwd before spec_path is read through it", async () => {
+	const { secretPath, libraryDir } = await setup();
+	try {
+		// The old order built the containment root from the relative cwd (so
+		// from the server process's location), read spec_path against it, and
+		// only then refused the cwd. With a spec_path outside every root that
+		// order surfaces as the containment error; the cwd error here proves
+		// the argument is refused before readSpecArg runs at all.
+		await assert.rejects(
+			handlePublish({
+				library_path: libraryDir,
+				cwd: "target",
+				source_repo: "https://github.com/test/repo",
+				headline: "Test spec",
+				spec_path: secretPath,
+			}),
+			isInvalidParams(/^MCP error -32602: cwd must be an absolute path, got: target$/),
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("codecarto_publish refuses a cwd that does not exist", async () => {
+	const { workspaceDir, libraryDir } = await setup();
+	try {
+		const missing = join(workspaceDir, "..", "..", "no-such-dir");
+		await assert.rejects(
+			handlePublish({
+				library_path: libraryDir,
+				cwd: missing,
+				source_repo: "https://github.com/test/repo",
+				headline: "Test spec",
+				spec: "# inline\n",
+			}),
+			isInvalidParams(/cwd does not exist: /),
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("codecarto_publish refuses a cwd of the wrong type instead of ignoring it", async () => {
+	const { libraryDir } = await setup();
+	try {
+		await assert.rejects(
+			handlePublish({ library_path: libraryDir, cwd: 42, source_repo: "https://github.com/test/repo", headline: "Test spec", spec: "# inline\n" }),
+			isInvalidParams(/cwd must be a string when given/),
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("an absent or empty cwd still means 'no workspace' for the library tools", async () => {
+	const { libraryDir } = await setup();
+	try {
+		for (const cwd of [undefined, null, "", "   "]) {
+			const args = { library_path: libraryDir, source_repo: "https://github.com/test/repo", headline: "Test spec", spec: "# inline\n" };
+			if (cwd !== undefined) args.cwd = cwd;
+			const result = await handlePublish(args);
+			assert.equal(result.structuredContent.slug, "repo");
+		}
+	} finally {
+		await cleanup();
+	}
+});
+
+test("codecarto_library_list and codecarto_library_reindex validate cwd the same way", async () => {
+	const { libraryDir } = await setup();
+	try {
+		for (const handler of [handleLibraryList, handleLibraryReindex]) {
+			await assert.rejects(
+				handler({ library_path: libraryDir, cwd: "relative/path" }),
+				isInvalidParams(/cwd must be an absolute path, got: relative\/path/),
+			);
+			await assert.rejects(
+				handler({ library_path: libraryDir, cwd: join(libraryDir, "no-such-dir") }),
+				isInvalidParams(/cwd does not exist: /),
+			);
+		}
+	} finally {
+		await cleanup();
+	}
+});
