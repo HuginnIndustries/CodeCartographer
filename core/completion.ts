@@ -499,10 +499,20 @@ export async function completeValidatedPhase(
 			? [`Begin ${nextEligible.id} phase by producing ${nextEligible.primary_output ?? `findings/${nextEligible.id}/`}`]
 			: buildTerminalNextActions(nextStatus);
 
-		const artifacts = await writeCompletionArtifacts(lockedState.workspaceDir, validation.phaseId, lockedValidation, completionTimestamp, handoff);
-		closeoutPath = artifacts.closeoutPath;
-		orchestratorCheckpoint = buildOrchestratorCheckpoint(artifacts.decisionsAppended, artifacts.totalPendingProposals, nextStatus);
-		return { state: { ...nextWorkspace, status: nextStatus } };
+		return {
+			state: { ...nextWorkspace, status: nextStatus },
+			// The closeout, THREAD_LOG line, decision rows, and staged proposals
+			// all assert that the phase is complete, so they are written only
+			// after status.yaml has landed (#234). Each writer is idempotent
+			// (canonical closeout name, link-deduped index line, text-deduped
+			// rows), so re-running completion regenerates whatever a failure
+			// here left out.
+			afterCommit: async () => {
+				const artifacts = await writeCompletionArtifacts(lockedState.workspaceDir, validation.phaseId, lockedValidation, completionTimestamp, handoff);
+				closeoutPath = artifacts.closeoutPath;
+				orchestratorCheckpoint = buildOrchestratorCheckpoint(artifacts.decisionsAppended, artifacts.totalPendingProposals, nextStatus);
+			},
+		};
 	});
 
 	return {

@@ -176,29 +176,33 @@ export async function applyAmendment(cwd: string, name: string): Promise<Amendme
 		nextStatus.next_actions = buildTerminalNextActions(nextStatus);
 		nextStatus.last_updated = timestamp;
 
-		// Amendment closeout + THREAD_LOG entry, same idempotence rule as
-		// completion: the closeout link appears in THREAD_LOG at most once.
-		const closeoutFile = `${dateOnly(timestamp)}-amendment-${amendment.slug}.md`;
-		const closeoutsDir = join(lockedState.workspaceDir, "closeouts");
-		await mkdir(closeoutsDir, { recursive: true });
-		const body = amendment.closeout_content.trim() || renderAmendmentCloseout(amendment, applied, timestamp);
-		await writeFile(join(closeoutsDir, closeoutFile), `${body}\n`, "utf8");
-		const summary = amendment.closeout_summary.trim()
-			|| `Amendment applied: ${applied.openQuestionsClosed.length} open question(s) and ${applied.postPipelineClosed.length} post-pipeline item(s) closed.`;
-		const entry = `- ${dateOnly(timestamp)} — amendment:${amendment.slug} — ${summary} — [closeout](closeouts/${closeoutFile})`;
-		const threadLogPath = join(lockedState.workspaceDir, "THREAD_LOG.md");
-		let current = "";
-		try {
-			current = await readFile(threadLogPath, "utf8");
-		} catch {
-			// Created below when absent.
-		}
-		if (!current.split(/\r?\n/).some((line) => line.includes(`[closeout](closeouts/${closeoutFile})`))) {
-			await appendFile(threadLogPath, `${newlineIfUnterminated(current)}${entry}\n`, "utf8");
-		}
-		closeoutNotice = `Closeout: .codecarto/closeouts/${closeoutFile}`;
-
-		return { state: { ...lockedState, status: nextStatus } };
+		return {
+			state: { ...lockedState, status: nextStatus },
+			// Amendment closeout + THREAD_LOG entry, written after the status
+			// commit (#234) under the same idempotence rule as completion: the
+			// closeout link appears in THREAD_LOG at most once.
+			afterCommit: async () => {
+				const closeoutFile = `${dateOnly(timestamp)}-amendment-${amendment.slug}.md`;
+				const closeoutsDir = join(lockedState.workspaceDir, "closeouts");
+				await mkdir(closeoutsDir, { recursive: true });
+				const body = amendment.closeout_content.trim() || renderAmendmentCloseout(amendment, applied, timestamp);
+				await writeFile(join(closeoutsDir, closeoutFile), `${body}\n`, "utf8");
+				const summary = amendment.closeout_summary.trim()
+					|| `Amendment applied: ${applied.openQuestionsClosed.length} open question(s) and ${applied.postPipelineClosed.length} post-pipeline item(s) closed.`;
+				const entry = `- ${dateOnly(timestamp)} — amendment:${amendment.slug} — ${summary} — [closeout](closeouts/${closeoutFile})`;
+				const threadLogPath = join(lockedState.workspaceDir, "THREAD_LOG.md");
+				let current = "";
+				try {
+					current = await readFile(threadLogPath, "utf8");
+				} catch {
+					// Created below when absent.
+				}
+				if (!current.split(/\r?\n/).some((line) => line.includes(`[closeout](closeouts/${closeoutFile})`))) {
+					await appendFile(threadLogPath, `${newlineIfUnterminated(current)}${entry}\n`, "utf8");
+				}
+				closeoutNotice = `Closeout: .codecarto/closeouts/${closeoutFile}`;
+			},
+		};
 	});
 
 	return { updatedState, closeoutNotice, applied };

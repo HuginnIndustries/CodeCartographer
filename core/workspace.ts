@@ -339,9 +339,26 @@ export function describeScaffoldStaleness(state: WorkspaceState): string | null 
 	return `This workspace's scaffold (v${scaffold}) is newer than the running framework (v${PACKAGE_VERSION}). Upgrade CodeCartographer to at least v${scaffold}.`;
 }
 
+/** What an {@link updateStatusAtomically} updater returns. */
+export interface StatusUpdate {
+	state: WorkspaceState;
+	handoff?: PhaseHandoff;
+	threadLogEntry?: string;
+	/**
+	 * Runs under the lock only after status.yaml has been renamed into place —
+	 * the commit point. Closeouts, index lines, decision rows, and anything
+	 * else that asserts "this phase is complete" belong here rather than in
+	 * the updater, so a failed commit leaves none of them behind (#234). A
+	 * step that fails here surfaces as an error, but the status change stands;
+	 * steps must therefore be idempotent so re-running the operation
+	 * regenerates what they write.
+	 */
+	afterCommit?: (committed: WorkspaceState) => Promise<void> | void;
+}
+
 export async function updateStatusAtomically(
 	cwd: string,
-	updater: (state: WorkspaceState) => Promise<{ state: WorkspaceState; handoff?: PhaseHandoff; threadLogEntry?: string }> | { state: WorkspaceState; handoff?: PhaseHandoff; threadLogEntry?: string },
+	updater: (state: WorkspaceState) => Promise<StatusUpdate> | StatusUpdate,
 ): Promise<WorkspaceState> {
 	const workspaceDir = join(cwd, ".codecarto");
 	const statusPath = join(workspaceDir, "workflow", "status.yaml");
@@ -368,6 +385,19 @@ export async function updateStatusAtomically(
 		const tempPath = `${statusPath}.${process.pid}.${Date.now()}.tmp`;
 		await writeFile(tempPath, serialized, "utf8");
 		await rename(tempPath, statusPath);
+
+		if (result.afterCommit) {
+			try {
+				await result.afterCommit(nextState);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				throw new Error(
+					`status.yaml was updated, but a step that runs after the update failed: ${reason} ` +
+						"The status change stands; re-run the same operation to regenerate what that step writes.",
+					{ cause: error },
+				);
+			}
+		}
 
 		if (result.threadLogEntry) {
 			const threadLogPath = join(workspaceDir, "THREAD_LOG.md");
