@@ -35,7 +35,7 @@ import {
 	getPipelineLabel,
 	getWorkspaceState,
 	isWithinPath,
-	isWithinPathResolved,
+	resolveExistingPrefix,
 	BROADSIDE_LENS_IDS,
 	BROADSIDE_SKILL_NAME,
 	BroadsideCancelledError,
@@ -433,16 +433,18 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		if (event.toolName === "edit" || event.toolName === "write") {
 			const inputPath = typeof event.input.path === "string" ? event.input.path : "";
 			const strippedPath = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
-			const targetPath = await canonicalPath(resolve(ctx.cwd, strippedPath));
+			// Resolve through whatever already exists on disk — symlinks included —
+			// before appending the unborn tail. `resolve()` would collapse
+			// `link/..` lexically and `realpath()` throws on a file that is not
+			// there yet, and either gap let a write escape the workspace (#223).
+			const targetPath = await resolveExistingPrefix(strippedPath, ctx.cwd);
 			const allowedRoots = [await canonicalPath(workspaceDir)];
 			const config = await loadCodecartoConfig(workspaceDir);
 			if (config.library.path && await discoverLibrary(config.library.path)) {
 				allowedRoots.push(await canonicalPath(config.library.path));
 			}
-			const withinAllowed = await Promise.all(
-			allowedRoots.map((allowedRoot) => isWithinPathResolved(targetPath, allowedRoot)),
-		);
-		if (!withinAllowed.some((result) => result)) {
+			const withinAllowed = allowedRoots.map((allowedRoot) => isWithinPath(targetPath, allowedRoot));
+			if (!withinAllowed.some((result) => result)) {
 				notifyCtx(ctx, `Blocked ${event.toolName} outside .codecarto/ or configured library: ${inputPath}`, "warning");
 				return { block: true, reason: `CodeCartographer mode only allows ${event.toolName} within .codecarto/ or the configured CodeCartographer library.` };
 			}
