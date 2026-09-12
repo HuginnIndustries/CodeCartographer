@@ -31,7 +31,7 @@ Asking an LLM to "analyze this repo" loses context halfway through, hallucinates
 
 1. **The filesystem is the memory, not the conversation.** Each phase writes a smaller, templated, evidence-tagged artifact to `.codecarto/findings/`. Later phases re-read the specific upstream files they need. A new session — or a context compaction — picks up from `status.yaml` without losing progress.
 
-2. **Every phase is validated before the pipeline advances.** Completion criteria are real: a `FAIL` output stops the run. You can't accidentally build a reimplementation spec on top of hallucinated architecture.
+2. **Every phase attests to its own completion, and the gate holds it to that.** Each output ends with a `## Validation` table where the phase marks every completion criterion PASS, PARTIAL, or FAIL with evidence. Validation parses that table, cross-checks the findings' evidence/action pairing and the declared secondary outputs, and refuses to advance on a `FAIL`, a missing output, or a verdict it cannot read. It does not re-judge the criteria itself — that is the model's honest self-assessment plus two mechanical checks, which is exactly what a later phase can hold the earlier one to.
 
 3. **The output is a spec, not a chat log.** The final `reimplementation-spec.md` is language-agnostic, module-inventoried, and carries acceptance scenarios plus known unknowns. Hand it to another agent to rebuild from.
 
@@ -44,7 +44,7 @@ Every finding is tagged with an evidence level: `observed fact`, `strong inferen
 | What you get | Where it lives |
 |---|---|
 | **Layered analysis pipeline** — architecture → defect scan → behavioral contracts → protocols → porting → reimplementation spec | `.codecarto/` template |
-| **Validation gates between phases** — no advancing past a `FAIL` output | `core/` state machine |
+| **Validation gates between phases** — the phase's own `## Validation` table plus two cross-checks; no advancing past a `FAIL` | `core/` state machine |
 | **Three surfaces, one framework** — Pi extension (recommended), MCP server (for other coding agents), or drop-in template (one-off / evaluation) | All three share `core/` |
 | **Live progress widget** while phase sub-agents work | Pi extension |
 | **HTML dashboard** — single-file aggregate of progress, links, usage, narrative | `.codecarto/dashboard.html` |
@@ -228,7 +228,7 @@ The porting bundle is the final intentional compression boundary. It carries a s
 | **Porting bundle** | Everything synthesized into a porting-oriented view with priority rankings |
 | **Reimplementation spec** | Language-agnostic build plan with modules, acceptance scenarios, and known unknowns |
 
-Every finding is tagged with an evidence level: `observed fact`, `strong inference`, `portability hazard`, `external-behavior claim`, or `open question`. Every phase output is validated against explicit completion criteria before the pipeline advances.
+Every finding is tagged with an evidence level: `observed fact`, `strong inference`, `portability hazard`, `external-behavior claim`, or `open question`. Every phase output ends with the phase's own validation table against the pipeline's completion criteria, and the gate reads that table before the pipeline advances.
 
 ---
 

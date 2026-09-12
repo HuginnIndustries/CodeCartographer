@@ -1373,7 +1373,7 @@ const TOOLS = [
 	{
 		name: "codecarto_validate",
 		description:
-			"Validate a phase's primary output against the validation block in the produced markdown. Returns overall PASS/PASS WITH GAPS/FAIL/MISSING plus the parsed criteria rows. If phase is omitted, validates the next eligible phase.",
+			"Read the ## Validation table a phase wrote at the end of its primary output — the phase's own PASS/PARTIAL/FAIL per completion criterion — apply two cross-checks (findings evidence/action pairing; declared secondary outputs present), and return PASS/PASS WITH GAPS/FAIL/MISSING plus the parsed rows. It does not judge the criteria itself. If phase is omitted, validates the next eligible phase.",
 		inputSchema: {
 			type: "object",
 			properties: {
