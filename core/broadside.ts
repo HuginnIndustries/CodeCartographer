@@ -3036,12 +3036,25 @@ export async function runBroadsideCollect(
 		retryTruncated?: boolean;
 		onStatus?: (lensId: string, status: string, counts: Record<string, unknown>) => void;
 		fetcher?: FetchLike;
+		/**
+		 * Which run to collect. Absent, the most recent — which used to be the
+		 * only choice, so an older run still in flight could not be collected
+		 * once a newer submit existed (#268). `status` lists the ids.
+		 */
+		runId?: string;
 	} = {},
 ): Promise<BroadsideCollectResult> {
 	const broadsideDir = broadsideDirFor(cwd);
 	const state = await loadBroadsideState(broadsideDir);
-	const run = state.runs[state.runs.length - 1];
+	const run = opts.runId ? state.runs.find((candidate) => candidate.id === opts.runId) : state.runs[state.runs.length - 1];
 	if (!run) {
+		if (opts.runId) {
+			const known = state.runs.map((candidate) => candidate.id);
+			throw new Error(
+				`No Broad-Side run with id ${opts.runId}. ` +
+				(known.length > 0 ? `Recorded runs: ${known.join(", ")}.` : "No runs are recorded; call codecarto_broadside with action 'submit' first."),
+			);
+		}
 		throw new Error("No Broad-Side run recorded. Call codecarto_broadside with action 'submit' first.");
 	}
 

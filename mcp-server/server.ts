@@ -1263,6 +1263,7 @@ export async function handleBroadside(args: {
 	lenses?: string[];
 	api_key?: string;
 	wait_seconds?: number;
+	run_id?: string;
 	include_synthesis?: boolean;
 	include_triage?: boolean;
 	retry_truncated?: boolean;
@@ -1384,11 +1385,13 @@ export async function handleBroadside(args: {
 	}
 
 	// action === "collect"
+	const runId = typeof args.run_id === "string" && args.run_id.trim() ? args.run_id.trim() : undefined;
 	const collect = await runBroadsideCollect(cwd, apiKey, {
 		waitMs,
 		includeSynthesis,
 		includeTriage,
 		retryTruncated,
+		...(runId && { runId }),
 	}).catch((error) => {
 		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
@@ -1737,6 +1740,10 @@ const TOOLS = [
 				api_key: {
 					type: "string",
 					description: "OpenRouter API key. Prefer the OPENROUTER_API_KEY environment variable or .codecarto/broadside/config.yaml.",
+				},
+				run_id: {
+					type: "string",
+					description: "For collect: the run to collect, as listed by the status action. Defaults to the most recent run; pass this to collect an older run that is still in flight after a newer submit.",
 				},
 				wait_seconds: {
 					type: "number",

@@ -1342,6 +1342,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					includeTriage,
 					retryTruncated,
 					onStatus,
+					...(flags.runId && { runId: flags.runId }),
 				});
 				const lines = collectResultText(collect).split("\n");
 				const done = collect.status === "completed";
