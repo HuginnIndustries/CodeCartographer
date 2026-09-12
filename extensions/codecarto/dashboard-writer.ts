@@ -3,10 +3,11 @@
 // and never escalate to a phase error the user sees, mirroring the
 // recordUsage discipline at extensions/codecarto/index.ts.
 
-import { readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
+	atomicWriteFile,
 	DASHBOARD_RELATIVE_PATH,
 	type DashboardCloseoutEntry,
 	type DashboardInputs,
@@ -54,10 +55,7 @@ export async function writeDashboard(cwd: string, packageVersion: string): Promi
 		};
 
 		const html = renderDashboard(inputs);
-		const path = join(workspaceDir, DASHBOARD_RELATIVE_PATH);
-		const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-		await writeFile(tempPath, html, "utf8");
-		await rename(tempPath, path);
+		await atomicWriteFile(join(workspaceDir, DASHBOARD_RELATIVE_PATH), html);
 		return true;
 	} catch {
 		// Best-effort: a failed dashboard write must not surface as a phase
