@@ -55,6 +55,7 @@ import {
 	type GenerationSurface,
 	getLens,
 	describeDanglingCarryForward,
+	describeMissingCompletedOutputs,
 	getNextEligiblePhase,
 	getPipelineLabel,
 	getWorkspaceState,
@@ -68,6 +69,7 @@ import {
 	loadBroadsideConfig,
 	modelsText,
 	readGuide,
+	listMissingCompletedOutputs,
 	listSkillNames,
 	resolveSkillName,
 	loadCodecartoConfig,
@@ -313,6 +315,7 @@ export async function handleStatus(args: { cwd: string }) {
 	);
 	const postPipelinePending = state.status.post_pipeline.filter((entry) => entry.status !== "resolved").length;
 	const scaffoldNotice = describeScaffoldStaleness(state);
+	const missingOutputs = await listMissingCompletedOutputs(state);
 	const summaryLines = [
 		`Phase: ${currentPhase}`,
 		`Pipeline state: ${currentPhase === "complete" ? "complete" : "in progress"}`,
@@ -329,9 +332,11 @@ export async function handleStatus(args: { cwd: string }) {
 			: [`Next: ${nextPhase ? `Begin ${nextPhase.id}` : "All phases complete."}`]),
 	];
 	if (scaffoldNotice) summaryLines.push(`Scaffold: ${scaffoldNotice}`);
+	summaryLines.push(...describeMissingCompletedOutputs(missingOutputs));
 	const summary = summaryLines.join("\n");
 	return textResult(summary, {
 		...(scaffoldNotice ? { scaffoldNotice } : {}),
+		...(missingOutputs.length > 0 ? { missingOutputs } : {}),
 		currentPhase,
 		pipeline: state.status.pipeline,
 		pipelineLabel: getPipelineLabel(state.status.pipeline),

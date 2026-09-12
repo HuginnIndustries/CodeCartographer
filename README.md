@@ -567,7 +567,11 @@ tests/                       # Invariant tests catching cross-wrapper drift.
 docs/                        # Roadmap, design notes.
 ```
 
-The `.codecarto/.gitignore` excludes generated findings, scratch files, the dashboard, and the local usage / narration caches. Template files (workflow definitions, skills, output templates) are safe to commit so teammates can run their own analyses.
+### What to commit
+
+The `.codecarto/.gitignore` that init writes excludes generated findings, scratch files, the dashboard, and the local usage / narration caches, on every install path. Template files (workflow definitions, skills, output templates) are safe to commit so teammates can run their own analyses.
+
+One consequence to know about: `workflow/status.yaml` **is** committed and records which phases are complete, while the reports those phases wrote are not. A teammate's fresh clone therefore says "6/7 complete" about findings it does not have. `codecarto_status` and `/codecarto-status` name any such phase ("Outputs missing on disk for N complete phase(s)…") so the gap is never silent, and the dashboard marks each output present or missing. To share the analysis itself, delete the `findings/…` lines from your workspace's `.codecarto/.gitignore` and commit the reports — that is a per-workspace choice; the framework's default stays ignore-by-default.
 
 ---
 
