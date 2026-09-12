@@ -131,6 +131,20 @@ when the estimate exceeds `max_cost` (`config.yaml` or the tool parameter)
 unless `force` is passed. See `config.yaml` for the model, limit, and manual
 pricing-override keys.
 
+What leaves the machine is repository content, so a redaction pass runs
+before upload: files named like credential stores (`.env*`, `*.pem`,
+`*.key`, `id_rsa*`, `.npmrc`, `credentials.json`, `secrets.yaml`,
+`*.tfvars`, …) are left out of every lens by name, and well-known secret
+shapes in every other file — private-key blocks, cloud and API keys, JWTs,
+quoted values assigned to password/secret/token keys, passwords inside URLs
+— are replaced with `[REDACTED:<kind>]`. The submit report says what the
+pass did. When reading results, a finding that cites a `[REDACTED:…]` marker
+is about the *presence* of a hardcoded credential at that location; the
+value was never sent. This is a safety net against an accidental upload
+with deliberately low-false-positive patterns, not a secret scanner:
+anything it does not recognise goes as written. `redact_secrets: false` in
+`config.yaml` turns the content pass off (the by-name skip stays).
+
 The `max_cost` guardrail is an **estimate-based pre-flight limit**, distinct
 from OpenRouter's runtime cost tracking: it predicts from file sizes before
 spend, it does not stop a batch mid-flight. Actual spend appears in

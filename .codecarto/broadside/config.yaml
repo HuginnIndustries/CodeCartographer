@@ -141,3 +141,21 @@
 # minutes, so a submit-then-collect-later rhythm is normal.
 #
 # wait_seconds: 0
+
+# Secret redaction before upload. Every slice, plus the entry point, manifest,
+# and README excerpt the architecture lens reads, goes through a pass that
+# replaces well-known secret shapes — private-key blocks, AWS/GitHub/OpenAI/
+# OpenRouter/Anthropic/Stripe/Slack/Google keys, JWTs, quoted values assigned
+# to password/secret/token-style keys, passwords inside URLs — with
+# `[REDACTED:<kind>]`, and files named like credential stores (.env*, *.pem,
+# *.key, id_rsa*, .npmrc, credentials.json, secrets.yaml, *.tfvars, …) are
+# left out of every lens by name. The marker keeps the *presence* of a
+# hardcoded credential visible to the security lens; only the value stays
+# home. The submit report says what the pass did. This is a safety net for
+# an accidental upload, not a substitute for a secret scanner: patterns are
+# the low-false-positive ones only.
+#
+# Set to false only for a repository whose maintainers have decided its
+# contents may leave as they are.
+#
+# redact_secrets: true

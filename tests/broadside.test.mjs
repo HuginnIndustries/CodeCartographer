@@ -547,6 +547,7 @@ test("every documented config key is one loadBroadsideConfig actually reads", as
 		"include_synthesis",
 		"include_triage",
 		"wait_seconds",
+		"redact_secrets",
 	]);
 	const undocumented = [...parsedTop].filter((key) => !documentedTop.includes(key));
 	assert.deepEqual(undocumented, [], `config.yaml does not document: ${undocumented.join(", ")}`);
