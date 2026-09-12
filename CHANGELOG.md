@@ -2,6 +2,62 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] — 2026-09-12
+
+The second release from the self-audit ([`self-audit/`](self-audit/2026-09-11-v0.19.5-full-with-deep-audit/), issues #223–#279). 0.19.6 shipped the four fixes the review ranked first; this one closes every medium in its queue, #235–#261, as seventeen PRs (#287–#303). A minor rather than a patch because three things changed on purpose: library-init no longer switches the MCP publish gate on, a repository Broad-Side cannot scan is refused before it costs anything, and a config file the loader cannot use now stops the library tools instead of being quietly dropped.
+
+### Added
+
+- **Broad-Side redacts secrets before upload** (#252). Files named like credential stores — `.env*`, `*.pem`/`*.key`/`*.p12`, `id_rsa*`, `.npmrc`/`.netrc`, `credentials.json`, `secrets.yaml`, `*.tfvars`, service-account JSON — are left out of every lens by name, and well-known secret shapes in every other file (private-key blocks, AWS/GitHub/OpenAI/OpenRouter/Anthropic/Stripe/Slack/Google keys, JWTs, quoted values assigned to password/secret/token-style keys, passwords inside URLs) become `[REDACTED:<kind>]` before the slice is built. The marker keeps a hardcoded credential visible to the security lens; the value stays home. The submit report says what the pass did, the run records it, and `redact_secrets: false` in `broadside/config.yaml` turns the content pass off. Low-false-positive patterns only: a safety net for an accidental upload, not a secret scanner. `core/secrets.ts`.
+
+- **Config faults are reported.** A `~/.codecarto/config.yaml` or `.codecarto/workflow/config.yaml` that fails to parse, a section that is not a mapping, or a key of the wrong type used to vanish without a message. The loader now records each fault in `config.problems`, at the granularity of the fault, and `codecarto_config` / `/codecarto-config` list them; a phase run warns and continues; the synthesis preflight names them ahead of its "no library.path" advice. #242.
+
+- **Status names a complete phase whose report is not on disk.** `status.yaml` is committed and findings are gitignored by default, so a fresh clone said "6/7 complete" about reports it did not have. `codecarto_status` and `/codecarto-status` now list every such phase and its path, and README's new "What to commit" section states the policy and the per-workspace opt-out. The default stays ignore-by-default. #259.
+
+- **A pipeline switch reports what it moved.** The MCP result carries `currentPhase` and `dangling`; both surfaces print each re-routed carry-forward with its original target (see Changed). #237.
+
+### Changed
+
+- **`codecarto_library_init` and `/codecarto-library-init` write only what they were asked for: `library.path`, and `library.namespace` when given.** They no longer write `publish_confirm: true`, which had switched on the MCP refuse-unless-confirmed gate for every host that had never configured it — the opt-in #162 set up, defeated by the tool that creates the library. An existing `publish_confirm`, `orchestrator` block, or namespace is left as it was, and a config file that cannot be parsed is never rewritten. Set `publish_confirm` yourself to gate the MCP server. #244.
+
+- **The library tools refuse while the configuration has problems.** `codecarto_publish`, `codecarto_library_list`, `codecarto_library_reindex`, and `/codecarto-publish` answer from the config — its path, namespace, and confirm gate — so a file that could not be used in full is a refusal naming the file and key, not a silent fallback to whatever the other layer says. A relative `library.path` is one such problem: it resolved against wherever the server or Pi was launched, so the library moved with the launch directory; it is refused, and absolute or `~`-prefixed paths are unchanged. #242, #243.
+
+- **Broad-Side scans one snapshot and refuses what it cannot scan.** The file list came from `git ls-tree HEAD` while contents came from the working tree, so a run mixed a committed list with uncommitted contents and never saw an untracked file; both now come from the working tree (ignore rules applied, files deleted on disk left out), and the run records the snapshot source beside its HEAD and dirty flag. Language detection takes every manifest present as a candidate — `package.json` covers TypeScript *and* JavaScript, decided by the counts — and picks the one with the most source files, so a Python service with a docs `package.json` is Python. A repository whose language the lenses cannot tell, or whose detected language has no source files, is refused before pricing or the network; it used to fall through to Go's globs and pay for empty batches. #248, #250.
+
+- **A pipeline switch recomputes the cursor and re-routes carry-forwards whose target it dropped.** After completing a phase and switching, `status.yaml` said "Begin architecture phase" beside a complete architecture record; the cursor is now derived from the engine, through the same code completion uses. A carry-forward targeting a phase the new pipeline lacks moves to `post_pipeline` with its source phase and a note naming the dropped target, so an amendment can close it — the rule completion already applies to such a target in a handoff. #236, #237.
+
+- **Init on the packaged template itself is an existing workspace like any other.** A checkout's `.codecarto/` is the template init copies from and a live workspace at once; init used to skip both the refusal and the backup for it and reset `status.yaml` in place — the self-audit hit exactly that. MCP now refuses without `force: true` and Pi asks; a forced re-init moves the session state out file by file into `.codecarto-backup-TIMESTAMP/`, since the template cannot be renamed away, and leaves the framework files in place. #245.
+
+- **Text an earlier session wrote is quoted in the next prompt as data.** Routed item descriptions, re-triage questions, upstream coverage bullets, and library headlines were spliced into phase prompts as plain lines — indistinguishable from instructions, able to break their list with a newline, unbounded. Each is now one line, capped at 400 chars with a note that the full text is in its file, inside `«…»`, under a header that says what `«…»` means. GUIDE.md's session-start step says the same. #253.
+
+- **`PhaseRunResult` no longer carries the child session, and `PhaseRunCallbacks.onSessionCreated` is gone.** Nothing read either; every child `AgentSession` is now disposed once its work is done (see Fixed). #256.
+
+### Fixed
+
+- **A skill name could reach outside `skills/`.** Both surfaces built `.codecarto/skills/<name>/SKILL.md` from the supplied name and served it when that file existed; every findings directory ships a SKILL.md, so `../findings/architecture` spliced a phase skill into the post-pipeline prompt. Names now resolve against the installed list only. #235.
+
+- **A PARTIAL row that names the entry tracking it no longer becomes a second open question.** VALIDATE.md already asks the evidence cell to name the routing entry; completion ignored it and registered a `needs-maintainer-decision` question for every PARTIAL row, so a routed gap was closed twice. A row that names nothing still becomes a question. Moving the step after the handoff also closes a collision: gap questions and id-less handoff questions were both numbered from `oq-<phase>-1`, and the handoff's replaced the gap outright. #239.
+
+- **The library tools' optional `cwd` is validated before it becomes a containment root.** `codecarto_publish` joined a raw `cwd` onto `.codecarto` as an allowed root for `spec_path`, read the spec against it, and only then refused a relative cwd; a relative path resolves against the MCP server process's working directory. `cwd` is now checked first — absolute and existing — by publish, list, and reindex alike. #241.
+
+- **The YAML reader accepts the layouts a model actually writes, and every parse error names the line and construct.** A list at the same column as its key read as `null` and, at the top level, silently dropped every line after it; a plain scalar wrapped onto more-indented lines (a long `closeout_summary`), a scalar starting on the line after its key, and a sequence of sequences all failed with "Invalid YAML indentation"; a tab in the indentation produced the key `""`. All parse now, folding like a `>` block, and a failure reads `YAML line N: <what was expected> — "<the line>"`. Content after the top-level block is an error rather than unread. #246.
+
+- **`**Overall:** PASS (6/6)` passes validation.** The verdict had to be exactly `PASS` or `PASS WITH GAPS`; a count, a period, or bold around it failed the phase with the bare "Validation overall result is FAIL". The verdict is now whatever the value starts with, and an unreadable, missing, or FAIL line each produce an error that quotes it. #247.
+
+- **Broad-Side's estimate covers what it sends.** The entry point and manifest were read whole into the architecture prompt while that lens was estimated at a flat 6,000 chars; both reads are capped at 20,000 chars with a marker, and the estimate sizes every request from the user prompt it would actually send. #249.
+
+- **Broad-Side names an auth failure, a dead network, and a failing gateway.** A 401 or 403 from the model catalog fell into the built-in pricing fallback (silently, for the default model) or "could not resolve per-token pricing"; the poller swallowed every fetch error until its budget ran out and returned "timeout". The catalog lookup now throws `BroadsideAuthError` naming the status and the provider's message before anything is priced or posted, other failures name their cause, a timeout without one good poll carries its last error, and the collect report prints a lens's error on its line. #251.
+
+- **MCP re-renders the dashboard on a pipeline switch.** Pi did and MCP did not, so the file showed the old pipeline until the next completion. The writer moved from the Pi extension into `core/` — the MCP server had been importing it across wrappers — with a re-export shim at the old path. #254.
+
+- **The auto runner never reads `ctx.cwd` after a phase.** Two dashboard writes and the validation reload still did, on a ctx the phase sub-agent had invalidated (#201); all three use the root captured before the run. #255.
+
+- **Every child `AgentSession` is disposed once its work is done.** Phases, prompt rewrites, and dashboard narrations each created one and never called `dispose()`, which aborts in-flight work, drops the agent subscription and listeners, and runs the per-session resource cleanups extensions register; a seven-phase auto run kept all of that until exit. #256.
+
+- **The library list's `source_repo` filter compares repositories the way the publish guard does**, so `git@github.com:acme/alpha` finds the entry recorded as `https://github.com/Acme/Alpha.git`. #257.
+
+- **Docs.** MANUAL.md, the drop-in surface's manual, still taught the LLM to edit `status.yaml` and `THREAD_LOG.md` itself; it now names completion as its own step, says drop-in mode has no completion executable so the human performs it, and drops the lost-update advice the lock made obsolete on Pi and MCP (#260). README, the MCP quickstart, and the `codecarto_validate` description said validation checks the output against completion criteria; it parses the phase's own `## Validation` table plus two cross-checks, and they say so (#261). `docs/library-format.md`'s YAML dialect section no longer claims folded scalars are unreadable.
+
 ## [0.19.6] — 2026-09-12
 
 The first release after running the deep-audit pipeline on this repository itself ([`self-audit/`](self-audit/2026-09-11-v0.19.5-full-with-deep-audit/), issues #223–#279). This ships the four fixes ranked first in that review.
