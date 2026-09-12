@@ -122,7 +122,6 @@ export async function runSinglePhase(
 			ctx,
 			prompt,
 			{
-				onSessionCreated: (session) => { activity.session = session; },
 				onToolStart: (id, name) => { activity.activeTools.set(id, name); activity.toolUses++; },
 				onToolEnd: (id) => { activity.activeTools.delete(id); },
 				onTextDelta: (_delta, fullText) => { activity.responseText = fullText; },

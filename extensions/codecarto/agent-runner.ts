@@ -77,7 +77,6 @@ export async function waitForCompaction(
 }
 
 export interface PhaseRunCallbacks {
-	onSessionCreated?: (session: AgentSession) => void;
 	onToolStart?: (toolCallId: string, toolName: string) => void;
 	onToolEnd?: (toolCallId: string, toolName: string) => void;
 	onTextDelta?: (delta: string, fullText: string) => void;
@@ -97,7 +96,6 @@ export interface PhaseRunOptions {
 }
 
 export interface PhaseRunResult {
-	session: AgentSession;
 	responseText: string;
 	toolUses: number;
 	turnCount: number;
@@ -176,8 +174,6 @@ export async function runPhase(
 	});
 
 	await session.bindExtensions({});
-
-	callbacks.onSessionCreated?.(session);
 
 	let toolUses = 0;
 	let turnCount = 0;
@@ -272,19 +268,37 @@ export async function runPhase(
 			const compacted = await waitForCompaction(compactionCompleted);
 			if (!aborted) await session.prompt(buildPhaseContinuationPrompt(compacted));
 		}
+		return {
+			responseText: getLastAssistantText(session) || currentMessageText,
+			toolUses,
+			turnCount,
+			aborted,
+			sessionFile: sessionManager.getSessionFile(),
+		};
 	} finally {
 		unsubscribe();
 		abortCleanup();
+		// The child is done, on every path. Dispose aborts whatever it still
+		// has in flight, drops its agent subscription and listeners, and runs
+		// the per-session resource cleanups extensions registered — a seven
+		// phase auto run used to keep all of that for every phase, rewrite,
+		// and narration until the process exited (#256). Nothing reads the
+		// session after this: the result carries the text and the file path.
+		disposeChildSession(session);
 	}
+}
 
-	return {
-		session,
-		responseText: getLastAssistantText(session) || currentMessageText,
-		toolUses,
-		turnCount,
-		aborted,
-		sessionFile: sessionManager.getSessionFile(),
-	};
+/**
+ * Dispose a child session, swallowing whatever dispose throws: the work is
+ * done and its result is already in hand, so a failing cleanup hook must not
+ * turn a finished phase into an error.
+ */
+export function disposeChildSession(session: Pick<AgentSession, "dispose">): void {
+	try {
+		session.dispose();
+	} catch {
+		// nothing to do with a cleanup failure but move on
+	}
 }
 
 /**

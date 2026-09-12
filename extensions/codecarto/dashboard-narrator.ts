@@ -23,6 +23,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { disposeChildSession } from "./agent-runner.ts";
 
 import {
 	atomicWriteFile,
@@ -209,8 +210,13 @@ async function runNarratorOnce(ctx: ExtensionContext, prompt: string): Promise<s
 		resourceLoader: loader,
 	});
 
-	await session.prompt(prompt);
-	return getLastAssistantText(session);
+	try {
+		await session.prompt(prompt);
+		return getLastAssistantText(session);
+	} finally {
+		// One prompt, one answer; the child has nothing left to do (#256).
+		disposeChildSession(session);
+	}
 }
 
 function getLastAssistantText(session: AgentSession): string {
