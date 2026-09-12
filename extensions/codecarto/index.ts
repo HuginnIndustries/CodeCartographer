@@ -32,6 +32,7 @@ import {
 	discoverLibrary,
 	type EntryGeneration,
 	describeDanglingCarryForward,
+	describeMissingCompletedOutputs,
 	getNextEligiblePhase,
 	getPipelineLabel,
 	getWorkspaceState,
@@ -50,6 +51,7 @@ import {
 	listBatchModels,
 	listGuideTopics,
 	listScaffoldRefreshFiles,
+	listMissingCompletedOutputs,
 	listSkillNames,
 	resolveSkillName,
 	loadAmendmentFile,
@@ -610,9 +612,16 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (!state) return;
 
 			const nextPhase = getNextEligiblePhase(state)?.id ?? "complete";
-			lastFeedbackLines = [`Current phase: ${nextPhase}`, `Pipeline: ${getPipelineLabel(state.status.pipeline)}`];
+			// Same check codecarto_status makes: a phase complete in status.yaml
+			// whose report is not on disk (#259).
+			const missingOutputs = describeMissingCompletedOutputs(await listMissingCompletedOutputs(state));
+			lastFeedbackLines = [`Current phase: ${nextPhase}`, `Pipeline: ${getPipelineLabel(state.status.pipeline)}`, ...missingOutputs];
 			setUiState(ctx, state, lastFeedbackLines);
-			notifyCtx(ctx, `CodeCartographer phase: ${nextPhase}`, "info");
+			if (missingOutputs.length > 0) {
+				notifyCtx(ctx, `CodeCartographer phase: ${nextPhase}. ${missingOutputs[0]}`, "warning");
+			} else {
+				notifyCtx(ctx, `CodeCartographer phase: ${nextPhase}`, "info");
+			}
 		},
 	});
 

@@ -62,6 +62,32 @@ export function recomputeCursor(state: WorkspaceState): PipelinePhase | null {
 	return next;
 }
 
+/**
+ * Phases status.yaml records as complete whose primary output is not on disk.
+ * status.yaml is committed and the findings are ignored by default, so a fresh
+ * clone says "complete" about reports it does not have; both surfaces' status
+ * name the gap rather than let the two files disagree in silence (#259).
+ */
+export async function listMissingCompletedOutputs(state: WorkspaceState): Promise<Array<{ phaseId: string; path: string }>> {
+	const missing: Array<{ phaseId: string; path: string }> = [];
+	for (const phase of state.pipeline.phases) {
+		if (!phase.primary_output) continue;
+		if (state.status.phases[phase.id]?.status !== "complete") continue;
+		if (await pathExists(join(state.workspaceDir, phase.primary_output))) continue;
+		missing.push({ phaseId: phase.id, path: phase.primary_output });
+	}
+	return missing;
+}
+
+/** The status lines both surfaces print for {@link listMissingCompletedOutputs}; empty when nothing is missing. */
+export function describeMissingCompletedOutputs(missing: Array<{ phaseId: string; path: string }>): string[] {
+	if (missing.length === 0) return [];
+	return [
+		`Outputs missing on disk for ${missing.length} complete phase(s) — findings are gitignored by default, so a clone carries the status but not the reports; re-run the phase here, or commit findings (see README, "What to commit"):`,
+		...missing.map((entry) => `  - ${entry.phaseId}: .codecarto/${entry.path}`),
+	];
+}
+
 export function resolvePhase(state: WorkspaceState, phaseId?: string): PipelinePhase | null {
 	const trimmed = phaseId?.trim();
 	if (!trimmed) return getNextEligiblePhase(state);
