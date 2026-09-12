@@ -147,7 +147,13 @@ async function appendDecisionLog(
 		const number = String(nextNumber + index).padStart(3, "0");
 		return `D${number} | ${decision.trim()} | ${source} | closeouts/${closeoutFile} §Decisions Beyond Prompt (${phaseId})`;
 	});
-	content += `${content.endsWith("\n") ? "" : "\n"}${rows.join("\n")}\n`;
+	// A row appended straight after the section's explanatory paragraph is
+	// rendered as part of that paragraph by most Markdown renderers; a blank
+	// line makes the rows their own block (self-audit F4). Rows already
+	// present stay contiguous with the new ones.
+	const trailing = content.replace(/\n+$/, "").split("\n").pop() ?? "";
+	const separator = /^D\d+\s*\|/.test(trailing) || trailing.trim() === "" ? "" : "\n";
+	content += `${content.endsWith("\n") ? "" : "\n"}${separator}${rows.join("\n")}\n`;
 	await writeFile(join(workspaceDir, "DECISIONS.md"), content, "utf8");
 	return fresh.length;
 }
