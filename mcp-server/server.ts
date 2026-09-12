@@ -133,6 +133,24 @@ async function validateCwd(cwd: unknown): Promise<string> {
 	return cwd;
 }
 
+/**
+ * The library tools take `cwd` optionally: absent means "no workspace, use
+ * the user-global config alone". When it is given it becomes a containment
+ * root for spec_path and the source of the workspace config that gates the
+ * write, so it is validated exactly as a required cwd is — absolute and
+ * existing — before anything reads through it (#241). A relative path would
+ * resolve against the MCP server process's working directory, not the
+ * caller's, and widen the root to whatever `.codecarto/` sits there.
+ */
+async function optionalCwd(cwd: unknown): Promise<string | null> {
+	if (cwd === undefined || cwd === null) return null;
+	if (typeof cwd !== "string") {
+		throw new McpError(ErrorCode.InvalidParams, "cwd must be a string when given");
+	}
+	if (cwd.trim() === "") return null;
+	return validateCwd(cwd.trim());
+}
+
 async function requireWorkspace(cwd: string): Promise<WorkspaceState> {
 	const state = await getWorkspaceState(cwd).catch((error) => {
 		throw new McpError(ErrorCode.InternalError, error instanceof Error ? error.message : String(error));
@@ -496,7 +514,7 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 
 // ---------- library helpers ----------
 
-async function resolveLibraryPath(args: { library_path?: unknown; cwd?: unknown }): Promise<string> {
+async function resolveLibraryPath(args: { library_path?: unknown }, cwd: string | null): Promise<string> {
 	const explicit = typeof args.library_path === "string" && args.library_path.trim() !== ""
 		? args.library_path.trim()
 		: null;
@@ -506,11 +524,7 @@ async function resolveLibraryPath(args: { library_path?: unknown; cwd?: unknown 
 		}
 		return explicit;
 	}
-	if (typeof args.cwd === "string" && args.cwd.trim() !== "") {
-		const cwd = args.cwd.trim();
-		if (!isAbsolute(cwd)) {
-			throw new McpError(ErrorCode.InvalidParams, `cwd must be absolute, got: ${cwd}`);
-		}
+	if (cwd) {
 		// loadCodecartoConfig merges user-global under per-workspace and tolerates
 		// a missing workspace file, so a single call covers both cases.
 		const workspaceDir = join(cwd, ".codecarto");
@@ -529,17 +543,11 @@ async function resolveLibraryPath(args: { library_path?: unknown; cwd?: unknown 
  * reads its gate from here so the value the config tool displays is the value
  * the publish tool enforces.
  */
-async function loadEffectiveConfig(cwd: unknown): Promise<CodecartoConfig> {
-	if (typeof cwd !== "string" || cwd.trim() === "") return loadUserConfig();
-	// A relative path here resolves against the server process's working
-	// directory, not the caller's, so it would quietly read some other
-	// workspace's config — and this config decides whether publish_confirm
-	// gates the write. Refuse rather than answer from the wrong file.
-	const trimmed = cwd.trim();
-	if (!isAbsolute(trimmed)) {
-		throw new McpError(ErrorCode.InvalidParams, `cwd must be an absolute path, got: ${trimmed}`);
-	}
-	return loadCodecartoConfig(join(trimmed, ".codecarto"));
+async function loadEffectiveConfig(cwd: string | null): Promise<CodecartoConfig> {
+	// This config decides whether publish_confirm gates the write, so the cwd
+	// it is read through is the one optionalCwd validated, never a raw argument.
+	if (!cwd) return loadUserConfig();
+	return loadCodecartoConfig(join(cwd, ".codecarto"));
 }
 
 function asStringArray(value: unknown, fieldName: string): string[] {
@@ -629,7 +637,7 @@ export async function readSpecArg(
 }
 
 async function resolveDefaultsFromWorkspace(
-	cwd: unknown,
+	cwd: string | null,
 	overrides: { pipeline?: unknown; namespace?: unknown },
 ): Promise<{ pipeline: string; namespace: string | null }> {
 	let pipeline = typeof overrides.pipeline === "string" && overrides.pipeline.trim() !== ""
@@ -639,12 +647,12 @@ async function resolveDefaultsFromWorkspace(
 		? overrides.namespace.trim()
 		: null;
 
-	if (typeof cwd === "string" && cwd.trim() !== "" && isAbsolute(cwd)) {
-		const workspaceDir = join(cwd.trim(), ".codecarto");
+	if (cwd) {
+		const workspaceDir = join(cwd, ".codecarto");
 		if (await pathExists(workspaceDir)) {
 			if (pipeline === "unknown") {
 				try {
-					const state = await getWorkspaceState(cwd.trim());
+					const state = await getWorkspaceState(cwd);
 					if (state?.status.pipeline) pipeline = state.status.pipeline;
 				} catch {
 					// ignore — pipeline stays "unknown"
@@ -695,7 +703,10 @@ function provenanceConflictLines(conflicts: ProvenanceConflict[]): string[] {
 // ---------- library handlers ----------
 
 export async function handlePublish(args: Record<string, unknown>) {
-	const libraryPath = await resolveLibraryPath(args);
+	// First, before anything is read through it: cwd is a containment root
+	// for spec_path below and the source of the config that gates the write.
+	const cwd = await optionalCwd(args.cwd);
+	const libraryPath = await resolveLibraryPath(args, cwd);
 	const marker = await discoverLibrary(libraryPath);
 	if (!marker) {
 		throw new McpError(
@@ -706,9 +717,7 @@ export async function handlePublish(args: Record<string, unknown>) {
 
 	// Build allowed roots for spec_path containment: workspace .codecarto/ and library path
 	const allowedRoots: string[] = [libraryPath];
-	if (typeof args.cwd === "string" && args.cwd.trim() !== "") {
-		allowedRoots.push(join(args.cwd.trim(), ".codecarto"));
-	}
+	if (cwd) allowedRoots.push(join(cwd, ".codecarto"));
 
 	const spec = await readSpecArg(args, allowedRoots);
 	if (typeof args.source_repo !== "string" || args.source_repo.trim() === "") {
@@ -730,7 +739,7 @@ export async function handlePublish(args: Record<string, unknown>) {
 		);
 	}
 
-	const defaults = await resolveDefaultsFromWorkspace(args.cwd, {
+	const defaults = await resolveDefaultsFromWorkspace(cwd, {
 		pipeline: args.pipeline,
 		namespace: args.namespace,
 	});
@@ -768,7 +777,7 @@ export async function handlePublish(args: Record<string, unknown>) {
 	// opt-out, and a host that never configured the key keeps the behavior it
 	// had. Runs after every argument check so the preview names the resolved
 	// slug and namespace, and before publishEntry so nothing is written.
-	const config = await loadEffectiveConfig(args.cwd);
+	const config = await loadEffectiveConfig(cwd);
 	if (config.library.publish_confirm && config.library.publish_confirm_configured && args.confirm !== true) {
 		const preview = await previewPublishVersion(libraryPath, spec, { slug, namespace }, { forceNewVersion });
 		const label = `${namespace ? `${namespace}/` : ""}${slug}`;
@@ -849,7 +858,7 @@ export async function handlePublish(args: Record<string, unknown>) {
 }
 
 export async function handleLibraryList(args: Record<string, unknown>) {
-	const libraryPath = await resolveLibraryPath(args);
+	const libraryPath = await resolveLibraryPath(args, await optionalCwd(args.cwd));
 	const marker = await discoverLibrary(libraryPath);
 	if (!marker) {
 		throw new McpError(
@@ -893,7 +902,7 @@ export async function handleLibraryList(args: Record<string, unknown>) {
 }
 
 export async function handleLibraryReindex(args: Record<string, unknown>) {
-	const libraryPath = await resolveLibraryPath(args);
+	const libraryPath = await resolveLibraryPath(args, await optionalCwd(args.cwd));
 	const marker = await discoverLibrary(libraryPath);
 	if (!marker) {
 		throw new McpError(
