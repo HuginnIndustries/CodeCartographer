@@ -285,11 +285,12 @@ stay inside it.
 
 **Written:** block mappings and block sequences only (one item per line;
 an object inside a sequence is a bare `-` line followed by an indented
-mapping). Scalars are written unquoted when they match
-`[A-Za-z0-9_./-]+` and as JSON-style double-quoted strings otherwise, so
-URLs, timestamps and any value containing a space come out quoted.
-Empty values are `""`, `[]`, `{}`; `null`, integers and booleans are
-written bare.
+mapping). Strings are written unquoted when they match
+`[A-Za-z0-9_./-]+` *and* the reader would hand the same string back, and
+as JSON-style double-quoted strings otherwise — so URLs, timestamps, any
+value containing a space, and any string the reader would coerce (`"2048"`,
+`"true"`, `"null"`, `"1.5"`) come out quoted. Empty values are `""`, `[]`,
+`{}`; actual `null`, integers and booleans are written bare.
 
 **Read:** everything above, plus single-quoted strings, `|` and `>`
 block scalars with any chomping indicator, plain scalars that wrap onto
