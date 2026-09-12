@@ -19,6 +19,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { disposeChildSession } from "./agent-runner.ts";
 
 import { closeoutFileName, pathExists, type WorkspaceState } from "../../core/index.ts";
 import { createChildModelRuntime } from "./child-model-runtime.ts";
@@ -191,18 +192,23 @@ async function runRewriterOnce(ctx: ExtensionContext, prompt: string): Promise<s
 		resourceLoader: loader,
 	});
 
-	await session.prompt(prompt);
+	try {
+		await session.prompt(prompt);
 
-	for (let i = session.messages.length - 1; i >= 0; i--) {
-		const msg = session.messages[i];
-		if (msg.role !== "assistant") continue;
-		const blocks = msg.content as Array<{ type?: string; text?: string }>;
-		const parts: string[] = [];
-		for (const c of blocks) {
-			if (c.type === "text" && c.text) parts.push(c.text);
+		for (let i = session.messages.length - 1; i >= 0; i--) {
+			const msg = session.messages[i];
+			if (msg.role !== "assistant") continue;
+			const blocks = msg.content as Array<{ type?: string; text?: string }>;
+			const parts: string[] = [];
+			for (const c of blocks) {
+				if (c.type === "text" && c.text) parts.push(c.text);
+			}
+			const joined = parts.join("\n").trim();
+			if (joined) return joined;
 		}
-		const joined = parts.join("\n").trim();
-		if (joined) return joined;
+		return "";
+	} finally {
+		// One prompt, one answer; the child has nothing left to do (#256).
+		disposeChildSession(session);
 	}
-	return "";
 }

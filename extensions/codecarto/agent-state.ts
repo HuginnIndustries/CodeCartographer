@@ -3,7 +3,6 @@
 // render. Module-scoped Map so different command handlers can hand work to
 // the runner and the widget sees the same state without explicit plumbing.
 
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { emptyCompactionTelemetry, type CompactionTelemetry } from "../../core/usage.ts";
 
 export type PhaseStatus = "running" | "completed" | "error" | "aborted";
@@ -23,7 +22,6 @@ export interface PhaseActivity {
 	lifetimeUsage: { input: number; output: number; cacheWrite: number };
 	/** Compaction outcomes observed during this phase session. */
 	compactions: CompactionTelemetry;
-	session?: AgentSession;
 	error?: string;
 }
 
