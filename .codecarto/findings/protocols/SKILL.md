@@ -37,6 +37,10 @@ Convert control flow into a state machine:
 - Record guards and side effects.
 - Separate synchronous barriers from observational events.
 
+This phase owns the storage-format catalog: every on-disk and wire format the system reads or
+writes, with its shape, version markers, and reader/writer pairs. The contracts phase names the
+formats it saw as user-visible behavior; catalog them here once rather than asking contracts to.
+
 Capture persistence semantics explicitly:
 - append-only vs mutable
 - branching vs linear history

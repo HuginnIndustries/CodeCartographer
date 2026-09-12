@@ -13,6 +13,12 @@ The source code to analyze is in the parent directory (`../` relative to `.codec
 
 **Required:**
 - `findings/architecture/architecture-map.md` — for the layer map and public surfaces.
+- The repository's own build and packaging surface, which pass 6 is about and which the source
+  files never mention: the package manifest (`package.json`, `pyproject.toml`, `go.mod`,
+  `Cargo.toml`, …) with its `files`/include list, the compiler or bundler config (`tsconfig.json`
+  and kin), the CI and release workflows (`.github/workflows/*`), and the ignore files. Three of
+  the high findings in one self-audit came from these files alone; a scan that reads only source
+  cannot see what ships or what runs in CI.
 
 You do **not** need contracts or protocols for this phase. If those exist already, skim them as bonus context, but do not block on them — the mechanical pass is by design context-light.
 

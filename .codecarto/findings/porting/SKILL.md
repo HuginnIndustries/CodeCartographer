@@ -39,6 +39,10 @@ Sort features by porting importance:
 - `incidental`: source-specific ergonomics or implementation accidents.
 
 If the defect report is available, integrate defect findings into the porting bundle:
+- Read each scan's `§Runtime probes` section (and the probe scripts it points at under
+  `scratch/probes/`) before the findings tables: a probe-confirmed finding is the strongest
+  evidence the scans produce, its severity is settled, and the bundle's dispositions should lean
+  on it first.
 - Reference relevant defects in the feature contract table.
 - Tag each referenced defect with a porting recommendation: `fix before porting` (the defect would carry into a new implementation), `port differently` (the new implementation should handle this case differently by design), `leave behind` (the defect is specific to the source implementation and won't survive porting), or `verify at runtime` (the diagnosis is an `external-behavior claim` or `open question` — carry it as a spike for the spec, and do not design around an unverified diagnosis). Preserve `verify at runtime` as written: flattening it into one of the settled three is how a hedge stops traveling.
 - Consolidate defect-related portability hazards alongside hazards from other phases.

@@ -121,9 +121,11 @@
 ## Carry-Forward
 
 <!-- Reimplementation-spec is the terminal phase in most pipelines, so most items belong in Known Unknowns
-     above. Use this section only when post-pipeline work (spikes, deltas, amendments) is the right place
-     to close an item. Each entry: { id, kind: defer-to-phase, target_phase, description, deferred_reason }.
-     Allowed target_phase values for post-pipeline: "spike", "delta", "amendment". -->
+     above. A carry_forward entry needs a target_phase that is a LATER phase of the active pipeline —
+     completion refuses anything else — so in a pipeline where this phase is last, this table stays empty.
+     Work for after the pipeline (spikes, deltas, amendments, maintainer rulings, opinionated reruns) goes
+     in the handoff's post_pipeline list instead: { id, kind: spike | delta | amendment, description }.
+     An amendment retires those entries once the pipeline is complete. -->
 
 | ID | Target Phase | Description | Deferred Reason |
 |---|---|---|---|

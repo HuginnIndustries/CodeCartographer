@@ -81,7 +81,16 @@
 
   This section is the porting-oriented view of defects — it should answer
   "which defects must the reimplementation design around, and how?" not
-  re-list every finding. Keep it under one screen.
+  re-list every finding.
+
+  Two pressures meet here and one wins: the spec phase needs a disposition
+  (fix before porting / port differently / leave behind / verify at runtime)
+  for every defect it must design around, and a reader needs a table short
+  enough to hold in mind. Completeness wins. Give every high and medium
+  finding its own row; group lows by shared root cause into one row each,
+  naming the source rows, so that nothing is dropped and the table still
+  reads. A scan of 78 findings came out as 11 highs, 28 mediums, and 7 low
+  groups this way — long, but every disposition the spec needed was there.
 -->
 
 | Defect ID | Source Report | One-line Description | Severity | Disposition | Required design consequence |

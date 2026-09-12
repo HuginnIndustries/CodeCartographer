@@ -58,6 +58,16 @@ Assign one severity per finding:
 - `medium`: latent risk, dead code, defense-in-depth gap, or poor error handling.
 - `low`: style issue with correctness implications, stale docs, or minor inconsistency.
 
+Severity is the consequence, not the confidence. A cheap runtime probe — a script that drives the
+code path and shows the wrong result, the lost write, the escaped path — is worth running before
+a `high` or `critical` is assigned on reading alone: it settles the evidence level at
+`observed fact`, it may move the severity either way (a consequence that reading predicted and the
+probe did not reproduce drops; one the probe showed to be worse than read rises), and it gives the
+porting phase something it can cite. Record what the probe did and showed in the finding's
+evidence cell, and keep the probe script under `.codecarto/scratch/probes/` so the porting phase
+can rerun it. A finding whose consequence a probe confirmed keeps the severity that consequence
+earns; it is not promoted for having been confirmed.
+
 ## Action Classification
 
 Tag each finding with a recommended action. Use the set that matches your pipeline:
