@@ -9,7 +9,7 @@
 import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-import { getNextEligiblePhase } from "./pipeline.ts";
+import { describeStuckPipeline, resolvePipelineOutcome } from "./pipeline.ts";
 import { buildTerminalNextActions, ensureArray, normalizeStatus } from "./status.ts";
 import type { WorkspaceState } from "./types.ts";
 import { dateOnly, newlineIfUnterminated, pathExists } from "./utils.ts";
@@ -138,12 +138,17 @@ export async function applyAmendment(cwd: string, name: string): Promise<Amendme
 	if (!initialState) throw new Error("CodeCartographer workspace not found. Run /codecarto-init first.");
 	const amendment = await loadAmendmentFile(name, initialState.workspaceDir);
 
-	const nextPhase = getNextEligiblePhase(initialState);
-	if (nextPhase) {
+	const outcome = resolvePipelineOutcome(initialState);
+	if (outcome.kind === "eligible") {
 		throw new Error(
-			`Cannot amend: the pipeline is not complete (next phase: ${nextPhase.id}). `
+			`Cannot amend: the pipeline is not complete (next phase: ${outcome.phase.id}). `
 			+ `Resolve open questions and routed items through that phase's handoff (open_question_closures / carry_forward_closures) instead.`,
 		);
+	}
+	if (outcome.kind === "stuck") {
+		// Amendments are the post-pipeline channel; a pipeline that cannot
+		// finish is not there yet (#228).
+		throw new Error(`Cannot amend: the pipeline is not complete. ${describeStuckPipeline(outcome.blocked)}`);
 	}
 
 	const timestamp = new Date().toISOString();

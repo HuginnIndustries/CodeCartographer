@@ -56,7 +56,7 @@ import {
 	getLens,
 	describeDanglingCarryForward,
 	describeMissingCompletedOutputs,
-	getNextEligiblePhase,
+	describeStuckPipeline,
 	getPipelineLabel,
 	getWorkspaceState,
 	isValidSlug,
@@ -71,6 +71,7 @@ import {
 	readGuide,
 	listMissingCompletedOutputs,
 	listSkillNames,
+	resolvePipelineOutcome,
 	resolveSkillName,
 	loadCodecartoConfig,
 	loadUsage,
@@ -300,8 +301,11 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 export async function handleStatus(args: { cwd: string }) {
 	const cwd = await validateCwd(args.cwd);
 	const state = await requireWorkspace(cwd);
-	const nextPhase = getNextEligiblePhase(state);
-	const currentPhase = nextPhase?.id ?? state.status.current_phase ?? "complete";
+	const outcome = resolvePipelineOutcome(state);
+	const nextPhase = outcome.kind === "eligible" ? outcome.phase : null;
+	// "complete" is the terminal marker; a stuck pipeline sits on its first
+	// blocked phase and says so below (#228).
+	const currentPhase = outcome.kind === "eligible" ? outcome.phase.id : outcome.kind === "stuck" ? outcome.blocked[0].phaseId : "complete";
 	const completed = state.pipeline.phase_order.filter((id) => state.status.phases[id]?.status === "complete").length;
 	const totalCarryForward = Object.values(state.status.phases).reduce(
 		(sum, phase) => sum + (phase.carry_forward?.length ?? 0),
@@ -318,7 +322,7 @@ export async function handleStatus(args: { cwd: string }) {
 	const missingOutputs = await listMissingCompletedOutputs(state);
 	const summaryLines = [
 		`Phase: ${currentPhase}`,
-		`Pipeline state: ${currentPhase === "complete" ? "complete" : "in progress"}`,
+		`Pipeline state: ${outcome.kind === "eligible" ? "in progress" : outcome.kind}`,
 		`Pipeline: ${getPipelineLabel(state.status.pipeline)} (${state.status.pipeline})`,
 		`Progress: ${completed}/${state.pipeline.phase_order.length} complete`,
 		`Open questions (terminal unresolved): ${terminalOpenQuestions}`,
@@ -331,12 +335,15 @@ export async function handleStatus(args: { cwd: string }) {
 			? state.status.next_actions.map((action, index) => `${index === 0 ? "Next: " : "      "}${action}`)
 			: [`Next: ${nextPhase ? `Begin ${nextPhase.id}` : "All phases complete."}`]),
 	];
+	if (outcome.kind === "stuck") summaryLines.push(describeStuckPipeline(outcome.blocked));
 	if (scaffoldNotice) summaryLines.push(`Scaffold: ${scaffoldNotice}`);
 	summaryLines.push(...describeMissingCompletedOutputs(missingOutputs));
 	const summary = summaryLines.join("\n");
 	return textResult(summary, {
 		...(scaffoldNotice ? { scaffoldNotice } : {}),
 		...(missingOutputs.length > 0 ? { missingOutputs } : {}),
+		...(outcome.kind === "stuck" ? { stuck: outcome.blocked } : {}),
+		pipelineState: outcome.kind === "eligible" ? "in progress" : outcome.kind,
 		currentPhase,
 		pipeline: state.status.pipeline,
 		pipelineLabel: getPipelineLabel(state.status.pipeline),
@@ -391,14 +398,20 @@ export async function handleSwitchPipeline(args: { cwd: string; pipeline: string
 export async function handleNext(args: { cwd: string }) {
 	const cwd = await validateCwd(args.cwd);
 	const state = await requireWorkspace(cwd);
-	const phase = getNextEligiblePhase(state);
-	if (!phase) {
+	const outcome = resolvePipelineOutcome(state);
+	if (outcome.kind === "stuck") {
+		// Not a result: a host looping on codecarto_next would read a text
+		// answer as "done" (#228). There is no prompt to hand out until the
+		// pipeline file is fixed.
+		throw new McpError(ErrorCode.InvalidRequest, describeStuckPipeline(outcome.blocked));
+	}
+	if (outcome.kind === "complete") {
 		return textResult("All CodeCartographer phases are complete. Run codecarto_skill for post-pipeline work.", {
 			complete: true,
 		});
 	}
-	const prompt = await buildMcpPhasePrompt(state, phase, false);
-	return textResult(prompt, { phase: phase.id, forced: false });
+	const prompt = await buildMcpPhasePrompt(state, outcome.phase, false);
+	return textResult(prompt, { phase: outcome.phase.id, forced: false });
 }
 
 export async function handlePhase(args: { cwd: string; phase: string }) {
@@ -519,12 +532,15 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 	}
 
 	const state = await requireWorkspace(cwd);
-	const nextPhase = getNextEligiblePhase(state);
-	if (nextPhase) {
+	const outcome = resolvePipelineOutcome(state);
+	if (outcome.kind === "eligible") {
 		throw new McpError(
 			ErrorCode.InvalidRequest,
-			`Cannot run skill: pipeline is not complete (next phase: ${nextPhase.id}). Finish the pipeline first.`,
+			`Cannot run skill: pipeline is not complete (next phase: ${outcome.phase.id}). Finish the pipeline first.`,
 		);
+	}
+	if (outcome.kind === "stuck") {
+		throw new McpError(ErrorCode.InvalidRequest, `Cannot run skill: the pipeline is not complete. ${describeStuckPipeline(outcome.blocked)}`);
 	}
 	// Resolve against the installed list only: the name is never joined onto a
 	// path, so a traversal like `../findings/architecture` cannot splice a
@@ -1100,11 +1116,15 @@ export async function handleOpen(args: { cwd: string }) {
 		throw new McpError(ErrorCode.InvalidRequest, "No existing CodeCartographer workspace found. Run codecarto_init first.");
 	}
 	const state = await requireWorkspace(cwd);
-	const nextPhase = getNextEligiblePhase(state)?.id ?? "complete";
-	return textResult(
-		`Opened existing CodeCartographer workspace: ${getPipelineLabel(state.status.pipeline)}. Current phase: ${nextPhase}.`,
-		{ pipeline: getPipelineLabel(state.status.pipeline), currentPhase: nextPhase },
-	);
+	const outcome = resolvePipelineOutcome(state);
+	const nextPhase = outcome.kind === "eligible" ? outcome.phase.id : outcome.kind === "stuck" ? `${outcome.blocked[0].phaseId} (stuck)` : "complete";
+	const lines = [`Opened existing CodeCartographer workspace: ${getPipelineLabel(state.status.pipeline)}. Current phase: ${nextPhase}.`];
+	if (outcome.kind === "stuck") lines.push(describeStuckPipeline(outcome.blocked));
+	return textResult(lines.join("\n"), {
+		pipeline: getPipelineLabel(state.status.pipeline),
+		currentPhase: nextPhase,
+		...(outcome.kind === "stuck" ? { stuck: outcome.blocked } : {}),
+	});
 }
 
 export async function handleUsage(args: { cwd: string }) {

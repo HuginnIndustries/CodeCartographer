@@ -28,7 +28,8 @@ import {
 	completeValidatedPhase,
 	formatMillis,
 	formatTokenCount,
-	getNextEligiblePhase,
+	describeStuckPipeline,
+	resolvePipelineOutcome,
 	getWorkspaceState,
 	describeConfigProblems,
 	loadCodecartoConfig,
@@ -242,7 +243,7 @@ export async function autoCompletePhase(
 // runAuto — the end-to-end loop
 // ----------------------------------------------------------------------------
 
-export type AutoOutcome = "complete" | "stopped" | "aborted";
+export type AutoOutcome = "complete" | "stopped" | "aborted" | "stuck";
 
 export interface AutoRunOptions {
 	strict: boolean;
@@ -343,13 +344,22 @@ export async function runAuto(
 			});
 		}
 
-		const phase = getNextEligiblePhase(state);
-		if (!phase) {
+		const outcome = resolvePipelineOutcome(state);
+		if (outcome.kind === "stuck") {
+			// Not "complete": the loop ending because nothing can run is the
+			// case that used to read as success (#228).
+			return finish({
+				outcome: "stuck",
+				reason: describeStuckPipeline(outcome.blocked),
+			});
+		}
+		if (outcome.kind === "complete") {
 			return finish({
 				outcome: "complete",
 				reason: "Pipeline complete.",
 			});
 		}
+		const phase = outcome.phase;
 
 		let preflight: PhasePreflightResult;
 		try {
@@ -458,6 +468,8 @@ export function buildAutoSummary(result: AutoRunResult, availableSkills: string[
 				return `**Auto pipeline stopped at \`${result.stoppedAt?.phaseId ?? "?"}\`.**`;
 			case "aborted":
 				return `**Auto pipeline aborted${result.stoppedAt?.phaseId ? ` during \`${result.stoppedAt.phaseId}\`` : ""}.**`;
+			case "stuck":
+				return `**Auto pipeline stuck: no phase can run.**`;
 		}
 	})();
 
@@ -474,6 +486,11 @@ export function buildAutoSummary(result: AutoRunResult, availableSkills: string[
 	if (result.outcome === "stopped" || result.outcome === "aborted") {
 		lines.push("", result.reason);
 		lines.push("", recoveryHint(result));
+	}
+
+	if (result.outcome === "stuck") {
+		// The reason is the stuck sentence, which already says what to fix.
+		lines.push("", result.reason);
 	}
 
 	if (result.outcome === "complete") {
