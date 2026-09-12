@@ -366,6 +366,26 @@ export type BroadsideEstimate = {
 	outputCap?: number;
 };
 
+/**
+ * OpenRouter rejected the API key (HTTP 401/403). Thrown from the catalog
+ * lookup rather than swallowed into "could not price" or a silent built-in
+ * fallback: a run that cannot authenticate cannot submit either, and the
+ * message that reaches the user has to say so (#251).
+ */
+export class BroadsideAuthError extends Error {
+	readonly httpStatus: number;
+	readonly detail: string;
+	constructor(httpStatus: number, detail: string) {
+		super(
+			`OpenRouter rejected the API key (HTTP ${httpStatus}${detail ? `: ${detail}` : ""}). ` +
+			"Check OPENROUTER_API_KEY, the api_key parameter, or api_key in .codecarto/broadside/config.yaml. Nothing was submitted.",
+		);
+		this.name = "BroadsideAuthError";
+		this.httpStatus = httpStatus;
+		this.detail = detail;
+	}
+}
+
 /** Thrown when a confirm hook declines a run. Nothing was submitted. */
 export class BroadsideCancelledError extends Error {
 	constructor(message = "Broad-Side submission cancelled. Nothing was submitted.") {
@@ -428,7 +448,7 @@ export type BroadsideCollectResult = {
 	/** Truncated slices recovered by the automatic re-submit pass (#133). */
 	retriedCount: number;
 	lensOutcomes: Partial<
-		Record<BroadsideLensId, { status: string; cost?: number; resultCount?: number; truncated?: number }>
+		Record<BroadsideLensId, { status: string; cost?: number; resultCount?: number; truncated?: number; error?: string }>
 	>;
 	synthesis: BroadsideSynthesisEntry;
 	triage: BroadsideTriageEntry;
@@ -2013,18 +2033,32 @@ export async function resolveCatalogEntry(
 		return { model, source: "cache", entry: cached };
 	}
 
+	// What went wrong when the live lookup produced nothing, for the error
+	// below: a 401 and a dead network used to read the same — "could not
+	// resolve per-token pricing" — or, for the default model, nothing at all.
 	let live: CatalogEntry | null = null;
+	let catalogFailure: string | null = null;
 	try {
 		const resp = await fetcher(BROADSIDE_MODELS_URL, {
 			method: "GET",
 			headers: { Authorization: `Bearer ${apiKey}` },
 			signal: AbortSignal.timeout(30_000),
 		});
-		const data = (await resp.json()) as { data?: Array<Record<string, unknown>> };
-		const hit = (data.data ?? []).find((m) => String(m.id) === model);
-		if (hit) live = parseCatalogEntry(hit);
-	} catch {
+		if (resp.status === 401 || resp.status === 403) {
+			throw new BroadsideAuthError(resp.status, await responseDetail(resp));
+		}
+		if (resp.ok === false) {
+			catalogFailure = `the model catalog request failed (HTTP ${resp.status}${await responseDetail(resp).then((d) => (d ? `: ${d}` : ""))})`;
+		} else {
+			const data = (await resp.json()) as { data?: Array<Record<string, unknown>> };
+			const hit = (data.data ?? []).find((m) => String(m.id) === model);
+			if (hit) live = parseCatalogEntry(hit);
+			else catalogFailure = `the model catalog has no entry for "${model}"`;
+		}
+	} catch (error) {
+		if (error instanceof BroadsideAuthError) throw error;
 		live = null;
+		catalogFailure = `the model catalog could not be fetched (${error instanceof Error ? error.message : String(error)})`;
 	}
 
 	if (live) {
@@ -2044,10 +2078,35 @@ export async function resolveCatalogEntry(
 	if (builtIn) return { model, source: "built-in", entry: builtIn };
 
 	throw new Error(
-		`Could not resolve per-token pricing for batch model "${model}". ` +
+		`Could not resolve per-token pricing for batch model "${model}": ${catalogFailure ?? "no catalog entry"}. ` +
 		"Set pricing.input_per_m and pricing.output_per_m in .codecarto/broadside/config.yaml " +
 		"(USD per million tokens), or check the model id against https://openrouter.ai/models?variant=batch.",
 	);
+}
+
+/** A short, safe excerpt of an error response body for a message. */
+async function responseDetail(resp: { json?: () => Promise<unknown>; text?: () => Promise<string> }): Promise<string> {
+	try {
+		if (typeof resp.text === "function") {
+			const text = (await resp.text()).trim();
+			try {
+				const parsed = JSON.parse(text) as { error?: { message?: unknown } | string };
+				const message = typeof parsed?.error === "string" ? parsed.error : parsed?.error?.message;
+				if (typeof message === "string" && message) return message.slice(0, 200);
+			} catch {
+				// not JSON; fall through to the raw excerpt
+			}
+			return text.replace(/\s+/g, " ").slice(0, 200);
+		}
+		if (typeof resp.json === "function") {
+			const parsed = (await resp.json()) as { error?: { message?: unknown } | string };
+			const message = typeof parsed?.error === "string" ? parsed.error : parsed?.error?.message;
+			return typeof message === "string" ? message.slice(0, 200) : "";
+		}
+	} catch {
+		// an unreadable body adds nothing to the message
+	}
+	return "";
 }
 
 export async function resolveModelPricing(
@@ -2171,7 +2230,15 @@ export async function fetchBatch(
 		headers: { Authorization: `Bearer ${apiKey}` },
 		signal: AbortSignal.timeout(30_000),
 	});
-	const data = (await resp.json()) as Record<string, unknown>;
+	let data: Record<string, unknown>;
+	try {
+		data = (await resp.json()) as Record<string, unknown>;
+	} catch (error) {
+		// A gateway error page is not JSON. It used to throw out of here and
+		// be retried as if the network were down; keep the status instead.
+		data = { error: `non-JSON response (${error instanceof Error ? error.message : String(error)})` };
+	}
+	if (!data || typeof data !== "object") data = { error: "empty response" };
 	// Surface the HTTP status so the poller can bail fast on auth expiry
 	// instead of retrying a dead key for the whole budget.
 	data.http_status = resp.status;
@@ -2200,12 +2267,24 @@ export async function pollBatchUntilTerminal(
 	const deadline = Date.now() + (opts.deadlineMs ?? BROADSIDE_DEFAULT_POLL_BUDGET_MS);
 	const intervalMs = opts.pollIntervalMs ?? BROADSIDE_POLL_INTERVAL_MS;
 	const fetcher = opts.fetcher ?? (fetch as FetchLike);
+	// A poll that runs out of budget without one good response is not a slow
+	// batch. The last thing that went wrong rides on the timeout so the report
+	// can tell a dead network or a failing gateway from a batch still running.
+	let lastError: string | null = null;
+	let sawBatch = false;
+	const timedOut = (): Record<string, unknown> => ({
+		id: batchId,
+		status: "timeout",
+		...(lastError && !sawBatch && { error: `no successful poll response; last error: ${lastError}` }),
+		...(lastError && sawBatch && { last_error: lastError }),
+	});
 	for (;;) {
 		let batch: Record<string, unknown>;
 		try {
 			batch = await fetchBatch(batchId, apiKey, fetcher);
-		} catch {
-			if (Date.now() >= deadline) return { id: batchId, status: "timeout" };
+		} catch (error) {
+			lastError = `fetch failed (${error instanceof Error ? error.message : String(error)})`;
+			if (Date.now() >= deadline) return timedOut();
 			await sleep(intervalMs);
 			continue;
 		}
@@ -2213,11 +2292,20 @@ export async function pollBatchUntilTerminal(
 		if (httpStatus === 401 || httpStatus === 403) {
 			return { id: batchId, status: "auth-failed", error: batch.error ?? batch };
 		}
+		if (httpStatus >= 400) {
+			// A gateway or server error: retry within the budget, remembered.
+			const detail = typeof batch.error === "string" ? batch.error : JSON.stringify(batch.error ?? "");
+			lastError = `HTTP ${httpStatus}${detail ? ` (${detail.slice(0, 200)})` : ""}`;
+			if (Date.now() >= deadline) return timedOut();
+			await sleep(intervalMs);
+			continue;
+		}
+		sawBatch = true;
 		const status = String(batch.status ?? "unknown");
 		const counts = (batch.request_counts ?? {}) as Record<string, unknown>;
 		opts.onStatus?.(status, counts);
 		if (status === "completed" || BROADSIDE_DEAD_BATCH_STATUSES.includes(status)) return batch;
-		if (Date.now() >= deadline) return { id: batchId, status: "timeout" };
+		if (Date.now() >= deadline) return timedOut();
 		await sleep(intervalMs);
 	}
 }
@@ -2871,7 +2959,8 @@ export async function runBroadsideCollect(
 			// A lens that never came back was therefore omitted entirely,
 			// indistinguishable in the output from one that was never requested.
 			if (batch.error) entry.error = batch.error;
-			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount };
+			const error = describeBatchError(batch.error);
+			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount, ...(error && { error }) };
 		}
 		await persistBroadsideRun(broadsideDir, run);
 	}
@@ -3316,6 +3405,22 @@ export function modelsText(
 	return lines.join("\n");
 }
 
+/** One line of a batch's error field, whatever shape the provider gave it. */
+function describeBatchError(error: unknown): string | null {
+	if (error === undefined || error === null || error === "") return null;
+	if (typeof error === "string") return error.slice(0, 300);
+	if (typeof error === "object") {
+		const message = (error as { message?: unknown }).message;
+		if (typeof message === "string" && message) return message.slice(0, 300);
+		try {
+			return JSON.stringify(error).slice(0, 300);
+		} catch {
+			return String(error);
+		}
+	}
+	return String(error);
+}
+
 export function collectResultText(result: BroadsideCollectResult): string {
 	const lines = [
 		`Broad-Side run ${result.runId}: ${result.status}`,
@@ -3329,7 +3434,10 @@ export function collectResultText(result: BroadsideCollectResult): string {
 			`  ${lensId}: ${outcome.status}` +
 				(outcome.cost !== undefined ? `, $${outcome.cost.toFixed(6)}` : "") +
 				(outcome.resultCount !== undefined ? `, ${outcome.resultCount} result(s)` : "") +
-				truncation,
+				truncation +
+				// The reason a lens did not complete, when the poll recorded one:
+				// an auth failure or a dead network used to read as a slow batch.
+				(outcome.error ? ` — ${outcome.error}` : ""),
 		);
 	}
 	if (result.retriedCount > 0) {
