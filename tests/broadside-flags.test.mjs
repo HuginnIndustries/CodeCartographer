@@ -128,7 +128,7 @@ test("every completion token the command offers is one the parser accepts", () =
 		// Value-taking flags are offered as a prefix ("--max-cost="); complete
 		// them with a value before parsing.
 		const arg = token.endsWith("=") ? `${token}1` : token;
-		const context = token === "--benchmarks" ? "models " : token === "--wait=" ? "collect " : "";
+		const context = token === "--benchmarks" ? "models " : token === "--wait=" || token === "--run=" ? "collect " : "";
 		const r = parseBroadsideFlags(`${context}${arg}`);
 		assert.deepEqual(r.unknown, [], `completion token ${token} parses as unknown`);
 		assert.equal(r.error, undefined, `completion token ${token} errors: ${r.error}`);

@@ -13,6 +13,7 @@
 //   --no-incremental       --no-triage
 //   --max-cost=N           --no-retry-truncated
 //   --wait=SECONDS         --benchmarks (models only)
+//   --run=ID (collect only: an older run, as listed by status)
 //
 // --incremental has a spelled-out negative because the value is tri-state:
 // absent defers to config.yaml, so a repository that set `incremental: true`
@@ -42,6 +43,8 @@ export interface BroadsideFlags {
 	/** Undefined means "use the repository's config default". */
 	maxCost?: number;
 	waitSeconds?: number;
+	/** For collect: the run to collect instead of the most recent (#268). */
+	runId?: string;
 	benchmarks: boolean;
 	unknown: string[];
 	/** Set on an invalid combination. The caller surfaces it as an error. */
@@ -61,6 +64,7 @@ export const KNOWN_BROADSIDE_TOKENS = [
 	"--no-incremental",
 	"--max-cost=",
 	"--wait=",
+	"--run=",
 	"--no-synthesis",
 	"--no-triage",
 	"--no-retry-truncated",
@@ -117,6 +121,12 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 		if (token === "--benchmarks") { result.benchmarks = true; continue; }
 		if (token.startsWith("--max-cost=")) { result.maxCost = parseNumeric(token, "--max-cost", result); continue; }
 		if (token.startsWith("--wait=")) { result.waitSeconds = parseNumeric(token, "--wait", result); continue; }
+		if (token.startsWith("--run=")) {
+			const value = token.slice("--run=".length).trim();
+			if (!value) result.error ??= "--run= needs a run id (see /codecarto-broadside status).";
+			result.runId = value || undefined;
+			continue;
+		}
 		result.unknown.push(token);
 	}
 
@@ -136,6 +146,9 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 	}
 	if (result.action === "status" && result.waitSeconds !== undefined) {
 		result.error ??= "--wait is only meaningful for submit and collect; status reads recorded state.";
+	}
+	if (result.runId !== undefined && result.action !== "collect") {
+		result.error ??= `--run is only meaningful for collect (got action "${result.action}").`;
 	}
 
 	return result;
