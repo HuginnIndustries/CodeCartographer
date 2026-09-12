@@ -7,8 +7,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { appendFile, copyFile, cp, mkdir, readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireLock, applyHandoff, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
-import type { PhaseHandoff, PipelineFile, StatusFile, WorkspaceState } from "./types.ts";
+import { getPipelineLabel, recomputeCursor } from "./pipeline.ts";
+import { acquireLock, applyHandoff, autoAssignIds, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
+import type { CarryForwardEntry, PhaseHandoff, PipelineFile, PostPipelineEntry, StatusFile, WorkspaceState } from "./types.ts";
 import { atomicWriteFile, compareDottedVersions, newlineIfUnterminated, pathExists } from "./utils.ts";
 import { loadYamlFile, stringifySimpleYaml } from "./yaml.ts";
 
@@ -536,17 +537,61 @@ export async function updateStatusAtomically(
 }
 
 /**
+ * A carry-forward whose `target_phase` the new pipeline does not run. The
+ * switch moves it to `post_pipeline` (the framework's own rule for work no
+ * active downstream phase will pick up; completion refuses such a target in a
+ * handoff) so an amendment can still close it, and reports it here so both
+ * surfaces can say what moved and where it was going.
+ */
+export interface DanglingCarryForward {
+	/** The entry's id, unchanged, now keyed in `post_pipeline`. */
+	id: string;
+	/** The phase whose handoff routed it. */
+	source_phase: string;
+	/** The phase it targeted, which the new pipeline lacks. */
+	target_phase: string;
+	description?: string;
+}
+
+export interface SwitchPipelineResult {
+	state: WorkspaceState;
+	/** Phases in both pipelines whose `complete` status carried over. */
+	carried: string[];
+	/** Phases of the old pipeline the new one does not run. */
+	dropped: string[];
+	/** Phases of the new pipeline the old one did not have. */
+	newPhases: string[];
+	/** Carry-forwards re-routed to `post_pipeline` because their target was dropped (#237). */
+	dangling: DanglingCarryForward[];
+}
+
+/**
+ * The lines both surfaces print for the carry-forwards a switch moved to
+ * post_pipeline: one summary, then one line per entry naming where it was
+ * going and how to close it now. Empty when nothing moved.
+ */
+export function describeDanglingCarryForward(dangling: DanglingCarryForward[]): string[] {
+	if (dangling.length === 0) return [];
+	const noun = dangling.length === 1 ? "carry-forward item" : "carry-forward items";
+	const lines = [`${dangling.length} ${noun} targeted a dropped phase and moved to post_pipeline (close with an amendment's post_pipeline_closures):`];
+	for (const entry of dangling) {
+		const label = entry.description ? `: ${entry.description}` : "";
+		lines.push(`  - ${entry.id} (${entry.source_phase} → ${entry.target_phase})${label}`);
+	}
+	return lines;
+}
+
+/**
  * Switch the active pipeline in-place without deleting findings, handoffs,
  * usage data, closeouts, or checkpoints. Phases that exist in both the old
  * and new pipelines preserve their completion status, owner notes, open
- * questions, and carry-forward entries. Phases unique to the new pipeline
- * start as pending. Phases unique to the old pipeline are dropped from
- * status.yaml (but their findings remain on disk under findings/).
+ * questions, and carry-forward entries; the cursor is then recomputed from
+ * those carried completions (#236). Phases unique to the new pipeline start
+ * as pending. Phases unique to the old pipeline are dropped from status.yaml
+ * (but their findings remain on disk under findings/), and any carry-forward
+ * that targeted one of them moves to post_pipeline (#237).
  */
-export async function switchPipeline(
-	cwd: string,
-	newPipelinePath: string,
-): Promise<{ state: WorkspaceState; carried: string[]; dropped: string[]; newPhases: string[] }> {
+export async function switchPipeline(cwd: string, newPipelinePath: string): Promise<SwitchPipelineResult> {
 	const workspaceDir = join(cwd, ".codecarto");
 	const statusPath = join(workspaceDir, "workflow", "status.yaml");
 	const lockPath = `${statusPath}.lock`;
@@ -587,9 +632,60 @@ export async function switchPipeline(
 		);
 
 		// Preserve post_pipeline entries from the old status.
-		freshStatus.post_pipeline = currentState.status.post_pipeline;
+		freshStatus.post_pipeline = [...currentState.status.post_pipeline];
+
+		// A carried phase may have routed work to a phase the new pipeline does
+		// not run. Left in place, that entry would never appear in a phase
+		// prompt and nothing but a later handoff could close it (#237). It is
+		// post-pipeline work now, by the same rule completion applies to a
+		// handoff whose target is not a downstream active phase.
+		const dangling: DanglingCarryForward[] = [];
+		const activePhases = new Set(newPipeline.phase_order);
+		const newLabel = getPipelineLabel(newPipelinePath);
+		const postPipelineById = new Map(freshStatus.post_pipeline.filter((entry) => entry.id).map((entry) => [entry.id!, entry]));
+		for (const [phaseId, phase] of Object.entries(freshStatus.phases)) {
+			if (!phase.carry_forward.some((entry) => entry.target_phase && !activePhases.has(entry.target_phase))) continue;
+			// Handoff-routed entries always carry a `cf-<phase>-N` id; only a
+			// hand-edited status can lack one, and post_pipeline keys by id.
+			autoAssignIds(phase.carry_forward, "cf", phaseId);
+			const kept: CarryForwardEntry[] = [];
+			for (const entry of phase.carry_forward) {
+				if (!entry.target_phase || activePhases.has(entry.target_phase)) {
+					kept.push(entry);
+					continue;
+				}
+				const note = `Routed to ${entry.target_phase}, which the ${newLabel} pipeline does not run.`;
+				const moved: PostPipelineEntry = {
+					id: entry.id,
+					...(entry.kind !== undefined && { kind: entry.kind }),
+					...(entry.description !== undefined && { description: entry.description }),
+					deferred_reason: entry.deferred_reason ? `${entry.deferred_reason} ${note}` : note,
+					source_phase: phaseId,
+					status: "pending",
+				};
+				if (postPipelineById.has(entry.id!)) {
+					const index = freshStatus.post_pipeline.findIndex((existing) => existing.id === entry.id);
+					freshStatus.post_pipeline[index] = moved;
+				} else {
+					freshStatus.post_pipeline.push(moved);
+					postPipelineById.set(entry.id!, moved);
+				}
+				dangling.push({
+					id: entry.id!,
+					source_phase: phaseId,
+					target_phase: entry.target_phase,
+					...(entry.description !== undefined && { description: entry.description }),
+				});
+			}
+			phase.carry_forward = kept;
+		}
 
 		freshStatus.last_updated = new Date().toISOString();
+
+		// createEmptyStatus pointed the cursor at phase one; the carried
+		// completions may have moved it (#236). Ask the engine, exactly as
+		// completion does, so status and next agree from the moment of the switch.
+		recomputeCursor({ ...currentState, pipeline: newPipeline, status: freshStatus });
 
 		assertCanonicalStatus(freshStatus);
 		await atomicWriteFile(statusPath, `${stringifySimpleYaml(freshStatus)}\n`);
@@ -597,7 +693,7 @@ export async function switchPipeline(
 		const state = await getWorkspaceState(cwd);
 		if (!state) throw new Error("Failed to reload workspace state after pipeline switch.");
 
-		return { state, carried, dropped, newPhases };
+		return { state, carried, dropped, newPhases, dangling };
 	} finally {
 		await lock.release();
 	}

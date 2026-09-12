@@ -164,11 +164,17 @@ export function createEmptyStatus(projectName: string, pipelinePath: string, pip
 		last_updated: "",
 		schema_version: 1,
 		phases,
-		next_actions: firstPhaseConfig?.primary_output
-			? [`Begin ${firstPhase} phase by producing ${firstPhaseConfig.primary_output}`]
-			: ["Begin the first pending phase."],
+		next_actions: [beginPhaseAction(firstPhaseConfig ?? { id: firstPhase })],
 		post_pipeline: [],
 	};
+}
+
+/**
+ * The one next_actions line for a phase the engine says is eligible. Init,
+ * completion, and a pipeline switch all spell it this way.
+ */
+export function beginPhaseAction(phase: { id: string; primary_output?: string }): string {
+	return `Begin ${phase.id} phase by producing ${phase.primary_output ?? `findings/${phase.id}/`}`;
 }
 
 /**
