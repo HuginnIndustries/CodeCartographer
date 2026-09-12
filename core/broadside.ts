@@ -37,6 +37,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dirname, join, relative } from "node:path";
 import { atomicWriteFile, pathExists, sleep } from "./utils.ts";
+import { describeRedactions, isSecretFile, redactSecrets } from "./secrets.ts";
 import { acquireLock } from "./status.ts";
 import { loadYamlFile } from "./yaml.ts";
 import { packagedWorkspaceDir } from "./workspace.ts";
@@ -159,6 +160,10 @@ export type RepoInfo = {
 	/** How many slurpable files carry one of `sourceExts`; zero means no lens has code to scan. */
 	sourceFileCount: number;
 	snapshot: RepoSnapshotSource;
+	/** Files left out of every lens because their name says they hold secrets (#252). */
+	secretFilesSkipped: string[];
+	/** Secret-like values redacted from the entry point, manifest, and README excerpt. */
+	redactedValues: number;
 };
 
 export type FileSlice = {
@@ -168,6 +173,10 @@ export type FileSlice = {
 	chars: number;
 	/** Repo-relative paths of the files folded into this slice. */
 	files: string[];
+	/** Secret-like values redacted from this slice's files before upload (#252). */
+	redactedValues?: number;
+	/** The files in this slice that had at least one value redacted. */
+	redactedFiles?: string[];
 };
 
 /**
@@ -291,6 +300,8 @@ export type BroadsideRun = {
 	snapshot?: RepoSnapshotSource;
 	/** The language the lenses scanned as. */
 	language?: string;
+	/** What the secret-redaction pass did before upload (#252); absent on runs from before it. */
+	redaction?: { enabled: boolean; values: number; files: number; skippedFiles: number };
 };
 
 export type BroadsideStateFile = {
@@ -328,6 +339,13 @@ export type BroadsideConfig = {
 	includeTriage: boolean;
 	/** Default poll budget in seconds; 0 means "return immediately". */
 	waitSeconds: number;
+	/**
+	 * Replace secret-like values with `[REDACTED:<kind>]` and skip files named
+	 * like credential stores before anything is uploaded (#252). On by default;
+	 * off only for a repository whose maintainers have decided its contents may
+	 * leave as they are.
+	 */
+	redactSecrets: boolean;
 };
 
 /**
@@ -435,6 +453,8 @@ export type BroadsideSubmitResult = {
 		sourceHead: string | null;
 		sourceDirty: boolean;
 	};
+	/** What the secret-redaction pass did before upload (#252). */
+	redaction: { enabled: boolean; values: number; files: number; skippedFiles: string[] };
 };
 
 export type BroadsideCollectResult = {
@@ -1375,8 +1395,21 @@ function capForPrompt(content: string, cap: number): string {
 	return `${content.slice(0, cap)}\n… [truncated: ${cap.toLocaleString()} of ${content.length.toLocaleString()} chars shown]\n`;
 }
 
-export async function collectRepoInfo(targetDir: string): Promise<RepoInfo> {
+export async function collectRepoInfo(targetDir: string, opts: { redact?: boolean } = {}): Promise<RepoInfo> {
+	const redact = opts.redact ?? true;
 	const { files: allFiles, snapshot } = await listRepoFiles(targetDir);
+	// Named credential stores are out of every lens (isSlurpable); listed here
+	// so the submit report can say so.
+	const secretFilesSkipped = allFiles.filter((path) => isSecretFile(path)).sort();
+	let redactedValues = 0;
+	// The entry point, manifest, and README ride in the architecture prompt
+	// as text, so they get the same pass the slices do (#252).
+	const clean = (text: string): string => {
+		if (!redact) return text;
+		const redaction = redactSecrets(text);
+		redactedValues += redaction.count;
+		return redaction.text;
+	};
 
 	const fileCounts: Record<string, number> = {};
 	for (const f of allFiles) {
@@ -1406,7 +1439,7 @@ export async function collectRepoInfo(targetDir: string): Promise<RepoInfo> {
 	let manifest: { path: string; content: string } | null = null;
 	if (manifestPath) {
 		try {
-			manifest = { path: manifestPath, content: capForPrompt(await readFile(join(targetDir, manifestPath), "utf8"), REPO_INFO_FILE_CAP) };
+			manifest = { path: manifestPath, content: capForPrompt(clean(await readFile(join(targetDir, manifestPath), "utf8")), REPO_INFO_FILE_CAP) };
 		} catch {
 			manifest = null;
 		}
@@ -1420,7 +1453,7 @@ export async function collectRepoInfo(targetDir: string): Promise<RepoInfo> {
 		const p = join(targetDir, candidate);
 		if (await pathExists(p)) {
 			try {
-				mainFile = capForPrompt(await readFile(p, "utf8"), REPO_INFO_FILE_CAP);
+				mainFile = capForPrompt(clean(await readFile(p, "utf8")), REPO_INFO_FILE_CAP);
 			} catch {
 				mainFile = "";
 			}
@@ -1432,7 +1465,7 @@ export async function collectRepoInfo(targetDir: string): Promise<RepoInfo> {
 	const readmePath = join(targetDir, "README.md");
 	if (await pathExists(readmePath)) {
 		try {
-			readmeFirst = (await readFile(readmePath, "utf8")).slice(0, 4000);
+			readmeFirst = clean((await readFile(readmePath, "utf8")).slice(0, 4000));
 		} catch {
 			readmeFirst = "";
 		}
@@ -1459,6 +1492,8 @@ export async function collectRepoInfo(targetDir: string): Promise<RepoInfo> {
 		sourceExts: sourceSpec.exts,
 		sourceFileCount: sourceFiles,
 		snapshot,
+		secretFilesSkipped,
+		redactedValues,
 	};
 }
 
@@ -1516,6 +1551,8 @@ function matchesAnyGlob(path: string, globs: string[]): boolean {
 }
 
 function isSlurpable(relPath: string): boolean {
+	// A credential store is never a lens input, whatever its globs say (#252).
+	if (isSecretFile(relPath)) return false;
 	const segments = relPath.split("/");
 	for (const seg of segments) {
 		if (SKIP_DIR_NAMES.has(seg)) return false;
@@ -1572,6 +1609,7 @@ async function slurpFileList(
 	targetDir: string,
 	files: CollectedFile[],
 	maxChars: number,
+	redact = true,
 ): Promise<FileSlice[]> {
 	const slices: FileSlice[] = [];
 	let currentModule = "";
@@ -1579,6 +1617,8 @@ async function slurpFileList(
 	let running = 0;
 	let fileCount = 0;
 	let filePaths: string[] = [];
+	let redactedValues = 0;
+	let redactedFiles: string[] = [];
 
 	const flush = () => {
 		if (parts.length === 0) return;
@@ -1588,11 +1628,15 @@ async function slurpFileList(
 			fileCount,
 			chars: running,
 			files: filePaths,
+			redactedValues,
+			redactedFiles,
 		});
 		parts = [];
 		running = 0;
 		fileCount = 0;
 		filePaths = [];
+		redactedValues = 0;
+		redactedFiles = [];
 	};
 
 	for (const file of files) {
@@ -1604,6 +1648,16 @@ async function slurpFileList(
 			// concurrent delete rather than a listed-but-deleted file; skip it.
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
 			content = "[BINARY or UNREADABLE]";
+		}
+		if (redact) {
+			// Before the slice is built, so the count and the chars the estimate
+			// sees are of what is actually sent (#252).
+			const redaction = redactSecrets(content);
+			if (redaction.count > 0) {
+				content = redaction.text;
+				redactedValues += redaction.count;
+				redactedFiles.push(file.relPath);
+			}
 		}
 		const block = `=== ${file.relPath} ===\n${content}\n`;
 
@@ -1627,7 +1681,8 @@ async function slurpFileList(
 	return slices;
 }
 
-export async function gatherSlices(targetDir: string, lens: LensDefinition, info: RepoInfo): Promise<FileSlice[]> {
+export async function gatherSlices(targetDir: string, lens: LensDefinition, info: RepoInfo, opts: { redact?: boolean } = {}): Promise<FileSlice[]> {
+	const redact = opts.redact ?? true;
 	if (lens.sliceBy === "none" && lens.globsFor(info).length === 0) {
 		// Repo-info lens (architecture): the prompt is built from info alone.
 		return [{ moduleName: "root", content: "", fileCount: 0, chars: 0, files: [] }];
@@ -1640,9 +1695,9 @@ export async function gatherSlices(targetDir: string, lens: LensDefinition, info
 		// Whole-repo slice: one module named after the repo, so a small
 		// repo produces a single request instead of one per directory.
 		const single = files.map((f) => ({ ...f, moduleName: info.name }));
-		return slurpFileList(targetDir, single, lens.maxChars);
+		return slurpFileList(targetDir, single, lens.maxChars, redact);
 	}
-	return slurpFileList(targetDir, files, lens.maxChars);
+	return slurpFileList(targetDir, files, lens.maxChars, redact);
 }
 
 async function sumFileSizes(targetDir: string, files: CollectedFile[]): Promise<number> {
@@ -1919,6 +1974,7 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 		includeSynthesis: flag("include_synthesis", true),
 		includeTriage: flag("include_triage", true),
 		waitSeconds: typeof raw.wait_seconds === "number" && raw.wait_seconds > 0 ? raw.wait_seconds : 0,
+		redactSecrets: flag("redact_secrets", true),
 	};
 }
 
@@ -2370,7 +2426,17 @@ export async function runBroadsideSubmit(
 		confirm?: (estimate: BroadsideEstimate) => boolean | Promise<boolean>;
 	} = {},
 ): Promise<BroadsideSubmitResult> {
-	const info = await collectRepoInfo(cwd);
+	const lensIds = opts.lenses ?? BROADSIDE_LENS_IDS;
+	const broadsideDir = broadsideDirFor(cwd);
+	const model = opts.model ?? BROADSIDE_MODEL;
+
+	// Resolve a catalog entry per distinct model before anything is submitted:
+	// the guardrail must know real per-token rates, and every lens requires
+	// structured-output support that not all batch models offer. Lenses may run
+	// on different models (config `lens_models`), so each one is pre-flighted.
+	const config = await loadBroadsideConfig(broadsideDir);
+	const redact = config.redactSecrets;
+	const info = await collectRepoInfo(cwd, { redact });
 	// Before pricing, before the network, before any state write: a run on a
 	// language the lenses cannot scan used to submit empty batches and pay for
 	// them (#250).
@@ -2386,15 +2452,6 @@ export async function runBroadsideSubmit(
 			`the lenses look for ${info.sourceExts.join(", ")}). Nothing was submitted.`,
 		);
 	}
-	const lensIds = opts.lenses ?? BROADSIDE_LENS_IDS;
-	const broadsideDir = broadsideDirFor(cwd);
-	const model = opts.model ?? BROADSIDE_MODEL;
-
-	// Resolve a catalog entry per distinct model before anything is submitted:
-	// the guardrail must know real per-token rates, and every lens requires
-	// structured-output support that not all batch models offer. Lenses may run
-	// on different models (config `lens_models`), so each one is pre-flighted.
-	const config = await loadBroadsideConfig(broadsideDir);
 	const modelForLens = (lensId: BroadsideLensId): string => config.lensModels[lensId] ?? model;
 	const resolved = new Map<
 		string,
@@ -2473,9 +2530,18 @@ export async function runBroadsideSubmit(
 		lensPricing: ModelPricing;
 		lensOutputCap?: number;
 	}> = [];
+	// What the redaction pass did across every lens's slices, for the run
+	// record and the report: a value in a file shared by two lenses counts
+	// once per lens it was sent in, files once each.
+	let redactedValues = info.redactedValues;
+	const redactedFiles = new Set<string>();
 	for (const lensId of lensIds) {
 		const lens = getLens(lensId);
-		let slices = await gatherSlices(cwd, lens, info);
+		let slices = await gatherSlices(cwd, lens, info, { redact });
+		for (const slice of slices) {
+			redactedValues += slice.redactedValues ?? 0;
+			for (const file of slice.redactedFiles ?? []) redactedFiles.add(file);
+		}
 		if (changed) {
 			// Repo-info slices (empty files, e.g. architecture) always run;
 			// file-backed slices run only when one of their files changed.
@@ -2559,6 +2625,12 @@ export async function runBroadsideSubmit(
 		baseHead,
 		snapshot: info.snapshot,
 		language: info.language,
+		redaction: {
+			enabled: redact,
+			values: redactedValues,
+			files: redactedFiles.size,
+			skippedFiles: info.secretFilesSkipped.length,
+		},
 	};
 	state.runs.push(run);
 	await persistBroadsideRun(broadsideDir, run);
@@ -2648,6 +2720,12 @@ export async function runBroadsideSubmit(
 			snapshot: info.snapshot,
 			sourceHead,
 			sourceDirty,
+		},
+		redaction: {
+			enabled: redact,
+			values: redactedValues,
+			files: redactedFiles.size,
+			skippedFiles: info.secretFilesSkipped,
 		},
 	};
 }
@@ -3336,6 +3414,12 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		const head = result.repo.sourceHead ? ` at ${result.repo.sourceHead.slice(0, 8)}${result.repo.sourceDirty ? " (dirty)" : ""}` : "";
 		const source = result.repo.snapshot === "working-tree" ? `working tree${head}` : "directory walk (not a git repository)";
 		lines.push(`Scanned as ${result.repo.language}: ${result.repo.sourceFiles} source file(s) from the ${source}.`);
+	}
+	if (result.redaction) {
+		const line = result.redaction.enabled
+			? describeRedactions(result.redaction.values, result.redaction.files, result.redaction.skippedFiles)
+			: "Before upload: secret redaction is OFF (redact_secrets: false in config.yaml); files were sent as they are.";
+		if (line) lines.push(line);
 	}
 	const incremental = result.incremental;
 	if (incremental?.requested) {
