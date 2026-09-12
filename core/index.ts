@@ -21,3 +21,4 @@ export * from "./library.ts";
 export * from "./synthesis.ts";
 export * from "./broadside.ts";
 export * from "./secrets.ts";
+export * from "./dashboard-writer.ts";

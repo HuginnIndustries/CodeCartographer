@@ -1,0 +1,169 @@
+// I/O wrapper that gathers all dashboard inputs and writes the rendered
+// HTML to `.codecarto/dashboard.html`. Best-effort — failures are swallowed
+// and never escalate to a phase error the user sees, mirroring the
+// recordUsage discipline at extensions/codecarto/index.ts.
+//
+// Lived in the Pi extension until #254, with the MCP server reaching across
+// to import it; both surfaces refresh the dashboard at the same lifecycle
+// points (init, completion, amendment, pipeline switch, on demand), so it is
+// a core primitive like everything else they share.
+
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import {
+	atomicWriteFile,
+	DASHBOARD_RELATIVE_PATH,
+	type DashboardCloseoutEntry,
+	type DashboardInputs,
+	type DashboardNarration,
+	getWorkspaceState,
+	loadUsage,
+	NARRATION_CACHE_RELATIVE_PATH,
+	type OutputAvailability,
+	parseSimpleYaml,
+	pathExists,
+	renderDashboard,
+} from "./index.ts";
+
+const CLOSEOUT_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})-(.+)\.md$/;
+
+/**
+ * Render and atomically replace `.codecarto/dashboard.html`.
+ * @returns true when a fresh dashboard landed on disk; false when the
+ * workspace is missing or any gather/render/write step failed (swallowed —
+ * lifecycle callers must never fail on a dashboard problem, but they may
+ * report truthfully whether a refresh happened).
+ */
+export async function writeDashboard(cwd: string, packageVersion: string): Promise<boolean> {
+	try {
+		const state = await getWorkspaceState(cwd);
+		if (!state) return false;
+
+		const workspaceDir = state.workspaceDir;
+		const [usage, closeouts, outputsPresent, narration] = await Promise.all([
+			loadUsage(workspaceDir),
+			listCloseouts(workspaceDir),
+			buildOutputsPresent(state.workspaceDir, state.pipeline),
+			loadNarration(workspaceDir),
+		]);
+
+		const inputs: DashboardInputs = {
+			status: state.status,
+			pipeline: state.pipeline,
+			usage,
+			closeouts,
+			outputsPresent,
+			packageVersion,
+			generatedAt: new Date().toISOString(),
+			narration,
+		};
+
+		const html = renderDashboard(inputs);
+		await atomicWriteFile(join(workspaceDir, DASHBOARD_RELATIVE_PATH), html);
+		return true;
+	} catch {
+		// Best-effort: a failed dashboard write must not surface as a phase
+		// error. The user's pipeline state is unaffected; the next state
+		// change will trigger another render attempt.
+		return false;
+	}
+}
+
+async function listCloseouts(workspaceDir: string): Promise<DashboardCloseoutEntry[]> {
+	const dir = join(workspaceDir, "closeouts");
+	if (!(await pathExists(dir))) return [];
+	let entries: string[];
+	try {
+		entries = await readdir(dir);
+	} catch {
+		return [];
+	}
+	const out: DashboardCloseoutEntry[] = [];
+	for (const name of entries) {
+		const m = CLOSEOUT_FILENAME_RE.exec(name);
+		if (!m) continue;
+		out.push({ date: m[1], phaseOrModule: m[2], fileName: name, summary: await readCloseoutSummary(join(dir, name)) });
+	}
+	return out;
+}
+
+async function readCloseoutSummary(path: string): Promise<string | undefined> {
+	try {
+		const raw = await readFile(path, "utf8");
+		const lines = raw.split(/\r?\n/);
+		const summaryStart = lines.findIndex((line) => /^##\s+Summary\s*$/i.test(line.trim()));
+		if (summaryStart === -1) return undefined;
+		const body: string[] = [];
+		for (const line of lines.slice(summaryStart + 1)) {
+			if (/^##\s+/.test(line.trim())) break;
+			const trimmed = line.trim();
+			if (!trimmed || trimmed === "-") continue;
+			body.push(trimmed.replace(/^[-*]\s+/, ""));
+			if (body.join(" ").length > 280) break;
+		}
+		const summary = body.join(" ").trim();
+		return summary ? `${summary.slice(0, 280)}${summary.length > 280 ? "…" : ""}` : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function buildOutputsPresent(
+	workspaceDir: string,
+	pipeline: { phase_order: string[]; phases: Array<{ id: string; primary_output?: string; secondary_outputs?: Array<{ path: string }> }> },
+): Promise<Map<string, OutputAvailability>> {
+	const out = new Map<string, OutputAvailability>();
+	for (const phaseId of pipeline.phase_order) {
+		const phaseDef = pipeline.phases.find((p) => p.id === phaseId);
+		if (!phaseDef) continue;
+		const entry: OutputAvailability = { secondary: [] };
+		if (phaseDef.primary_output) {
+			entry.primary = {
+				path: phaseDef.primary_output,
+				exists: await pathExists(join(workspaceDir, phaseDef.primary_output)),
+			};
+		}
+		for (const sec of phaseDef.secondary_outputs ?? []) {
+			entry.secondary.push({
+				path: sec.path,
+				exists: await pathExists(join(workspaceDir, sec.path)),
+			});
+		}
+		out.set(phaseId, entry);
+	}
+	return out;
+}
+
+async function loadNarration(workspaceDir: string): Promise<DashboardNarration | undefined> {
+	const path = join(workspaceDir, NARRATION_CACHE_RELATIVE_PATH);
+	if (!(await pathExists(path))) return undefined;
+	try {
+		const raw = await readFile(path, "utf8");
+		const { frontmatter, body } = splitFrontmatter(raw);
+		if (!frontmatter) return undefined;
+		const generatedAt = typeof frontmatter.generatedAt === "string" ? frontmatter.generatedAt : "";
+		const phaseCountAtGeneration = typeof frontmatter.phaseCountAtGeneration === "number" ? frontmatter.phaseCountAtGeneration : 0;
+		if (!generatedAt) return undefined;
+		return { content: body.trim(), generatedAt, phaseCountAtGeneration };
+	} catch {
+		return undefined;
+	}
+}
+
+function splitFrontmatter(raw: string): { frontmatter: Record<string, unknown> | null; body: string } {
+	if (!raw.startsWith("---\n")) return { frontmatter: null, body: raw };
+	const end = raw.indexOf("\n---\n", 4);
+	if (end === -1) return { frontmatter: null, body: raw };
+	const yamlText = raw.slice(4, end);
+	const body = raw.slice(end + 5);
+	try {
+		const parsed = parseSimpleYaml(yamlText);
+		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+			return { frontmatter: parsed as Record<string, unknown>, body };
+		}
+	} catch {
+		// fall through
+	}
+	return { frontmatter: null, body };
+}
