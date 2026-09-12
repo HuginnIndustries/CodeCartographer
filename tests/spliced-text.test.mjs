@@ -42,7 +42,7 @@ test("a routed item carrying an instruction reaches the next prompt inside a lab
 			"",
 			"## Coverage and limits",
 			"",
-			`- Skipped scope: ${INJECTION.replace("\n", " ")}`,
+			`- Skipped scope: ${INJECTION.replace(/\n/g, " ")}`,
 			"- Known blind spots: none",
 			"",
 			"## Validation",
