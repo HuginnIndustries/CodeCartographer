@@ -239,7 +239,13 @@ test("/codecarto-refresh-scaffold previews the exact file set, and a declined co
 		assert.match(body, new RegExp(`Overwrites ${files.length} framework-owned file\\(s\\)`), "the count is the set refreshScaffold writes");
 		assert.match(body, /GUIDE\.md/);
 		assert.match(body, /workflow\/: VALIDATE\.md, pipeline-architecture-only\.yaml, .*scaffold-version\.yaml/, "workflow/ files are named individually");
-		assert.match(body, /Never touched: workflow\/status\.yaml, workflow\/config\.yaml, workflow\/\.usage\.local\.yaml, BACKLOG\.md, THREAD_LOG\.md, CONVENTIONS\.md, DECISIONS\.md, scratch\/, inputs\/, closeouts\/, broadside\/\./);
+		const protectedPaths = [
+			...core.SCAFFOLD_REFRESH_PROTECTED.workflowFiles.map((file) => `workflow/${file}`),
+			...core.SCAFFOLD_REFRESH_PROTECTED.topLevel,
+			...core.SCAFFOLD_REFRESH_PROTECTED.dirs.map((dir) => `${dir}/`),
+		];
+		assert.ok(body.includes(`Never touched: ${protectedPaths.join(", ")}.`), "the preview names every protected path");
+		assert.match(body, /Never touched: workflow\/status\.yaml, workflow\/config\.yaml, .*\.gitignore, scratch\/, inputs\/, closeouts\/, broadside\/\./);
 
 		assert.equal(await readFile(join(codecarto, "GUIDE.md"), "utf8"), "# Stale guide from an old release\n", "declining leaves the stale file alone");
 		assert.equal(await readFile(join(codecarto, "THREAD_LOG.md"), "utf8"), threadLogBefore, "declining logs nothing");
