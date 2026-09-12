@@ -126,6 +126,10 @@ node scripts/smoke-mcp.mjs --tarball "$(pwd)/codecartographer-pi-<version>.tgz"
 
 Also confirm the prompt is present in **both** `content` and `structuredContent`. Clients disagree about which they read (see [`docs/client-surfaces.md`](docs/client-surfaces.md)), and #94 shipped a `codecarto_next` whose `structuredContent` carried `{phase, forced}` and no prompt. Checking both fields is what makes that shape impossible for any client, rather than for the ones you happened to test.
 
+### Self-review (every so often)
+
+Separate from release verification: run the full deep-audit pipeline on this repository itself, driven by a host LLM over MCP. It yields an engineering review of the codebase and a first-hand account of driving the product, which is where the framework's own bugs tend to originate. The prompt, the reasoning behind its choices, and the cost to expect are in [`docs/self-review-prompt.md`](docs/self-review-prompt.md). It is a spend, not a gate — run it after a run of releases or before a large refactor, not per tag.
+
 ### Standard release (single version)
 
 For a PR that includes a version bump and changelog entry:
