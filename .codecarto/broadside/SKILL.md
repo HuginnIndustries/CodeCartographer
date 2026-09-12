@@ -127,9 +127,13 @@ environment variable, or `api_key` in this directory's `config.yaml`.
 
 Submits are priced before they fire: Broad-Side estimates the run from the
 collected file sizes against the model's live per-token pricing and refuses
-when the estimate exceeds `max_cost` (`config.yaml` or the tool parameter)
-unless `force` is passed. See `config.yaml` for the model, limit, and manual
-pricing-override keys.
+when the estimate exceeds `max_cost` (`config.yaml` or the tool parameter;
+$1.00 when neither sets it, `0` for no limit) unless `force` is passed. See
+`config.yaml` for the model, limit, and manual pricing-override keys. A
+`config.yaml` that exists but cannot be parsed refuses every action except
+`status` rather than running on defaults, and a `state.json` that cannot be
+read refuses everything and is preserved beside itself — a paid run's batch
+ids live there, so nothing writes over it.
 
 What leaves the machine is repository content, so a redaction pass runs
 before upload: files named like credential stores (`.env*`, `*.pem`,

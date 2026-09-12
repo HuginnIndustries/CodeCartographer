@@ -32,6 +32,7 @@
 // carry is the reading guide for its output — `.codecarto/broadside/SKILL.md`,
 // served by codecarto_skill under the name `broadside` (see readBroadsideSkill).
 
+import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -85,6 +86,16 @@ export type BroadsideLensId = (typeof BROADSIDE_LENS_IDS)[number];
 
 export const BROADSIDE_POLL_INTERVAL_MS = 15_000;
 export const BROADSIDE_DEFAULT_POLL_BUDGET_MS = 25 * 60 * 1000;
+/**
+ * The run expense limit in USD a repository gets before it configures one.
+ * Pi asks a human before submitting over the estimate; the MCP surface cannot,
+ * and shipped with no limit at all, so a host calling submit with the stock
+ * config spent whatever the estimate came to (#231). One dollar covers a
+ * six-lens run of a repository this size with room to spare; a larger one
+ * raises `max_cost` in config.yaml, passes `max_cost` on the call, or sets it
+ * to 0 for no limit.
+ */
+export const BROADSIDE_DEFAULT_MAX_COST = 1;
 
 // ---------- types ----------
 
@@ -401,6 +412,41 @@ export class BroadsideAuthError extends Error {
 		this.name = "BroadsideAuthError";
 		this.httpStatus = httpStatus;
 		this.detail = detail;
+	}
+}
+
+/**
+ * `broadside/config.yaml` exists but cannot be used. A file that failed to
+ * parse used to be treated exactly like an absent one — defaults, including
+ * no spend cap and no lens routing, with no message — so a typo removed the
+ * user's own guard (#232). Only an absent file yields defaults now.
+ */
+export class BroadsideConfigError extends Error {
+	readonly path: string;
+	constructor(path: string, detail: string) {
+		super(`Broad-Side config ${path} ${detail}. Fix or remove the file; nothing runs on defaults while it is unreadable.`);
+		this.name = "BroadsideConfigError";
+		this.path = path;
+	}
+}
+
+/**
+ * `broadside/state.json` exists but cannot be read. It used to be read as
+ * empty and the next checkpoint wrote that empty state over it, losing the
+ * batch ids of every in-flight, already-paid run (#233). The corrupt file is
+ * preserved beside itself and nothing writes over it until someone looks.
+ */
+export class BroadsideStateError extends Error {
+	readonly path: string;
+	readonly backupPath: string;
+	constructor(path: string, backupPath: string, detail: string) {
+		super(
+			`Broad-Side state ${path} ${detail}. A copy is preserved at ${backupPath}; the file is not overwritten. ` +
+			"Repair state.json from the copy (each run's batch ids are what collect needs), or move it aside to start fresh.",
+		);
+		this.name = "BroadsideStateError";
+		this.path = path;
+		this.backupPath = backupPath;
 	}
 }
 
@@ -1831,13 +1877,29 @@ export function defaultBroadsideState(): BroadsideStateFile {
 export async function loadBroadsideState(broadsideDir: string): Promise<BroadsideStateFile> {
 	const statePath = join(broadsideDir, BROADSIDE_STATE_FILE);
 	if (!(await pathExists(statePath))) return defaultBroadsideState();
+	const text = await readFile(statePath, "utf8");
+	let raw: unknown;
 	try {
-		const raw = JSON.parse(await readFile(statePath, "utf8"));
-		if (!raw || typeof raw !== "object" || !Array.isArray(raw.runs)) return defaultBroadsideState();
-		return raw as BroadsideStateFile;
-	} catch {
-		return defaultBroadsideState();
+		raw = JSON.parse(text);
+	} catch (error) {
+		throw new BroadsideStateError(statePath, await preserveCorruptState(statePath, text), `could not be parsed (${error instanceof Error ? error.message : String(error)})`);
 	}
+	if (!raw || typeof raw !== "object" || !Array.isArray((raw as { runs?: unknown }).runs)) {
+		throw new BroadsideStateError(statePath, await preserveCorruptState(statePath, text), "is not a state file (expected an object with a runs array)");
+	}
+	return raw as BroadsideStateFile;
+}
+
+/**
+ * Copy an unreadable state file to `state.json.corrupt-<hash>` beside it,
+ * named by content so repeated loads do not multiply copies. Returns the
+ * copy's path (the existing one, when the same content was preserved before).
+ */
+async function preserveCorruptState(statePath: string, text: string): Promise<string> {
+	const digest = createHash("sha1").update(text).digest("hex").slice(0, 8);
+	const backupPath = `${statePath}.corrupt-${digest}`;
+	if (!(await pathExists(backupPath))) await writeFile(backupPath, text, "utf8");
+	return backupPath;
 }
 
 /**
@@ -1929,12 +1991,26 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 	const configPath = join(broadsideDir, BROADSIDE_CONFIG_FILE);
 	let raw: Record<string, unknown> = {};
 	if (await pathExists(configPath)) {
+		let parsed: unknown;
 		try {
-			raw = (await loadYamlFile<Record<string, unknown>>(configPath)) ?? {};
-		} catch {
-			raw = {};
+			parsed = await loadYamlFile<unknown>(configPath);
+		} catch (error) {
+			throw new BroadsideConfigError(configPath, `could not be parsed (${error instanceof Error ? error.message : String(error)})`);
+		}
+		if (parsed !== null && parsed !== undefined) {
+			if (typeof parsed !== "object" || Array.isArray(parsed)) throw new BroadsideConfigError(configPath, "is not a YAML mapping");
+			raw = parsed as Record<string, unknown>;
 		}
 	}
+	return buildBroadsideConfig(raw);
+}
+
+/** The shipped defaults: what an absent config.yaml means. */
+export function defaultBroadsideConfig(): BroadsideConfig {
+	return buildBroadsideConfig({});
+}
+
+function buildBroadsideConfig(raw: Record<string, unknown>): BroadsideConfig {
 	const lenses = Array.isArray(raw.default_lenses)
 		? (raw.default_lenses.filter((l): l is BroadsideLensId => BROADSIDE_LENS_IDS.includes(l as BroadsideLensId)))
 		: [];
@@ -1959,7 +2035,9 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 		model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : BROADSIDE_MODEL,
 		apiKey: typeof raw.api_key === "string" ? raw.api_key.trim() : "",
 		defaultLenses: lenses.length > 0 ? lenses : [...BROADSIDE_LENS_IDS],
-		maxCost: typeof raw.max_cost === "number" && raw.max_cost > 0 ? raw.max_cost : 0,
+		// Absent: the shipped default. An explicit 0 is "no limit", spelled out
+		// on purpose; a negative or non-numeric value is not a limit at all.
+		maxCost: typeof raw.max_cost === "number" && raw.max_cost >= 0 ? raw.max_cost : BROADSIDE_DEFAULT_MAX_COST,
 		pricing:
 			inputOverride !== undefined && outputOverride !== undefined
 				? { inputPerM: inputOverride, outputPerM: outputOverride }

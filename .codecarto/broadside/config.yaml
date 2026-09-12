@@ -89,16 +89,23 @@
 #   max_tokens: 2000   # or set the thinking budget directly
 #   enabled: false     # only where the provider allows it
 
-# Approximate run expense limit in USD (0 = no limit). Before submitting,
-# Broad-Side estimates the run cost from the collected file sizes and the
-# model's per-token pricing — fetched live from OpenRouter's model catalog
-# and cached for 24h. If the estimate exceeds max_cost, submit refuses and
-# prints the per-lens breakdown; pass force: true to override, or set a
-# value here so every run is guarded by default.
+# Approximate run expense limit in USD. The default is 1.00, and it applies
+# whether or not this key is set: the MCP surface cannot ask a human before
+# spending, so a repository is guarded before anyone configures it. Before
+# submitting, Broad-Side estimates the run cost from the collected file
+# sizes and the model's per-token pricing — fetched live from OpenRouter's
+# model catalog and cached for 24h. If the estimate exceeds max_cost, submit
+# refuses and prints the per-lens breakdown; pass force: true (or approve
+# Pi's dialog) to override for one run, raise the value here for a larger
+# repository, or set 0 for no limit at all.
 #
 # This is a pre-flight estimate guardrail, not a runtime stop: OpenRouter
 # bills actual usage, which may differ from the estimate either direction.
 # Actual cost lands in each run's run-meta.json after collect.
+#
+# A config.yaml that exists but cannot be parsed refuses submit, collect,
+# and models rather than falling back to these defaults — a typo here must
+# not silently remove the guard you set.
 #
 # max_cost: 1.00
 
@@ -136,9 +143,10 @@
 # include_triage: true
 
 # Default poll budget in seconds. 0 returns as soon as the batches are
-# submitted or the recorded state is read; a positive value polls that long
-# before returning with whatever is done. Batch jobs routinely take tens of
-# minutes, so a submit-then-collect-later rhythm is normal.
+# submitted, and on collect polls each in-flight batch once and returns with
+# whatever is done; a positive value keeps polling that long. Batch jobs
+# routinely take tens of minutes, so a submit-then-collect-later rhythm is
+# normal.
 #
 # wait_seconds: 0
 

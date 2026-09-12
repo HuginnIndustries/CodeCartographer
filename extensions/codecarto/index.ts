@@ -40,6 +40,10 @@ import {
 	resolveExistingPrefix,
 	BROADSIDE_LENS_IDS,
 	BROADSIDE_SKILL_NAME,
+	type BroadsideConfig,
+	BroadsideConfigError,
+	type BroadsideStateFile,
+	defaultBroadsideConfig,
 	BroadsideCancelledError,
 	type BroadsideEstimate,
 	broadsideDirFor,
@@ -1169,7 +1173,22 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			// Broad-Side runs on any git repository, with or without a workspace —
 			// so this command never goes through ensureWorkspaceState.
 			const broadsideDir = broadsideDirFor(ctx.cwd);
-			const config = await loadBroadsideConfig(broadsideDir);
+			// A config.yaml that exists but cannot be read refuses every action
+			// that would act on it (#232); status only reads recorded runs, so it
+			// answers and says the file is unreadable.
+			let config: BroadsideConfig;
+			let configWarning: string | null = null;
+			try {
+				config = await loadBroadsideConfig(broadsideDir);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (!(error instanceof BroadsideConfigError) || flags.action !== "status") {
+					notifyCtx(ctx, `Broad-Side ${flags.action} refused: ${message}`, "error");
+					return;
+				}
+				config = defaultBroadsideConfig();
+				configWarning = message;
+			}
 
 			const finish = (lines: string[], notice: string, level: "info" | "warning" = "info"): void => {
 				lastFeedbackLines = lines;
@@ -1186,11 +1205,20 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			};
 
 			if (flags.action === "status") {
-				const { state } = await runBroadsideStatus(ctx.cwd);
+				let state: BroadsideStateFile;
+				try {
+					({ state } = await runBroadsideStatus(ctx.cwd));
+				} catch (error) {
+					// A corrupt state.json: nothing trustworthy to report, and the
+					// error names the preserved copy (#233).
+					notifyCtx(ctx, `Broad-Side status failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+					return;
+				}
 				const runs = state.runs.length;
 				finish(
-					statusText(state).split("\n"),
+					[...statusText(state).split("\n"), ...(configWarning ? [`Warning: ${configWarning}`] : [])],
 					runs > 0 ? `Broad-Side: ${runs} recorded run${runs === 1 ? "" : "s"}` : "Broad-Side: no runs recorded yet",
+					configWarning ? "warning" : "info",
 				);
 				return;
 			}
@@ -1237,8 +1265,10 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				renderProgress("Polling batches…");
 			};
 
+			// An explicit --wait=0 polls once and returns; it used to become
+			// undefined and, in core, the 25-minute budget (#230).
 			const waitSeconds = flags.waitSeconds ?? config.waitSeconds;
-			const waitMs = waitSeconds > 0 ? waitSeconds * 1000 : undefined;
+			const waitMs = waitSeconds * 1000;
 			const includeSynthesis = flags.includeSynthesis ?? config.includeSynthesis;
 			const includeTriage = flags.includeTriage ?? config.includeTriage;
 			const retryTruncated = flags.retryTruncated ?? config.retryTruncated;
