@@ -76,3 +76,20 @@ in it. The caveat: the spec's normative rules are the eleven high defects turned
 so it describes the system the maintainers meant to build rather than the one on disk. The
 byte-for-byte list in its §Protocols and Persisted State is the part to trust most; it is
 what an existing workspace, library, and config need in order to load unchanged.
+
+## Issue index
+
+One GitHub issue per framework note, label `self-audit`.
+
+| ID | Issue | Title |
+|---|---|---|
+| F1 | [#270](https://github.com/HuginnIndustries/CodeCartographer/issues/270) | Reimplementation-spec MCP prompt has no auto-default for the Strategic Alignment Hook |
+| F2 | [#271](https://github.com/HuginnIndustries/CodeCartographer/issues/271) | Reimplementation-spec template suggests carry-forward targets that codecarto_complete refuses |
+| F3 | [#272](https://github.com/HuginnIndustries/CodeCartographer/issues/272) | Closeouts and THREAD_LOG lines are dated in UTC, validation lines in local time |
+| F4 | [#273](https://github.com/HuginnIndustries/CodeCartographer/issues/273) | Completion appends DECISIONS rows without a separating blank line |
+| F5 | [#274](https://github.com/HuginnIndustries/CodeCartographer/issues/274) | required_reads: GUIDE, status.yaml, and the handoff template are listed on every phase |
+| F6 | [#275](https://github.com/HuginnIndustries/CodeCartographer/issues/275) | Mechanical scan and porting phases are missing required reads that their findings depend on |
+| F7 | [#276](https://github.com/HuginnIndustries/CodeCartographer/issues/276) | The repo ships its own .codecarto workspace state, so a self-run inherits it |
+| F8 | [#277](https://github.com/HuginnIndustries/CodeCartographer/issues/277) | Contracts and protocols phases do not say which owns the storage-format catalog |
+| F9 | [#278](https://github.com/HuginnIndustries/CodeCartographer/issues/278) | Porting template's 'under one screen' Defect Synthesis conflicts with one-disposition-per-defect |
+| F10 | [#279](https://github.com/HuginnIndustries/CodeCartographer/issues/279) | Semantic scan rubric does not say whether a confirmed runtime probe changes severity |

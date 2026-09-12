@@ -86,3 +86,57 @@ Ordered by the order I would act on them.
    LLM-to-filesystem boundary on the Pi surface and the fix is a few lines.
 
 D-H6 is fourth. It is a one-enum change in the engine but touches five consumers.
+
+## Issue index
+
+One GitHub issue per finding, label `self-audit`.
+
+| ID | Issue | Title |
+|---|---|---|
+| D-H1 | [#223](https://github.com/HuginnIndustries/CodeCartographer/issues/223) | Write sandbox admits a new file under a symlinked directory inside .codecarto/ |
+| D-H2 | [#224](https://github.com/HuginnIndustries/CodeCartographer/issues/224) | codecarto-init copies findings, handoffs, and the dashboard from the packaged template |
+| D-H3 | [#225](https://github.com/HuginnIndustries/CodeCartographer/issues/225) | YAML emitter writes scalar-looking strings bare; a digit-named repo bricks the workspace |
+| D-H4 | [#226](https://github.com/HuginnIndustries/CodeCartographer/issues/226) | Eight hand-rolled atomic writers use <pid>.<ms> temp names and lose concurrent writes |
+| D-H5 | [#227](https://github.com/HuginnIndustries/CodeCartographer/issues/227) | Status lock release removes whoever's lock is present, including a newer holder's |
+| D-H6 | [#228](https://github.com/HuginnIndustries/CodeCartographer/issues/228) | 'No eligible phase' is treated as 'pipeline complete' across status, next, complete, skills, amend |
+| D-H7 | [#229](https://github.com/HuginnIndustries/CodeCartographer/issues/229) | .codecarto/.gitignore is not in the npm tarball |
+| D-H8 | [#230](https://github.com/HuginnIndustries/CodeCartographer/issues/230) | Broad-Side collect with wait_seconds: 0 waits the 25-minute default |
+| D-H9 | [#231](https://github.com/HuginnIndustries/CodeCartographer/issues/231) | No default spend cap for Broad-Side on the MCP surface |
+| D-H10 | [#232](https://github.com/HuginnIndustries/CodeCartographer/issues/232) | A malformed Broad-Side config silently drops the configured spend cap and lens routing |
+| D-H11 | [#233](https://github.com/HuginnIndustries/CodeCartographer/issues/233) | A corrupt broadside/state.json is read as empty and overwritten, orphaning paid runs |
+| D-M20 | [#234](https://github.com/HuginnIndustries/CodeCartographer/issues/234) | Completion writes closeout, THREAD_LOG, and DECISIONS before the status rename |
+| D-M21 | [#235](https://github.com/HuginnIndustries/CodeCartographer/issues/235) | Skill name is not validated: path traversal splices arbitrary files into the prompt |
+| D-M1 | [#236](https://github.com/HuginnIndustries/CodeCartographer/issues/236) | switch_pipeline resets current_phase and next_actions to the first phase despite carried completions |
+| D-M2 | [#237](https://github.com/HuginnIndustries/CodeCartographer/issues/237) | Carry-forwards targeting phases dropped by a pipeline switch dangle silently |
+| D-M7 | [#238](https://github.com/HuginnIndustries/CodeCartographer/issues/238) | Usage log: unlocked read-modify-write, corrupt file overwritten, colliding temp names |
+| D-M3 | [#239](https://github.com/HuginnIndustries/CodeCartographer/issues/239) | Every PARTIAL coverage row becomes an auto open question even when the handoff already routed it |
+| D-M18 | [#240](https://github.com/HuginnIndustries/CodeCartographer/issues/240) | Concurrent publishes to one library slug race; the loser gets a raw filesystem error |
+| D-M28 | [#241](https://github.com/HuginnIndustries/CodeCartographer/issues/241) | Unvalidated relative cwd widens the publish containment root |
+| D-M8 | [#242](https://github.com/HuginnIndustries/CodeCartographer/issues/242) | A malformed orchestrator config layer is silently dropped |
+| D-M12 | [#243](https://github.com/HuginnIndustries/CodeCartographer/issues/243) | Relative library.path resolves against the process cwd |
+| D-M15 | [#244](https://github.com/HuginnIndustries/CodeCartographer/issues/244) | library_init writes publish_confirm: true, flipping the MCP confirm gate on |
+| D-M17 | [#245](https://github.com/HuginnIndustries/CodeCartographer/issues/245) | codecarto-init on the packaged template itself resets status without a backup |
+| D-M10 | [#246](https://github.com/HuginnIndustries/CodeCartographer/issues/246) | Valid YAML nesting indents are rejected as 'Invalid YAML indentation' |
+| D-M9 | [#247](https://github.com/HuginnIndustries/CodeCartographer/issues/247) | Any decoration on the **Overall:** line fails validation with an unhelpful message |
+| D-M5 | [#248](https://github.com/HuginnIndustries/CodeCartographer/issues/248) | Broad-Side lists files from git ls-tree HEAD but reads contents from the working tree |
+| D-M6 | [#249](https://github.com/HuginnIndustries/CodeCartographer/issues/249) | Broad-Side reads mainFile unbounded and estimates the architecture lens at a flat 6,000 chars |
+| D-M13 | [#250](https://github.com/HuginnIndustries/CodeCartographer/issues/250) | Unknown language falls through to Go globs and silently scans nothing |
+| D-M14 | [#251](https://github.com/HuginnIndustries/CodeCartographer/issues/251) | Broad-Side auth failures are masked as pricing or timeout errors |
+| D-M23 | [#252](https://github.com/HuginnIndustries/CodeCartographer/issues/252) | Broad-Side uploads repository content with no secret scanning |
+| D-M22 | [#253](https://github.com/HuginnIndustries/CodeCartographer/issues/253) | Upstream findings text is spliced into later phase prompts undelimited |
+| D-M24 | [#254](https://github.com/HuginnIndustries/CodeCartographer/issues/254) | MCP switch_pipeline does not re-render the dashboard |
+| D-M25 | [#255](https://github.com/HuginnIndustries/CodeCartographer/issues/255) | auto-runner reads ctx.cwd after a phase at two sites instead of the captured value |
+| D-M19 | [#256](https://github.com/HuginnIndustries/CodeCartographer/issues/256) | Child AgentSessions are never disposed |
+| D-M4 | [#257](https://github.com/HuginnIndustries/CodeCartographer/issues/257) | Library source_repo list filter compares raw strings while the publish guard normalizes |
+| D-M11 | [#258](https://github.com/HuginnIndustries/CodeCartographer/issues/258) | Tests initialize workspaces from the live packaged template |
+| D-M16 | [#259](https://github.com/HuginnIndustries/CodeCartographer/issues/259) | Findings are gitignored in checkout installs but committed in npm installs |
+| D-M26 | [#260](https://github.com/HuginnIndustries/CodeCartographer/issues/260) | MANUAL.md teaches the pre-0.12 hand-edit completion contract |
+| D-M27 | [#261](https://github.com/HuginnIndustries/CodeCartographer/issues/261) | Docs describe validation as checking criteria; it parses the artifact's self-attestation |
+| L1 | [#262](https://github.com/HuginnIndustries/CodeCartographer/issues/262) | Dead code and dead protocol states (low, grouped) |
+| L2 | [#263](https://github.com/HuginnIndustries/CodeCartographer/issues/263) | Error observability (low, grouped) |
+| L3 | [#264](https://github.com/HuginnIndustries/CodeCartographer/issues/264) | Config and environment lows (low, grouped) |
+| L4 | [#265](https://github.com/HuginnIndustries/CodeCartographer/issues/265) | Documentation drift (low, grouped) |
+| L5 | [#266](https://github.com/HuginnIndustries/CodeCartographer/issues/266) | State-machine hygiene (low, grouped) |
+| L6 | [#267](https://github.com/HuginnIndustries/CodeCartographer/issues/267) | Trust posture (low, grouped) |
+| L7 | [#268](https://github.com/HuginnIndustries/CodeCartographer/issues/268) | Broad-Side collect targets only the last run (low, grouped) |
+| L8 | [#269](https://github.com/HuginnIndustries/CodeCartographer/issues/269) | .codecarto/.gitignore ignores a stale defect-scan path (low, grouped) |
