@@ -1,0 +1,111 @@
+schema_version: 1
+phase_id: architecture
+owner_notes:
+  - >-
+    Execution strategy: inline (single Claude Code chat driving the MCP tools, executing
+    phases itself, holding the orchestrator duties at each boundary). Seeded CONVENTIONS.md and
+    DECISIONS.md from templates per GUIDE §First-Time Project Setup even though closeouts/ was
+    non-empty — the one closeout present is this repository's own shipped 2026-05-02 entry, not
+    a prior run against this clone.
+  - >-
+    Shape: 19 core modules (9,447 lines) with no internal import cycles, wrapped by an MCP
+    server (22 tools, 1,753 lines) and a Pi extension (20 commands, 4,099 lines); 52 test files
+    with 639 tests were inventoried but not read this phase. The only runtime npm dependency is
+    the MCP SDK; every YAML file goes through the hand-rolled parser in core/yaml.ts.
+  - >-
+    Two boundary facts the CLAUDE.md architecture note does not state: mcp-server/server.ts:105
+    imports extensions/codecarto/dashboard-writer.ts, and both wrappers import four core modules
+    directly instead of through core/index.ts. Neither is a bug; both are porting decisions
+    (routed as arch-CF2).
+open_questions: []
+carry_forward:
+  - id: arch-CF1
+    kind: defer-to-phase
+    target_phase: protocols
+    description: >-
+      The 22 MCP tool input schemas, the textResult dual payload, and the persisted schemas
+      (status.yaml, handoff, amendment, library marker/metadata/index, usage, broadside
+      state/run files) plus the validation-block and Coverage-and-limits markdown grammars are
+      listed by name in the architecture map and public-surfaces catalog; exact shapes,
+      versioning rules, and compatibility hazards are not extracted.
+    deferred_reason: Wire-format and persisted-schema extraction is the protocols rubric.
+  - id: arch-CF2
+    kind: defer-to-phase
+    target_phase: porting
+    description: >-
+      mcp-server/server.ts:105 depends on extensions/codecarto/dashboard-writer.ts (a
+      core-shaped I/O wrapper with no Pi imports), and both wrappers bypass the core/index.ts
+      barrel for amendment, usage, library, and orchestrator-config. The documented boundary
+      says the barrel is the exclusive entry.
+    deferred_reason: >-
+      Whether a port preserves, repairs, or moves dashboard-writer into core is a
+      porting-synthesis decision, not a defect.
+  - id: arch-CF3
+    kind: defer-to-phase
+    target_phase: contracts
+    description: >-
+      20 Pi commands and 22 MCP tools are enumerated with headline behavior and which files
+      each writes; per-feature defaults, error text, side effects, persisted state, and
+      recovery behavior are not recorded.
+    deferred_reason: Feature-contract extraction is the contracts rubric.
+  - id: arch-CF4
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: >-
+      core/usage.ts appendUsageRun is an unlocked read-modify-write of
+      workflow/.usage.local.yaml (module comment at core/usage.ts:6-9 asserts sequential phases
+      make it safe). Both wrappers append after completion; the Pi one-shot path's post-phase
+      work is fire-and-forget and the auto loop can overlap with a manual /codecarto-complete.
+    deferred_reason: >-
+      Concurrency hazards are semantic pass 3; judging whether two writers can interleave needs
+      the contracts and protocols context.
+carry_forward_closures: []
+open_question_closures: []
+post_pipeline: []
+decisions:
+  - >-
+    tests/ (52 files, 639 tests) was inventoried by name and count only in the architecture
+    phase; reading test bodies is deferred to the defect scans, where they are evidence for or
+    against a finding rather than structure.
+  - >-
+    Claims about Pi SDK and MCP SDK behavior (ctx invalidation after a session swap, session
+    continuation, structuredContent preference) are carried as external-behavior claims sourced
+    from the code's own comments; no SDK source was read.
+proposed_conventions: []
+closeout_summary: >-
+  Mapped 19 core modules, 22 MCP tools, 20 Pi commands; stable base is the hand-rolled YAML
+  parser; two boundary breaches and four gaps routed (protocols, contracts, semantic scan,
+  porting).
+closeout_content: |-
+  # Closeout — architecture
+
+  ## Summary
+
+  - Primary output: `findings/architecture/architecture-map.md` (PASS, 6/6 criteria).
+  - Secondary outputs written with a dated 2026-09-11 section: public-surfaces,
+    runtime-lifecycle, state-and-storage, build-and-deploy, config-model.
+  - System shape: a filesystem-backed pipeline state machine in `core/` (19 modules, no
+    internal cycles, only Node built-ins) wrapped by an MCP server (22 tools, stateless per
+    call) and a Pi extension (20 commands, in-process sub-agents, bash blocked, writes confined
+    to `.codecarto/`). Library and Broad-Side are adjacent subsystems on the same core.
+  - Load-bearing base: `core/yaml.ts`, a hand-rolled parser every persisted YAML file passes
+    through; `core/status.ts` + `core/workspace.ts` for the lock/atomic-write discipline;
+    `core/pipeline.ts` + `core/completion.ts` for the validation and completion gates.
+
+  ## Routed
+
+  - arch-CF1 → protocols (schemas by name only).
+  - arch-CF2 → porting (mcp-server imports from extensions/; barrel bypassed).
+  - arch-CF3 → contracts (per-command contracts).
+  - arch-CF4 → defect-scan-semantic (unlocked usage-log read-modify-write).
+
+  ## Coverage
+
+  - Read in full: core/, mcp-server/, extensions/codecarto/, scripts/, .github/workflows/,
+    package/tsconfig/server.json.
+  - Not read: tests/ bodies, docs/ beyond README and self-review-prompt, CHANGELOG, MANUAL,
+    ROADMAP, CONTRIBUTING, any SDK source.
+
+  ## Proposed Conventions
+
+  - None this phase.

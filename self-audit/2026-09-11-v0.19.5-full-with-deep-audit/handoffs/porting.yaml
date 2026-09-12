@@ -1,0 +1,94 @@
+schema_version: 1
+phase_id: porting
+owner_notes:
+  - >-
+    The bundle reconciles 78 defect findings (40 mechanical, 38 semantic) into 11 high roots,
+    28 medium rows, and 7 low groups, each with a disposition and a design consequence;
+    three overlaps merged (mech 1.3/6.2/6.3 = sem 5.13/5.14/5.15) and the usage-log root
+    (mech 2.3 + sem 3.2/3.3) unified. No disposition is "verify at runtime": neither open
+    question in this run underlies a defect claim.
+  - >-
+    The port's kernel is six concept modules (workspace store, document dialect, pipeline
+    engine, artifact validator, handoff/completion gate, prompt assembler) that the tests
+    already drive without either shell; the shells are adapters. The one shared-layer gap is a
+    state-store primitive (owned lock + unique-suffix atomic write) that eight writers
+    hand-roll today.
+  - >-
+    Preserve byte-for-byte: status/handoff/amendment schemas, template paths, the three
+    line formats, the library format, Broad-Side state. May re-encode with tests re-pinned:
+    usage log, dashboard island, catalog cache, narration cache, checkpoints. The YAML dialect
+    must stay a read-superset and the emitter must quote whatever the reader would coerce.
+open_questions: []
+carry_forward:
+  - id: port-CF1
+    kind: defer-to-phase
+    target_phase: reimplementation-spec
+    description: >-
+      Strategic assumptions to classify before writing the spec (kernel-first guide): platform
+      (POSIX rename/O_EXCL assumed today), architecture inspiration (shape-only), stack lock
+      (none; this run's instructions take the language-agnostic default), build order
+      (kernel-first with a fake-LLM acceptance harness). Record the variant in the spec front
+      matter and validation block.
+    deferred_reason: >-
+      The Strategic Alignment Hook is the spec phase's own rubric; the run instructions
+      pre-empt the interactive question, so the decision is recorded rather than asked.
+  - id: port-CF2
+    kind: defer-to-phase
+    target_phase: reimplementation-spec
+    description: >-
+      Ring assignment: kernel = workspace store + dialect + engine + validator + gate + prompt
+      assembler; ports = document store, lock, clock, LLM-facing text sink, subprocess;
+      adapters = MCP shell, Pi shell, git, OpenRouter, dashboard I/O; extensions = library,
+      synthesis, Broad-Side, steering, narrator; delivery = MCP stdio, Pi TUI, headless,
+      drop-in. Each high defect (D-H1..H11) maps to a named acceptance test in the harness.
+    deferred_reason: Ring assignment and milestone order are the spec's deliverable.
+carry_forward_closures:
+  - arch-CF2
+  - contracts-CF2
+  - proto-CF2
+  - sem-CF1
+open_question_closures: []
+post_pipeline: []
+decisions:
+  - >-
+    The Defect Synthesis is longer than the template's "under one screen" guidance: every
+    high and medium root is listed individually because the run's stated deliverable is the
+    reconciled defect list with dispositions, and the reimplementation spec must design
+    around each; lows are grouped by root to keep the section readable.
+  - >-
+    Surface divergences (contracts-CF2) are dispositioned as adapter policy ("can this surface
+    ask a human?") for the deliberate ones and as defects (D-M24 and the library-init lows)
+    for the accidental ones, rather than mandating parity.
+proposed_conventions: []
+closeout_summary: >-
+  Bundle synthesized: kernel of six concept modules plus adapter shells; 78 defects reconciled
+  into 11 high, 28 medium, 7 low groups with dispositions; byte-compatibility surface fixed;
+  four routed items closed; strategic assumptions and rings routed to the spec.
+closeout_content: |-
+  # Closeout — porting
+
+  ## Summary
+
+  - Primary output: `findings/porting/reverse-engineering-bundle.md` (PASS, 7/7).
+  - Source Index with deep-read triggers; concept-level layer map with the four composition
+    decisions; feature contract table with porting priority and defect references; protocol
+    and state notes naming what is preserved byte-for-byte and what may be re-encoded;
+    consolidated hazards; the reconciled Defect Synthesis; facts vs inference; glossary.
+  - Secondary outputs appended: public-surfaces (surface priority), runtime-lifecycle
+    (kernel loop), state-and-storage (byte-compatibility), build-and-deploy (packaging
+    consequences), config-model (config decisions).
+
+  ## Routed and closed
+
+  - Closed arch-CF2, contracts-CF2, proto-CF2, sem-CF1.
+  - port-CF1 → reimplementation-spec (strategic assumptions to classify).
+  - port-CF2 → reimplementation-spec (rings and named acceptance tests per high defect).
+
+  ## Coverage
+
+  - All upstream reports and catalogs synthesized; cited source lines re-checked; no new
+    source reading; drop-in and synthesis behaviors remain PARTIAL as inherited.
+
+  ## Proposed Conventions
+
+  - None this phase.

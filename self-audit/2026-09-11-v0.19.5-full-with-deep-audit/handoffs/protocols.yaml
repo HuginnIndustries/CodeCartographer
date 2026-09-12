@@ -1,0 +1,114 @@
+schema_version: 1
+phase_id: protocols
+owner_notes:
+  - >-
+    Nine boundaries, 22 catalog entries. The framework's real wire protocol is markdown: the
+    validation block (last "## Validation" heading, any 4-cell row, an exact Overall literal),
+    the coverage ledger (five fixed bullet labels, sub-bullets folded with "; "), and the
+    findings tables (header must contain "evidence level" and "action") are the contract the
+    host LLM must satisfy, and all three are substring/regex parses.
+  - >-
+    Six independent schema-version axes exist (status, handoff/amendment, scaffold version,
+    library marker+index, broadside state and catalog cache, usage log); only the first two
+    refuse anything, the scaffold version gates two rules by threshold, the rest are written and
+    never read. The catalog cache is written as schema 2 with no reader check.
+  - >-
+    Completion's transaction writes the closeout, THREAD_LOG line, DECISIONS rows, and
+    CONVENTIONS proposals inside the updater, before the status.yaml temp+rename
+    (completion.ts:502 vs workspace.ts:365-370); a failure between them leaves the log asserting
+    a completion the status does not record. Routed to the semantic pass with five other
+    protocol drifts.
+open_questions:
+  - id: q-openrouter-batch-envelope
+    kind: needs-fixture-capture
+    description: >-
+      The OpenRouter batch submit (HTTP 202 {id, status}) and poll ({status, request_counts,
+      results[].response.body.choices[0].message.content, usage.cost, error}) shapes in
+      protocols-and-state.md E19 are asserted only by core/broadside.ts's parser and by test
+      fakes that mirror it; no captured live exchange is checked in.
+    deferred_reason: >-
+      Needs one recorded submit + poll exchange (key redacted) saved as a fixture so the parser
+      is tested against the peer rather than against itself.
+carry_forward:
+  - id: proto-CF1
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: >-
+      Pass-5 candidates from the protocols phase: (a) completion writes closeout/THREAD_LOG/
+      DECISIONS/CONVENTIONS before the status rename with no rollback (SM3 steps 5-6);
+      (b) the terminal batch-status set is three literal arrays (core/broadside.ts:2704,2847,
+      2966) beside BROADSIDE_DEAD_BATCH_STATUSES (:2091); (c) post_pipeline.status "resolved"
+      is typed (types.ts:40) and filtered on (dashboard, status) but never written
+      (amendment.ts:170 removes entries); (d) model-catalog.json is written with
+      schema_version 2 (broadside.ts:1935,2026) and read without a version check (:1816-1826);
+      (e) docs/library-format.md:285-289 says folded scalars are unreadable, contradicted by
+      core/yaml.ts and tests/yaml.test.mjs:90-152; (f) generated INDEX.md (library.ts:1072)
+      tells readers to run "codecarto library-reindex", which exists on no surface.
+    deferred_reason: >-
+      Severity and action for documented-contract and state-machine drift are the semantic
+      pass's pass-5 rubric.
+  - id: proto-CF2
+    kind: defer-to-phase
+    target_phase: porting
+    description: >-
+      The port's compatibility surface is the set of grammars and version axes in
+      protocols-and-state.md: three markdown grammars (E3-E5), the YAML subset and its emitter
+      bytes (E22, pinned by tests/yaml.test.mjs), the status/handoff/amendment schemas (E6-E8),
+      the THREAD_LOG/DECISIONS/CONVENTIONS line formats (E9-E11), the library format (E18, ABI
+      per docs/library-format.md), Broad-Side state (E20), and six schema-version axes of which
+      two gate.
+    deferred_reason: >-
+      Which of these a port preserves byte-for-byte versus re-encodes is the porting-synthesis
+      judgment the protocols SKILL explicitly defers ("preserve the meaning, then decide how the
+      target encodes it").
+carry_forward_closures:
+  - arch-CF1
+open_question_closures: []
+post_pipeline: []
+decisions:
+  - >-
+    Wire and persisted shapes are recorded as field tables and grammar sketches keyed to the
+    parser lines that enforce them, not as formal JSON Schema; the parsers are the schema in
+    this codebase and a schema document that outran them would be a second source of truth.
+  - >-
+    OpenRouter and Pi SDK shapes are recorded from this repository's own parsing code and test
+    fakes and marked external throughout; the one runtime-checkable gap is registered as a
+    fixture-capture question rather than a runtime-test question, because a saved exchange is
+    what would settle it.
+proposed_conventions: []
+closeout_summary: >-
+  22 protocol entries across 9 boundaries; 7 state machines; the LLM-facing contract is three
+  markdown grammars plus a YAML subset; six version axes of which two gate; arch-CF1 closed;
+  six protocol drifts routed to the semantic pass, the compatibility surface to porting.
+closeout_content: |-
+  # Closeout — protocols
+
+  ## Summary
+
+  - Primary output: `findings/protocols/protocols-and-state.md` (PASS, 6/6).
+  - Event catalog E1-E22 over nine boundaries (host↔MCP, framework↔LLM text, LLM↔state
+    files, framework-owned state, Pi orchestrator↔child, library, OpenRouter, git, config).
+  - State machines SM1-SM7: phase lifecycle, pipeline cursor, the completion transaction and
+    its write ordering, the question/carry-forward lifecycle including the dead
+    `resolved` value, Pi activity, Broad-Side run/batch/post-pass, library publish.
+  - Persistent schema notes for 12 stores and the six schema-version axes.
+  - Sixteen compatibility hazards; the two high ones are markdown-as-protocol and the
+    asymmetric YAML round trip.
+  - Secondary outputs appended: public-surfaces (structuredContent keys per tool),
+    config-model (config propagation as a protocol), state-and-storage (version axes).
+
+  ## Routed and closed
+
+  - Closed arch-CF1.
+  - proto-CF1 → defect-scan-semantic (six protocol/state-machine drifts).
+  - proto-CF2 → porting (the compatibility surface).
+  - q-openrouter-batch-envelope registered (needs-fixture-capture).
+
+  ## Coverage
+
+  - All parsers/serializers read; docs/library-format.md in full; real samples from this
+    run used as writer-side evidence. Peer shapes (OpenRouter, Pi SDK) remain external.
+
+  ## Proposed Conventions
+
+  - None this phase.

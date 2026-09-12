@@ -1,0 +1,90 @@
+schema_version: 1
+phase_id: defect-scan-semantic
+owner_notes:
+  - >-
+    38 findings (0 critical, 4 high, 15 medium, 19 low) across passes 3, 4, 5. Four of the
+    highs were reproduced by runtime probes rather than argued from reading: the symlink
+    write-guard bypass for not-yet-existing files, the lock release that deletes another
+    holder's lock after a stale break, the pid+millisecond temp-name collision that silently
+    loses concurrent usage appends and a concurrent publish, and a stuck DAG reported as
+    "pipeline complete" by completion, status, next, the skill gate, and amendments.
+  - >-
+    All nine routed items closed: arch-CF4, mech-CF1..CF6, contracts-CF1, proto-CF1. mech-CF5
+    (collect retargeting) did not reproduce and is recorded as a design limitation; mech-CF4
+    took a settled action because its question was closed on the SDK source in contracts.
+  - >-
+    Pass 4 found no XSS or injection path in the dashboard; the real trust-boundary issues are
+    the LLM-driven write sandbox (symlink fallback), an unvalidated skill name that reaches a
+    path join, and earlier-phase findings text spliced into later prompts without delimiters.
+open_questions: []
+carry_forward:
+  - id: sem-CF1
+    kind: defer-to-phase
+    target_phase: porting
+    description: >-
+      Cross-cutting root shared by eight writers (semantic 3.2): every atomic write names its
+      temp file <target>.<pid>.<Date.now()>.tmp (core/usage.ts:88, core/library.ts:186,439,693,
+      1208, core/workspace.ts:368,452, dashboard-writer.ts:58, core/broadside.ts:1691) and the
+      status lock (semantic 3.1) has no ownership token. A port should adopt one atomic-write
+      primitive with a unique suffix and an owned lock rather than re-port eight copies.
+    deferred_reason: >-
+      Consolidating the primitive is a porting-design decision; the defects themselves are
+      classified here.
+carry_forward_closures:
+  - arch-CF4
+  - mech-CF1
+  - mech-CF2
+  - mech-CF3
+  - mech-CF4
+  - mech-CF5
+  - mech-CF6
+  - contracts-CF1
+  - proto-CF1
+open_question_closures: []
+post_pipeline: []
+decisions:
+  - >-
+    Routed items were closed on runtime probes wherever a probe was cheap (P1-P6), per
+    convention C01; the probe script lives in the session scratchpad, and each probe's inputs
+    and outputs are transcribed into the report's Runtime probes section so the evidence
+    survives the session.
+  - >-
+    Pass 5 restates three mechanical findings (switch_pipeline cursor, max_cost default,
+    wait_seconds) as documented-versus-actual violations with the spec references the
+    mechanical rows lacked; they are cross-referenced, not double-counted in the top findings.
+proposed_conventions: []
+closeout_summary: >-
+  38 semantic findings (4 high, all probe-confirmed): symlink write-guard bypass, lock release
+  steals the next holder's lock, pid+ms temp-name collisions lose concurrent writes, stuck DAG
+  reported complete; all nine routed items closed; one root (atomic-write primitive) routed to
+  porting.
+closeout_content: |-
+  # Closeout — defect-scan-semantic
+
+  ## Summary
+
+  - Primary output: `findings/defect-scan-semantic/semantic-defects.md` (PASS, 8/8).
+  - 38 findings: pass 3 (12), pass 4 (9), pass 5 (17). Highs: symlink fallback in the write
+    guard (P1), unconditional lock release (P2), temp-name collision across every atomic
+    writer (P3/P4), "no eligible phase" treated as "complete" (P6). Mediums include child
+    sessions never disposed, completion artifacts written before the status rename, skill-name
+    path traversal (P5), unvalidated publish containment root, prompt splicing of upstream
+    findings text, Broad-Side uploads without redaction, and eight documented-versus-actual
+    contract drifts.
+  - Six runtime probes recorded in the report.
+
+  ## Routed and closed
+
+  - Closed arch-CF4, mech-CF1, mech-CF2, mech-CF3, mech-CF4, mech-CF5, mech-CF6,
+    contracts-CF1, proto-CF1.
+  - sem-CF1 → porting (one atomic-write/lock primitive for the port).
+
+  ## Coverage
+
+  - Every lock, temp-write, subprocess, fetch, and path-joining site in core and both
+    wrappers; SDK dispose() read; pass-5 spec documents as cited. Skipped: dashboard inline
+    script beyond escaping, lens prompt wording, dependency CVEs, synthesis templates.
+
+  ## Proposed Conventions
+
+  - None this phase.
