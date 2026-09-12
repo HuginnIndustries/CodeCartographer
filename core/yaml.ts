@@ -78,6 +78,55 @@ function findKeySeparator(text: string): number {
 	return -1;
 }
 
+/**
+ * Whether a line's content is a mapping entry in YAML's sense: a key followed
+ * by `:` and then a space or the end of the line. `findKeySeparator` alone
+ * finds any bare colon, which would read a wrapped value such as
+ * `see https://example.com` as a key.
+ */
+function looksLikeMappingEntry(text: string): boolean {
+	const separator = findKeySeparator(text);
+	if (separator === -1) return false;
+	const next = text[separator + 1];
+	return next === undefined || next === " " || next === "\t";
+}
+
+function looksLikeSequenceItem(text: string): boolean {
+	return text.startsWith("- ") || text === "-";
+}
+
+/**
+ * Whether the scalar text is plain: unquoted, and not a block indicator. Only
+ * a plain scalar can continue onto more-indented lines.
+ */
+function isPlainScalarText(text: string): boolean {
+	const trimmed = text.trim();
+	if (trimmed === "") return false;
+	if (trimmed.startsWith('"') || trimmed.startsWith("'")) return false;
+	if (trimmed.startsWith("[") || trimmed.startsWith("{")) return false;
+	return true;
+}
+
+/**
+ * Fold a plain scalar's first line with its continuation lines: a single line
+ * break becomes a space and a run of k blank lines becomes k newlines, as for
+ * a folded block scalar.
+ */
+function foldPlainScalar(first: string, continuation: readonly string[]): string {
+	let result = first;
+	let pendingBreaks = 0;
+	for (const line of continuation) {
+		if (line === "") {
+			pendingBreaks++;
+			continue;
+		}
+		result += pendingBreaks > 0 ? "\n".repeat(pendingBreaks) : " ";
+		pendingBreaks = 0;
+		result += line;
+	}
+	return result;
+}
+
 export function parseYamlScalar(rawValue: string): unknown {
 	const trimmed = stripYamlComment(rawValue).trim();
 	if (trimmed === "") return "";
@@ -180,8 +229,67 @@ export function parseSimpleYaml(raw: string): unknown {
 	const lines = raw.split(/\r?\n/);
 	let index = 0;
 
+	/**
+	 * Every parse error names the line it failed on, quotes it, and says which
+	 * construct was expected: a model writing a handoff has to be able to tell
+	 * a parser limitation from its own mistake (#246).
+	 */
+	const fail = (at: number, message: string): never => {
+		throw new Error(`YAML line ${at + 1}: ${message} — "${(lines[at] ?? "").trim()}"`);
+	};
+
+	// YAML indents with spaces only. A tab was counted as two columns and then
+	// sliced as one character, so `\tkey: v` parsed as the key "" — garbage
+	// rather than an error.
+	for (let at = 0; at < lines.length; at++) {
+		if (/^ *\t/.test(lines[at] ?? "") && !isBlankOrComment(lines[at] ?? "")) {
+			fail(at, "tabs are not allowed in YAML indentation; use spaces");
+		}
+	}
+
 	const skipBlank = (): void => {
 		while (index < lines.length && isBlankOrComment(lines[index] ?? "")) index++;
+	};
+
+	/**
+	 * Consume the continuation lines of a plain scalar that began on the line
+	 * just consumed: lines indented deeper than `baseIndent` that are neither
+	 * a mapping entry nor a sequence item nor a comment. A wrapped
+	 * `closeout_summary:` is exactly this shape, and it used to fail the
+	 * indentation check with a message that blamed whitespace (#246, probe D).
+	 * Blank lines inside the run are kept (they fold to newlines); trailing
+	 * blank lines are left for the caller.
+	 */
+	const collectPlainContinuation = (baseIndent: number): string[] => {
+		const collected: string[] = [];
+		let pendingBlank = 0;
+		let cursor = index;
+		while (cursor < lines.length) {
+			const candidate = lines[cursor] ?? "";
+			if (candidate.trim() === "") {
+				pendingBlank++;
+				cursor++;
+				continue;
+			}
+			const candidateIndent = countIndent(candidate);
+			if (candidateIndent <= baseIndent) break;
+			const text = candidate.slice(candidateIndent);
+			if (text.startsWith("#") || looksLikeSequenceItem(text) || looksLikeMappingEntry(text)) break;
+			for (let i = 0; i < pendingBlank; i++) collected.push("");
+			pendingBlank = 0;
+			collected.push(stripYamlComment(text).trim());
+			cursor++;
+			index = cursor;
+		}
+		return collected;
+	};
+
+	/** A scalar value read from `rawValue`, folded with any continuation lines. */
+	const parseScalarWithContinuation = (rawValue: string, baseIndent: number): unknown => {
+		if (!isPlainScalarText(rawValue)) return parseYamlScalar(rawValue);
+		const continuation = collectPlainContinuation(baseIndent);
+		if (continuation.length === 0) return parseYamlScalar(rawValue);
+		return foldPlainScalar(stripYamlComment(rawValue).trim(), continuation);
 	};
 
 	/**
@@ -244,24 +352,28 @@ export function parseSimpleYaml(raw: string): unknown {
 			const lineIndent = countIndent(line);
 			if (lineIndent < indent) break;
 			if (lineIndent > indent) {
-				throw new Error(`Invalid YAML indentation near: ${line.trim()}`);
+				fail(index, `this line is indented ${lineIndent} columns but the mapping it belongs to starts at column ${indent}; a sibling key must align with the first key, and a wrapped value must not contain ": "`);
 			}
 
 			const trimmed = line.slice(indent);
-			if (trimmed.startsWith("- ") || trimmed === "-") break;
+			if (looksLikeSequenceItem(trimmed)) {
+				// A list that is a key's value is consumed by that key's branch
+				// below before the loop ever sees it, so a dash here has no key.
+				fail(index, "a sequence item where a mapping entry was expected; a list that belongs to the key above must be indented under it, or sit at that key's own column");
+			}
 
 			const separator = findKeySeparator(trimmed);
 			if (separator === -1) {
-				throw new Error(`Invalid YAML mapping entry: ${trimmed}`);
+				fail(index, 'expected a mapping entry ("key: value")');
 			}
 
 			const key = trimmed.slice(0, separator).trim();
 			const rawValue = trimmed.slice(separator + 1).trim();
-			index++;
 			if (seen.has(key)) {
-				throw new Error(`Duplicate YAML key: ${key} near line: ${line.trim()}`);
+				fail(index, `Duplicate YAML key: ${key}`);
 			}
 			seen.add(key);
+			index++;
 
 			const blockHeader = parseBlockScalarHeader(rawValue);
 			if (blockHeader) {
@@ -270,13 +382,32 @@ export function parseSimpleYaml(raw: string): unknown {
 			}
 
 			if (rawValue !== "") {
-				assign(key, parseYamlScalar(rawValue));
+				assign(key, parseScalarWithContinuation(rawValue, indent));
 				continue;
 			}
 
 			skipBlank();
-			if (index < lines.length && countIndent(lines[index] ?? "") > indent) {
-				assign(key, parseBlock(countIndent(lines[index] ?? "")));
+			if (index >= lines.length) {
+				assign(key, null);
+				continue;
+			}
+			const nextLine = lines[index] ?? "";
+			const nextIndent = countIndent(nextLine);
+			if (nextIndent > indent) {
+				const nextText = nextLine.slice(nextIndent);
+				if (looksLikeMappingEntry(nextText) || looksLikeSequenceItem(nextText)) {
+					assign(key, parseBlock(nextIndent));
+				} else {
+					// A scalar that starts on the line after its key
+					// (`summary:` / `  The phase mapped…`), wrapped or not.
+					index++;
+					assign(key, parseScalarWithContinuation(nextText, indent));
+				}
+			} else if (nextIndent === indent && looksLikeSequenceItem(nextLine.slice(nextIndent))) {
+				// YAML lets a block sequence sit at the same indent as the key it
+				// belongs to (`items:` / `- a`). This read as `items: null` and
+				// then, at the top level, dropped every line after it (#246).
+				assign(key, parseSequence(indent));
 			} else {
 				assign(key, null);
 			}
@@ -308,8 +439,16 @@ export function parseSimpleYaml(raw: string): unknown {
 
 			if (rawItem === "") {
 				skipBlank();
-				if (index < lines.length && countIndent(lines[index] ?? "") > indent) {
-					result.push(parseBlock(countIndent(lines[index] ?? "")));
+				const nextLine = lines[index] ?? "";
+				const nextIndent = countIndent(nextLine);
+				if (index < lines.length && nextIndent > indent) {
+					const nextText = nextLine.slice(nextIndent);
+					if (looksLikeMappingEntry(nextText) || looksLikeSequenceItem(nextText)) {
+						result.push(parseBlock(nextIndent));
+					} else {
+						index++;
+						result.push(parseScalarWithContinuation(nextText, indent));
+					}
 				} else {
 					result.push(null);
 				}
@@ -322,12 +461,22 @@ export function parseSimpleYaml(raw: string): unknown {
 				continue;
 			}
 
+			if (looksLikeSequenceItem(rawItem)) {
+				// A sequence item that is itself a sequence (`- - a`). Rewrite the
+				// line as the inner item at its own column and parse a block there,
+				// so the inner sequence's later items (`    - b`) find their first.
+				index--;
+				lines[index] = `${" ".repeat(itemIndent)}${afterDash.trimStart()}`;
+				result.push(parseBlock(itemIndent));
+				continue;
+			}
+
 			const separator = findKeySeparator(rawItem);
 			if (separator !== -1) {
 				const key = rawItem.slice(0, separator).trim();
 				const rawValue = rawItem.slice(separator + 1).trim();
 				const item: Record<string, unknown> = {};
-				item[key] = rawValue === "" ? null : parseYamlScalar(rawValue);
+				item[key] = rawValue === "" ? null : parseScalarWithContinuation(rawValue, indent);
 
 				skipBlank();
 				if (rawValue === "" && index < lines.length && countIndent(lines[index] ?? "") > indent + 1) {
@@ -341,7 +490,7 @@ export function parseSimpleYaml(raw: string): unknown {
 				continue;
 			}
 
-			result.push(parseYamlScalar(rawItem));
+			result.push(parseScalarWithContinuation(rawItem, indent));
 		}
 
 		return result;
@@ -349,7 +498,15 @@ export function parseSimpleYaml(raw: string): unknown {
 
 	skipBlank();
 	if (index >= lines.length) return {};
-	return parseBlock(countIndent(lines[index] ?? ""));
+	const document = parseBlock(countIndent(lines[index] ?? ""));
+	// A top-level block that ends before the input does used to leave the rest
+	// unread and unreported — a mapping followed by a stray `- item` silently
+	// lost everything from that line on (#246).
+	skipBlank();
+	if (index < lines.length) {
+		fail(index, "unexpected content after the document's top-level block ended (is this line indented like its neighbours?)");
+	}
+	return document;
 }
 
 export function formatYamlScalar(value: unknown): string {

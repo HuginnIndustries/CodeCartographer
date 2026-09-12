@@ -282,13 +282,17 @@ URLs, timestamps and any value containing a space come out quoted.
 Empty values are `""`, `[]`, `{}`; `null`, integers and booleans are
 written bare.
 
-**Read:** everything above, plus single-quoted strings, `|` / `|-`
-literal blocks, and `#` comments. **Not read:** `>` folded scalars, flow
-sequences such as `[a, b]`, flow mappings, anchors and aliases, and
-multi-document streams. A folded scalar makes the whole file fail to
-parse (reindex then skips the entry; a direct read throws); a flow
-sequence parses as a string and is dropped where an array is expected,
-so `tags: [kafka, redis]` silently becomes `tags: []`.
+**Read:** everything above, plus single-quoted strings, `|` and `>`
+block scalars with any chomping indicator, plain scalars that wrap onto
+more-indented lines or start on the line after their key (folded the
+same way), a list at the same column as the key it belongs to, sequences
+of sequences, a sequence item's keys aligned at any column past the
+dash, and `#` comments. **Not read:** flow sequences such as `[a, b]`,
+flow mappings, anchors and aliases, tabs as indentation (an error), and
+multi-document streams. A flow sequence parses as a string and is
+dropped where an array is expected, so `tags: [kafka, redis]` silently
+becomes `tags: []`. A parse error names the line, quotes it, and says
+which construct was expected.
 
 ### Required fields
 
