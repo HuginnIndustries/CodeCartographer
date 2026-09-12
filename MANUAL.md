@@ -136,17 +136,18 @@ On Pi or MCP there is also a packaged *agent* guide — the drive loop, the hand
 Each phase follows the same pattern:
 
 1. The LLM reads the source code through the lens of the current phase.
-2. It produces a structured output file in `.codecarto/findings/<phase>/`.
-3. It runs validation against the pipeline's completion criteria.
-4. It updates `.codecarto/workflow/status.yaml` to mark the phase complete and advance to the next one.
-5. It appends a summary entry to `.codecarto/THREAD_LOG.md`.
+2. It produces a structured output file in `.codecarto/findings/<phase>/`, ending with a `## Validation` table where it marks each completion criterion PASS, PARTIAL, or FAIL with evidence.
+3. It writes a phase handoff at `.codecarto/scratch/handoffs/<phase>.yaml` — owner notes, open questions, anything routed to a later phase.
+4. **Completion** applies that handoff: it re-reads the validation table, marks the phase complete in `.codecarto/workflow/status.yaml`, writes the closeout, and appends the `THREAD_LOG.md` entry, all under a lock.
+
+Step 4 is where the surfaces differ. On Pi it is `/codecarto-complete`; on MCP it is `codecarto_complete`. **In drop-in mode there is no completion executable** — nothing runs code — so you perform step 4 yourself, by hand, after checking the handoff and the validation table: mark the phase `complete` in `status.yaml`, set `current_phase` and `next_actions` to the next phase, and add a line to `THREAD_LOG.md`. `status.yaml`, the closeouts, and `THREAD_LOG.md` are framework-owned on the executable surfaces and the LLM must never edit them; in drop-in mode you are the framework, and you are the only one who should.
 
 You generally don't need to intervene during a phase. The LLM knows what to read, what to produce, and where to put it.
 
 
 ## Step 5: Between Phases
 
-When a phase finishes, the LLM will have updated `status.yaml` with the next phase. You have two options:
+Once step 4 has run — by the framework on Pi or MCP, by you in drop-in mode — `status.yaml` names the next phase. You have two options:
 
 **Same session (if context allows):** Tell the LLM to continue:
 ```
@@ -232,11 +233,7 @@ If a session ran out of context mid-phase, start a new session. The LLM will rea
 **Parallel phases:**
 In the full pipeline, `contracts` and `protocols` can run in parallel after `architecture` completes — they don't depend on each other. If you have two LLM sessions available, you can run both simultaneously.
 
-**Important:** When running parallel phases, each session will update `status.yaml` on completion. The second session to finish will overwrite the first session's changes. To avoid losing progress, use one of these strategies:
-
-- **Sequential status updates (simplest):** Let both phases run in parallel, but have only one session update `status.yaml`. After both finish, manually update `status.yaml` to mark both phases complete.
-- **Merge after:** Let both sessions update `status.yaml`. After both finish, check the file and manually restore any overwritten phase status.
-- **One at a time:** Run phases sequentially if you want zero risk of lost status updates.
+**Important:** On Pi and MCP, completion updates `status.yaml` under a lock, so two phases finishing close together do not lose each other's state — run the sessions in parallel and complete each as it finishes. In drop-in mode nothing holds a lock and the sessions must not touch `status.yaml` at all: let both write their outputs and handoffs, then mark both phases complete yourself, once, after both have finished.
 
 **Checking progress:**
 Read `.codecarto/workflow/status.yaml` at any time. The `phases` section shows which are complete, which are pending, and what open questions remain.
@@ -244,12 +241,8 @@ Read `.codecarto/workflow/status.yaml` at any time. The `phases` section shows w
 
 ## Troubleshooting
 
-**The LLM didn't advance `current_phase` in status.yaml.**
-Tell the LLM:
-```
-Update .codecarto/workflow/status.yaml: set the status of [phase] to complete,
-advance current_phase to the next pending phase, and update next_actions.
-```
+**The phase finished but `status.yaml` still shows it as pending.**
+On Pi run `/codecarto-complete`; on MCP call `codecarto_complete`. Completion is a separate step from the phase, and it refuses a FAIL or missing output — read what it says. In drop-in mode this step is yours: check the validation table and the handoff, then edit `status.yaml` as described in Step 4. Do not ask the LLM to edit `status.yaml`; on the executable surfaces that file is framework-owned and the next completion would overwrite whatever it wrote.
 
 **The LLM wrote freeform text instead of the validation table.**
 Tell it:
@@ -269,7 +262,7 @@ to find the current phase, then follow the SKILL.md for that phase only.
 Your environment doesn't support file access. See the Environment Setup section.
 
 **I want to re-run a phase.**
-Reset the phase's status in `status.yaml` back to `pending`, set `current_phase` to that phase, delete the existing output file in `findings/<phase>/`, and start a new LLM session.
+On Pi run `/codecarto-phase <phase>` (or `codecarto_phase` on MCP) to re-run it in place — the phase re-reads its existing output and continues; delete the output first for a clean rerun. Completing it again re-applies the handoff idempotently. In drop-in mode, reset the phase's status in `status.yaml` to `pending`, set `current_phase` to it, delete the output in `findings/<phase>/`, and start a new LLM session.
 
 **The status widget (or `codecarto_status`) says the scaffold is stale.**
 Your `.codecarto/` was copied from an older release, so its GUIDE.md, templates, and pipelines may contradict the running framework. Run `/codecarto-refresh-scaffold` (Pi — it lists the exact files it will overwrite and asks first) or `codecarto_refresh_scaffold` (MCP). Only framework-owned files are rewritten; `status.yaml`, `config.yaml`, findings outputs, BACKLOG/THREAD_LOG/CONVENTIONS/DECISIONS, `scratch/`, `inputs/`, `closeouts/`, and `broadside/` are never touched. In drop-in mode, copy the packaged `.codecarto/` over yours by hand, skipping those same paths.
