@@ -76,6 +76,7 @@
     "typescript": "^5.9.3"
   },
   "overrides": {
-    "undici": "^8.10.0"
+    "undici": "^8.10.0",
+    "hono": "^4.13.5"
   }
 }
