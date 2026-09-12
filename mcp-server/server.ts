@@ -53,6 +53,7 @@ import {
 	type GenerationReasoning,
 	type GenerationSurface,
 	getLens,
+	describeDanglingCarryForward,
 	getNextEligiblePhase,
 	getPipelineLabel,
 	getWorkspaceState,
@@ -334,12 +335,16 @@ export async function handleSwitchPipeline(args: { cwd: string; pipeline: string
 	if (result.carried.length > 0) lines.push(`Phases preserved (completed): ${result.carried.join(", ")}`);
 	if (result.newPhases.length > 0) lines.push(`New phases: ${result.newPhases.join(", ")}`);
 	if (result.dropped.length > 0) lines.push(`Phases not in new pipeline: ${result.dropped.join(", ")} (findings remain on disk)`);
+	lines.push(...describeDanglingCarryForward(result.dangling));
+	lines.push(`Current phase: ${result.state.status.current_phase}`);
 
 	return textResult(lines.join("\n"), {
 		pipeline: getPipelineLabel(pipelineChoice),
+		currentPhase: result.state.status.current_phase,
 		carried: result.carried,
 		newPhases: result.newPhases,
 		dropped: result.dropped,
+		dangling: result.dangling,
 	});
 }
 

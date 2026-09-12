@@ -247,7 +247,7 @@ The default is a 7-phase run that splits the defect scan into a mechanical early
 | **Architecture only** | 1 | Quick structural overview |
 | **Synthesis** | 4 | Turn a product vision and confirmed library specifications into a provenance-backed implementation plan |
 
-Switch the active pipeline with `/codecarto-switch-pipeline <variant>` (Pi) or `codecarto_switch_pipeline` (MCP). This rewrites `status.yaml` in-place without deleting findings, handoffs, usage data, or closeouts. Phases that exist in both the old and new pipelines preserve their completion status.
+Switch the active pipeline with `/codecarto-switch-pipeline <variant>` (Pi) or `codecarto_switch_pipeline` (MCP). This rewrites `status.yaml` in-place without deleting findings, handoffs, usage data, or closeouts. Phases that exist in both the old and new pipelines preserve their completion status, and the cursor lands on the next phase the new pipeline still needs. A carry-forward whose target phase the new pipeline does not run moves to `post_pipeline` (the switch names each one), where an amendment can close it.
 
 **On disk:**
 

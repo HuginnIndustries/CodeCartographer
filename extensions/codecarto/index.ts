@@ -31,6 +31,7 @@ import {
 	deriveSlug,
 	discoverLibrary,
 	type EntryGeneration,
+	describeDanglingCarryForward,
 	getNextEligiblePhase,
 	getPipelineLabel,
 	getWorkspaceState,
@@ -641,6 +642,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				if (result.carried.length > 0) lines.push(`Phases preserved (completed): ${result.carried.join(", ")}`);
 				if (result.newPhases.length > 0) lines.push(`New phases: ${result.newPhases.join(", ")}`);
 				if (result.dropped.length > 0) lines.push(`Phases not in new pipeline: ${result.dropped.join(", ")} (findings remain on disk)`);
+				lines.push(...describeDanglingCarryForward(result.dangling));
 
 				lastFeedbackLines = lines;
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);

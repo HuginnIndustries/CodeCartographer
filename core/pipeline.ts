@@ -10,6 +10,7 @@ import type {
 } from "./types.ts";
 import { pathExists } from "./utils.ts";
 import { crossCheckFindings, findingsPairingGateActive } from "./findings.ts";
+import { beginPhaseAction, buildTerminalNextActions } from "./status.ts";
 
 export const PIPELINE_ALIASES: Record<string, string> = {
 	"full-with-audit": "workflow/pipeline-full-with-audit.yaml",
@@ -46,6 +47,19 @@ export function getNextEligiblePhase(state: WorkspaceState): PipelinePhase | nul
 		if (ready) return phase;
 	}
 	return null;
+}
+
+/**
+ * Point `current_phase` and `next_actions` at whatever the engine finds
+ * eligible now, or at the terminal routing when nothing is. Completion and a
+ * pipeline switch both derive the cursor this way (#236), so status.yaml never
+ * disagrees with the phase records it sits beside. Returns the eligible phase.
+ */
+export function recomputeCursor(state: WorkspaceState): PipelinePhase | null {
+	const next = getNextEligiblePhase(state);
+	state.status.current_phase = next?.id ?? "complete";
+	state.status.next_actions = next ? [beginPhaseAction(next)] : buildTerminalNextActions(state.status);
+	return next;
 }
 
 export function resolvePhase(state: WorkspaceState, phaseId?: string): PipelinePhase | null {

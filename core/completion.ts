@@ -1,8 +1,8 @@
 import { appendFile, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { getNextEligiblePhase, resolvePhase, validatePhaseOutput } from "./pipeline.ts";
-import { applyHandoff, autoAssignIds, buildTerminalNextActions, loadHandoffFile, normalizeStatus } from "./status.ts";
+import { recomputeCursor, resolvePhase, validatePhaseOutput } from "./pipeline.ts";
+import { applyHandoff, autoAssignIds, loadHandoffFile, normalizeStatus } from "./status.ts";
 import type { NormalizedStatus, OpenQuestionEntry, PhaseHandoff, ProposedConventionEntry, ValidationResult, WorkspaceState } from "./types.ts";
 import { compareDottedVersions, dateOnly, newlineIfUnterminated, pathExists, uniqueStrings } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
@@ -493,11 +493,7 @@ export async function completeValidatedPhase(
 		if (handoff) applyHandoff(nextStatus, handoff);
 		nextStatus.last_updated = completionTimestamp;
 		const nextWorkspace: WorkspaceState = { ...lockedState, status: nextStatus };
-		const nextEligible = getNextEligiblePhase(nextWorkspace);
-		nextStatus.current_phase = nextEligible?.id ?? "complete";
-		nextStatus.next_actions = nextEligible
-			? [`Begin ${nextEligible.id} phase by producing ${nextEligible.primary_output ?? `findings/${nextEligible.id}/`}`]
-			: buildTerminalNextActions(nextStatus);
+		recomputeCursor(nextWorkspace);
 
 		return {
 			state: { ...nextWorkspace, status: nextStatus },
