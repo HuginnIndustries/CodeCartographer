@@ -134,8 +134,25 @@ export const ORCHESTRATOR_FILES = [
  * The four top-level files are seeded fresh from templates instead
  * ({@link ORCHESTRATOR_FILES}); `closeouts/` is created empty.
  */
-const INIT_EXCLUDED_TOP_LEVEL = new Set(["BACKLOG.md", "THREAD_LOG.md", "CONVENTIONS.md", "DECISIONS.md"]);
-const INIT_EXCLUDED_DIR_CONTENTS = new Set(["closeouts"]);
+const INIT_EXCLUDED_TOP_LEVEL = new Set([
+	"BACKLOG.md",
+	"THREAD_LOG.md",
+	"CONVENTIONS.md",
+	"DECISIONS.md",
+	// Rendered from a workspace's own state; the narration cache holds an
+	// LLM summary of it.
+	"dashboard.html",
+	".dashboard-narration.local.md",
+]);
+// Directories that exist in every workspace but whose contents are one
+// project's sessions: closeouts, and scratch (handoffs, checkpoints,
+// amendments) apart from its .gitkeep.
+const INIT_EXCLUDED_DIR_CONTENTS = new Set(["closeouts", "scratch"]);
+// Project state under workflow/: init writes a fresh status.yaml itself, and
+// the two dot-files hold one machine's usage log and session pointer.
+const INIT_EXCLUDED_WORKFLOW_FILES = new Set(["status.yaml", ".usage.local.yaml", ".orchestrator.local.yaml"]);
+// Where the workspace's ignore rules ship (see ensureWorkspaceGitignore).
+const GITIGNORE_TEMPLATE_RELATIVE_PATH = "templates/gitignore";
 // broadside/ is machine-local scan state (state.json, timestamped run dirs)
 // except for its two template files — the same carve-out .codecarto/.gitignore
 // makes for this repository itself. Without this, init from a local checkout
@@ -145,9 +162,75 @@ const BROADSIDE_DIR_NAME = "broadside";
 const INIT_BROADSIDE_TEMPLATE_FILES = new Set(["SKILL.md", "config.yaml"]);
 
 /**
- * Copy the packaged template into a target workspace, skipping this
- * repository's own project state. Directories are still created, so a fresh
- * workspace has an empty `closeouts/` rather than no `closeouts/`.
+ * Every workspace-relative path a packaged pipeline declares as a phase output,
+ * primary or secondary. Findings directories ship README and SKILL stubs
+ * beside the reports sessions write, so the reports have to be excluded by
+ * name rather than by directory, and the pipelines are the source of truth
+ * for those names. A pipeline file that fails to load contributes nothing.
+ */
+export async function listDeclaredOutputs(sourceWorkspaceDir: string = packagedWorkspaceDir): Promise<Set<string>> {
+	const outputs = new Set<string>();
+	const workflowDir = join(sourceWorkspaceDir, "workflow");
+	let names: string[];
+	try {
+		names = await readdir(workflowDir);
+	} catch {
+		return outputs;
+	}
+	for (const name of names) {
+		if (!/^pipeline.*\.ya?ml$/.test(name)) continue;
+		let pipeline: PipelineFile | null | undefined;
+		try {
+			pipeline = await loadYamlFile<PipelineFile>(join(workflowDir, name));
+		} catch {
+			continue;
+		}
+		for (const phase of pipeline?.phases ?? []) {
+			if (typeof phase.primary_output === "string") outputs.add(toPosixRelative(phase.primary_output));
+			for (const secondary of phase.secondary_outputs ?? []) {
+				const path = (secondary as { path?: unknown }).path;
+				if (typeof path === "string") outputs.add(toPosixRelative(path));
+			}
+		}
+	}
+	return outputs;
+}
+
+function toPosixRelative(path: string): string {
+	return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+/**
+ * Whether a template path (as segments) is framework-owned and travels into a
+ * new workspace. Everything a session produces stays behind: the declared
+ * phase outputs, handoffs and checkpoints, closeouts, the dashboard, usage,
+ * status, Broad-Side runs, and any lock or temp file a crashed process left.
+ * Directories pass so the workspace keeps its shape (an empty `closeouts/`,
+ * a `findings/<phase>/` for every phase).
+ */
+function isTemplatePath(segments: string[], declaredOutputs: Set<string>): boolean {
+	const posixPath = segments.join("/");
+	if (declaredOutputs.has(posixPath)) return false;
+	if (/\.(lock|tmp)$/.test(posixPath)) return false;
+	if (segments.length === 1) return !INIT_EXCLUDED_TOP_LEVEL.has(segments[0]);
+	const [top, second] = segments;
+	if (top === BROADSIDE_DIR_NAME) return segments.length === 2 && INIT_BROADSIDE_TEMPLATE_FILES.has(second);
+	if (top === "scratch") return segments.length === 2 && second === ".gitkeep";
+	if (top === "workflow") return !(segments.length === 2 && INIT_EXCLUDED_WORKFLOW_FILES.has(second));
+	return !INIT_EXCLUDED_DIR_CONTENTS.has(top);
+}
+
+/**
+ * Copy the packaged template into a target workspace, skipping everything a
+ * session wrote into it. Directories are still created, so a fresh workspace
+ * has an empty `closeouts/` rather than no `closeouts/`.
+ *
+ * This repository's `.codecarto/` is the template *and* CodeCartographer's own
+ * live workspace, so a checkout install's template can hold finished phase
+ * reports, handoffs, and a dashboard. Copying those seeded every new workspace
+ * with another project's findings, and validation then passed on them (#224).
+ * The exclusion is by declared output path ({@link listDeclaredOutputs}), so a
+ * new phase's report is covered the moment its pipeline names it.
  *
  * @param targetWorkspaceDir - Absolute path to the `.codecarto/` to create or merge into.
  * @param sourceWorkspaceDir - The template to copy from. Defaults to the packaged
@@ -158,18 +241,13 @@ export async function copyPackagedWorkspace(
 	targetWorkspaceDir: string,
 	sourceWorkspaceDir: string = packagedWorkspaceDir,
 ): Promise<void> {
+	const declaredOutputs = await listDeclaredOutputs(sourceWorkspaceDir);
 	await cp(sourceWorkspaceDir, targetWorkspaceDir, {
 		recursive: true,
 		filter: (source) => {
 			const relativePath = relative(sourceWorkspaceDir, source);
 			if (!relativePath) return true; // the workspace root itself
-			const segments = relativePath.split(/[\\/]/);
-			if (segments.length === 1) return !INIT_EXCLUDED_TOP_LEVEL.has(segments[0]);
-			if (segments[0] === BROADSIDE_DIR_NAME) {
-				return segments.length === 2 && INIT_BROADSIDE_TEMPLATE_FILES.has(segments[1]);
-			}
-			// Keep the directory, drop what this repository wrote inside it.
-			return !INIT_EXCLUDED_DIR_CONTENTS.has(segments[0]);
+			return isTemplatePath(relativePath.split(/[\\/]/), declaredOutputs);
 		},
 	});
 	// The published tarball carries no empty directories, so an excluded-contents
@@ -179,6 +257,26 @@ export async function copyPackagedWorkspace(
 	for (const name of INIT_EXCLUDED_DIR_CONTENTS) {
 		await mkdir(join(targetWorkspaceDir, name), { recursive: true });
 	}
+	await ensureWorkspaceGitignore(targetWorkspaceDir);
+}
+
+/**
+ * Give the workspace its ignore rules when it has none. npm never packs a file
+ * named `.gitignore`, so an npm-installed template carried no rules and the
+ * workspaces initialised from it committed the dashboard, the usage log with
+ * its absolute session paths, and the Broad-Side config with any API key in
+ * it (#229). The rules ship as `templates/gitignore` instead and are copied
+ * to `.gitignore` here; an existing `.gitignore` is the user's and is left
+ * alone.
+ * @returns whether a file was written.
+ */
+export async function ensureWorkspaceGitignore(workspaceDir: string): Promise<boolean> {
+	const target = join(workspaceDir, ".gitignore");
+	if (await pathExists(target)) return false;
+	const template = join(workspaceDir, GITIGNORE_TEMPLATE_RELATIVE_PATH);
+	if (!(await pathExists(template))) return false;
+	await copyFile(template, target);
+	return true;
 }
 
 /**
@@ -207,11 +305,20 @@ export async function seedOrchestratorFiles(workspaceDir: string): Promise<strin
  * user-owned top-level files, and the directories sessions write into.
  * Everything else present in the packaged template is framework-owned.
  */
-const REFRESH_EXCLUDED_TOP_LEVEL = new Set(["BACKLOG.md", "THREAD_LOG.md", "CONVENTIONS.md", "DECISIONS.md"]);
+const REFRESH_EXCLUDED_TOP_LEVEL = new Set([
+	"BACKLOG.md",
+	"THREAD_LOG.md",
+	"CONVENTIONS.md",
+	"DECISIONS.md",
+	"dashboard.html",
+	".dashboard-narration.local.md",
+	// The user's ignore rules; created from templates/gitignore when absent.
+	".gitignore",
+]);
 // broadside/ holds machine-local scout state (batch ids, API key config,
 // generated results) — refresh must never overwrite it.
 const REFRESH_EXCLUDED_DIRS = new Set(["scratch", "inputs", "closeouts", "broadside"]);
-const REFRESH_EXCLUDED_WORKFLOW_FILES = new Set(["status.yaml", "config.yaml", ".usage.local.yaml"]);
+const REFRESH_EXCLUDED_WORKFLOW_FILES = new Set(["status.yaml", "config.yaml", ".usage.local.yaml", ".orchestrator.local.yaml"]);
 
 /**
  * What a scaffold refresh never touches, for a wrapper that asks before
@@ -234,18 +341,23 @@ export type RefreshScaffoldResult = {
 	scaffoldVersionAfter: string;
 };
 
-async function listTemplateFiles(dir: string, relativeDir = ""): Promise<string[]> {
+async function listTemplateFiles(dir: string, declaredOutputs: Set<string>, relativeDir = ""): Promise<string[]> {
 	const entries = await readdir(dir, { withFileTypes: true });
 	const files: string[] = [];
 	for (const entry of entries) {
 		const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
 		if (entry.isDirectory()) {
 			if (!relativeDir && REFRESH_EXCLUDED_DIRS.has(entry.name)) continue;
-			files.push(...await listTemplateFiles(join(dir, entry.name), relativePath));
+			files.push(...await listTemplateFiles(join(dir, entry.name), declaredOutputs, relativePath));
 			continue;
 		}
 		if (!relativeDir && REFRESH_EXCLUDED_TOP_LEVEL.has(entry.name)) continue;
 		if (relativeDir === "workflow" && REFRESH_EXCLUDED_WORKFLOW_FILES.has(entry.name)) continue;
+		// A checkout install's template can hold finished reports (the repository
+		// analyses itself); refreshing those over a user's own would be worse
+		// than init copying them (#224).
+		if (declaredOutputs.has(relativePath)) continue;
+		if (/\.(lock|tmp)$/.test(entry.name)) continue;
 		files.push(relativePath);
 	}
 	return files;
@@ -256,11 +368,12 @@ async function listTemplateFiles(dir: string, relativeDir = ""): Promise<string[
  * exact set {@link refreshScaffold} copies, computed without writing anything.
  * A wrapper that asks before refreshing shows this.
  */
-export async function listScaffoldRefreshFiles(): Promise<string[]> {
-	if (!existsSync(packagedWorkspaceDir)) {
+export async function listScaffoldRefreshFiles(sourceWorkspaceDir: string = packagedWorkspaceDir): Promise<string[]> {
+	if (!existsSync(sourceWorkspaceDir)) {
 		throw new Error("Packaged .codecarto template is missing. Reinstall codecartographer-pi.");
 	}
-	return (await listTemplateFiles(packagedWorkspaceDir)).sort();
+	const declaredOutputs = await listDeclaredOutputs(sourceWorkspaceDir);
+	return (await listTemplateFiles(sourceWorkspaceDir, declaredOutputs)).sort();
 }
 
 /**
@@ -288,6 +401,10 @@ export async function refreshScaffold(cwd: string): Promise<RefreshScaffoldResul
 		await mkdir(dirname(target), { recursive: true });
 		await copyFile(join(packagedWorkspaceDir, relativePath), target);
 	}
+	// Workspaces initialised from an npm install before the rules shipped as a
+	// template have no .gitignore at all; give them one without touching an
+	// existing (user-owned) file.
+	await ensureWorkspaceGitignore(state.workspaceDir);
 	const entry = `- ${new Date().toISOString().slice(0, 10)} — scaffold-refresh — Refreshed ${files.length} framework-owned file(s) from the packaged template (${scaffoldVersionBefore ?? "unversioned"} → ${PACKAGE_VERSION}); project state, user config, and session outputs untouched.`;
 	const threadLogPath = join(state.workspaceDir, "THREAD_LOG.md");
 	let currentLog = "";

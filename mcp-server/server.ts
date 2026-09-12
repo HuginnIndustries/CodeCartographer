@@ -226,8 +226,11 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 		await copyPackagedWorkspace(targetWorkspaceDir);
 	}
 
+	// The template no longer carries a status.yaml (it is this repository's
+	// own project state); one is only present when init is re-run over an
+	// existing workspace, where its pipeline stays the default.
 	const statusPath = join(targetWorkspaceDir, "workflow", "status.yaml");
-	const rawStatus = (await loadYamlFile<StatusFile>(statusPath)) ?? {};
+	const rawStatus = (await pathExists(statusPath)) ? ((await loadYamlFile<StatusFile>(statusPath)) ?? {}) : {};
 	const selectedPipelinePath = pipelineChoice ?? rawStatus.pipeline?.trim() ?? DEFAULT_PIPELINE_PATH;
 	const resolvedPipelinePath = join(targetWorkspaceDir, selectedPipelinePath);
 
