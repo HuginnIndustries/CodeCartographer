@@ -67,6 +67,7 @@ import {
 	modelsText,
 	readGuide,
 	listSkillNames,
+	resolveSkillName,
 	loadCodecartoConfig,
 	loadUsage,
 	loadYamlFile,
@@ -481,17 +482,20 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 			`Cannot run skill: pipeline is not complete (next phase: ${nextPhase.id}). Finish the pipeline first.`,
 		);
 	}
-	const skillFile = join(state.workspaceDir, "skills", args.name, "SKILL.md");
-	if (!(await pathExists(skillFile))) {
+	// Resolve against the installed list only: the name is never joined onto a
+	// path, so a traversal like `../findings/architecture` cannot splice a
+	// phase SKILL.md (or anything else) into the post-pipeline prompt.
+	const skillName = await resolveSkillName(state.workspaceDir, args.name);
+	if (!skillName) {
 		const available = await listSkillNames(state.workspaceDir);
 		const hint = available.length > 0 ? ` Available: ${available.join(", ")}.` : " No skills installed.";
 		throw new McpError(
 			ErrorCode.InvalidParams,
-			`Unknown skill: ${args.name}.${hint} The Broad-Side reading guide is served as \`${BROADSIDE_SKILL_NAME}\` and is not pipeline-gated.`,
+			`Unknown skill: ${args.name.trim()}.${hint} The Broad-Side reading guide is served as \`${BROADSIDE_SKILL_NAME}\` and is not pipeline-gated.`,
 		);
 	}
-	const prompt = await buildSkillPrompt(state, args.name);
-	return textResult(prompt, { skill: args.name });
+	const prompt = await buildSkillPrompt(state, skillName);
+	return textResult(prompt, { skill: skillName });
 }
 
 // ---------- library helpers ----------
