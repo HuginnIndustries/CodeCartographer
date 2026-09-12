@@ -8,9 +8,10 @@
 // read-modify-write is safe enough. If parallel-phase dispatch ever ships,
 // switch this to atomic-rename (see core/workspace.ts for the pattern).
 
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { pathExists } from "./utils.ts";
+import { acquireLock } from "./status.ts";
+import { atomicWriteFile, pathExists } from "./utils.ts";
 import { parseSimpleYaml, stringifySimpleYaml } from "./yaml.ts";
 
 export const USAGE_RELATIVE_PATH = "workflow/.usage.local.yaml";
@@ -81,13 +82,40 @@ export async function loadUsage(workspaceDir: string): Promise<UsageFile> {
 	}
 }
 
+/**
+ * Append one run. The read-modify-write runs under the file's lock and lands
+ * through an atomic write, so concurrent appends (a Pi runner and an MCP host
+ * on one workspace, two phases finishing together) each keep their record
+ * (#226, #238). A log that exists but does not parse is never rewritten: the
+ * lenient {@link loadUsage} is for display, and appending over its empty
+ * fallback destroyed every record the file still held.
+ */
 export async function appendUsageRun(workspaceDir: string, run: UsageRun): Promise<void> {
-	const current = await loadUsage(workspaceDir);
-	current.runs.push(run);
 	const path = join(workspaceDir, USAGE_RELATIVE_PATH);
-	const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-	await writeFile(tempPath, `${stringifySimpleYaml(current)}\n`, "utf8");
-	await rename(tempPath, path);
+	const lock = await acquireLock(`${path}.lock`);
+	try {
+		const current = await loadUsageForAppend(path);
+		current.runs.push(run);
+		await atomicWriteFile(path, `${stringifySimpleYaml(current)}\n`);
+	} finally {
+		await lock.release();
+	}
+}
+
+async function loadUsageForAppend(path: string): Promise<UsageFile> {
+	if (!(await pathExists(path))) return emptyUsage();
+	const raw = await readFile(path, "utf8");
+	let parsed: Partial<UsageFile> | null | undefined;
+	try {
+		parsed = parseSimpleYaml(raw) as Partial<UsageFile> | null | undefined;
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`Refusing to append to ${USAGE_RELATIVE_PATH}: the existing file does not parse (${reason}). ` +
+				"Its records are still in it — move the file aside to start a new log.",
+		);
+	}
+	return normalize(parsed);
 }
 
 export function computeTotals(file: UsageFile): UsageTotals {

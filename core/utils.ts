@@ -1,7 +1,8 @@
 // General-purpose helpers used by yaml/status/prompts and by wrapper-specific
 // path-boundary enforcement (Pi tool interception, MCP cwd validation).
 
-import { access, realpath } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { access, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
@@ -16,6 +17,37 @@ export async function pathExists(path: string): Promise<boolean> {
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+let tempSequence = 0;
+
+/**
+ * A temp-file suffix that is unique within and across processes: pid, a
+ * per-process sequence number, and random bytes. `<pid>.<Date.now()>` alone
+ * collides whenever two writers hit one target inside a millisecond, and the
+ * loser's rename then either fails with ENOENT or clobbers the winner (#226).
+ */
+export function uniqueTempSuffix(): string {
+	tempSequence = (tempSequence + 1) % 0x7fffffff;
+	return `${process.pid}.${tempSequence}.${randomBytes(4).toString("hex")}`;
+}
+
+/**
+ * Write `content` to `path` atomically: a uniquely named sibling temp file,
+ * then a rename over the target. Readers see the old bytes or the new bytes,
+ * never a truncated file. On failure the temp file is removed best-effort and
+ * the error propagates. Every framework file that is rewritten in place goes
+ * through this so no caller hand-rolls the temp name.
+ */
+export async function atomicWriteFile(path: string, content: string): Promise<void> {
+	const tempPath = `${path}.${uniqueTempSuffix()}.tmp`;
+	try {
+		await writeFile(tempPath, content, "utf8");
+		await rename(tempPath, path);
+	} catch (error) {
+		await rm(tempPath, { force: true }).catch(() => undefined);
+		throw error;
 	}
 }
 

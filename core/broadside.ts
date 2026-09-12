@@ -32,11 +32,11 @@
 // carry is the reading guide for its output — `.codecarto/broadside/SKILL.md`,
 // served by codecarto_skill under the name `broadside` (see readBroadsideSkill).
 
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dirname, join, relative } from "node:path";
-import { pathExists, sleep } from "./utils.ts";
+import { atomicWriteFile, pathExists, sleep } from "./utils.ts";
 import { acquireLock } from "./status.ts";
 import { loadYamlFile } from "./yaml.ts";
 import { packagedWorkspaceDir } from "./workspace.ts";
@@ -1688,9 +1688,7 @@ export async function saveBroadsideState(broadsideDir: string, state: BroadsideS
 
 /** Serialize through a temp file so a crash mid-write cannot truncate state.json. */
 async function writeBroadsideStateFile(statePath: string, state: BroadsideStateFile): Promise<void> {
-	const tempPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
-	await writeFile(tempPath, `${JSON.stringify(state, null, "\t")}\n`, "utf8");
-	await rename(tempPath, statePath);
+	await atomicWriteFile(statePath, `${JSON.stringify(state, null, "\t")}\n`);
 }
 
 /**

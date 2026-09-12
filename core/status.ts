@@ -1,7 +1,8 @@
 // Status normalization, atomic writes, and file-lock primitives. Pure
 // framework logic shared by every wrapper.
 
-import { open, rm, stat } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { open, readFile, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type {
 	CarryForwardEntry,
@@ -405,14 +406,36 @@ export function applyHandoff(status: NormalizedStatus, handoff: PhaseHandoff): N
 	return status;
 }
 
-export async function acquireLock(lockPath: string): Promise<{ release: () => Promise<void> }> {
+/** What {@link acquireLock} hands back: a release that only ever removes its own lock. */
+export interface LockHandle {
+	release: () => Promise<void>;
+	/**
+	 * Set when acquiring meant breaking a lock older than {@link STALE_LOCK_MS}:
+	 * the previous holder as its lock file recorded it, for callers that log.
+	 */
+	brokeStale?: { pid: number | null; since: string | null };
+}
+
+/**
+ * Take the O_EXCL lock at `lockPath`, waiting up to {@link LOCK_TIMEOUT_MS}
+ * and breaking a lock older than {@link STALE_LOCK_MS}.
+ *
+ * The lock file records `pid`, timestamp, and a per-acquisition token, and
+ * release removes the file only while it still carries that token. Without
+ * the token, release removed whoever's lock was there: after a stale break
+ * the previous holder's release deleted the new holder's lock, and a third
+ * writer walked straight in (#227).
+ */
+export async function acquireLock(lockPath: string): Promise<LockHandle> {
 	const startedAt = Date.now();
+	const token = `${process.pid}.${randomBytes(8).toString("hex")}`;
+	let brokeStale: LockHandle["brokeStale"];
 
 	while (true) {
 		try {
 			const handle = await open(lockPath, "wx");
 			try {
-				await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`, "utf8");
+				await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n${token}\n`, "utf8");
 			} catch (error) {
 				// A non-EEXIST write failure must not leak the descriptor the
 				// open just created (#131); close best-effort, then rethrow.
@@ -421,9 +444,8 @@ export async function acquireLock(lockPath: string): Promise<{ release: () => Pr
 			}
 			await handle.close();
 			return {
-				release: async () => {
-					await rm(lockPath, { force: true }).catch(() => undefined);
-				},
+				release: () => releaseOwnedLock(lockPath, token),
+				...(brokeStale && { brokeStale }),
 			};
 		} catch (error) {
 			const nodeError = error as NodeJS.ErrnoException;
@@ -432,6 +454,7 @@ export async function acquireLock(lockPath: string): Promise<{ release: () => Pr
 			try {
 				const lockStat = await stat(lockPath);
 				if (Date.now() - lockStat.mtimeMs > STALE_LOCK_MS) {
+					brokeStale = await describeLockHolder(lockPath);
 					await rm(lockPath, { force: true }).catch(() => undefined);
 					continue;
 				}
@@ -445,5 +468,32 @@ export async function acquireLock(lockPath: string): Promise<{ release: () => Pr
 
 			await sleep(LOCK_RETRY_MS);
 		}
+	}
+}
+
+/**
+ * Remove the lock at `lockPath` only if it is still ours. A lock that vanished
+ * (someone broke it as stale) or that now carries another holder's token is
+ * left alone; one whose content cannot be read is left to go stale rather
+ * than removed unverified.
+ */
+async function releaseOwnedLock(lockPath: string, token: string): Promise<void> {
+	let content: string;
+	try {
+		content = await readFile(lockPath, "utf8");
+	} catch {
+		return;
+	}
+	if (content.split(/\r?\n/)[2] !== token) return;
+	await rm(lockPath, { force: true }).catch(() => undefined);
+}
+
+async function describeLockHolder(lockPath: string): Promise<NonNullable<LockHandle["brokeStale"]>> {
+	try {
+		const [pidLine, sinceLine] = (await readFile(lockPath, "utf8")).split(/\r?\n/);
+		const pid = Number.parseInt(pidLine ?? "", 10);
+		return { pid: Number.isFinite(pid) ? pid : null, since: sinceLine?.trim() || null };
+	} catch {
+		return { pid: null, since: null };
 	}
 }

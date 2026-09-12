@@ -1,8 +1,8 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { compact, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { canonicalPath, getWorkspaceState, isWithinPath, resolveExistingPrefix } from "../../core/index.ts";
+import { atomicWriteFile, canonicalPath, getWorkspaceState, isWithinPath, resolveExistingPrefix } from "../../core/index.ts";
 
 const PHASE_SESSION_PREFIX = "CodeCartographer phase: ";
 
@@ -38,7 +38,6 @@ export async function writePhaseCheckpoint(
 ): Promise<string> {
 	const dir = join(cwd, ".codecarto", "scratch", "checkpoints");
 	const target = join(dir, `${phaseId}.md`);
-	const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
 	await mkdir(dir, { recursive: true });
 	const content = [
 		"---",
@@ -53,8 +52,7 @@ export async function writePhaseCheckpoint(
 		summary.trim(),
 		"",
 	].join("\n");
-	await writeFile(temp, content, "utf8");
-	await rename(temp, target);
+	await atomicWriteFile(target, content);
 	return target;
 }
 

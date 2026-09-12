@@ -33,12 +33,15 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import { canonicalPath, isPlainObject, normalizeForComparison, pathExists } from "./utils.ts";
+import { acquireLock } from "./status.ts";
+import { atomicWriteFile, canonicalPath, isPlainObject, normalizeForComparison, pathExists, uniqueTempSuffix } from "./utils.ts";
 import { parseSimpleYaml, stringifySimpleYaml } from "./yaml.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 export const LIBRARY_MARKER_FILE = ".codecarto-library";
+/** Transient lock taken for the duration of one publish (see publishEntry). */
+const PUBLISH_LOCK_FILE = ".publish.lock";
 export const LIBRARY_INDEX_FILE = "index.yaml";
 export const LIBRARY_INDEX_MD_FILE = "INDEX.md";
 export const ENTRIES_DIR = "entries";
@@ -183,9 +186,7 @@ export async function writeMarker(libraryRoot: string, marker: LibraryMarker): P
 	await mkdir(libraryRoot, { recursive: true });
 	const markerPath = join(libraryRoot, LIBRARY_MARKER_FILE);
 	const normalized = normalizeMarker(marker);
-	const tempPath = `${markerPath}.${process.pid}.${Date.now()}.tmp`;
-	await writeFile(tempPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
-	await rename(tempPath, markerPath);
+	await atomicWriteFile(markerPath, `${JSON.stringify(normalized, null, 2)}\n`);
 }
 
 function normalizeMarker(raw: Record<string, unknown> | LibraryMarker): LibraryMarker {
@@ -436,9 +437,7 @@ async function listVersionDirs(entryDir: string): Promise<number[]> {
 
 async function writeLatestPointer(entryDir: string, versionDirName: string): Promise<void> {
 	const latestPath = join(entryDir, LATEST_POINTER_FILE);
-	const tempPath = `${latestPath}.${process.pid}.${Date.now()}.tmp`;
-	await writeFile(tempPath, `${versionDirName}\n`, "utf8");
-	await rename(tempPath, latestPath);
+	await atomicWriteFile(latestPath, `${versionDirName}\n`);
 }
 
 async function readLatestPointer(entryDir: string): Promise<string | null> {
@@ -610,119 +609,131 @@ export async function publishEntry(
 
 	const namespace = input.namespace;
 	const entryDir = entryRoot(libraryRoot, namespace, input.slug);
-	const preview = await previewPublishVersion(libraryRoot, spec, { slug: input.slug, namespace }, opts);
-	const latestVersion = preview.latestVersion;
 
-	// Collision guard. Slugs derive from the trailing path segment of the source
-	// repo, so two unrelated projects (acme/whisper and openai/whisper) collapse
-	// onto one slug. Without this check the second publish would append its spec
-	// to the first project's version history, and the index would then report the
-	// newcomer's source_repo as though it owned every prior version. Checked
-	// before the idempotence branch below, because a metadata-only update would
-	// overwrite the wrong entry just as silently.
-	if (latestVersion > 0 && !opts.allowSourceRepoChange) {
-		const recorded = await readRecordedSourceRepo(libraryRoot, namespace, input.slug, latestVersion);
-		if (recorded !== null && !sameSourceRepo(recorded, input.source_repo)) {
+	// One publisher at a time. Version assignment reads the entry directory
+	// and then creates v<N+1>; two publishes of one slug in the same window
+	// both picked the same N, so the loser died on a raw rename error and the
+	// winner's latest pointer could be overwritten (#240). The lock lives in
+	// the library root, which exists before any entry does, so a refused
+	// publish still writes nothing.
+	const lock = await acquireLock(join(libraryRoot, PUBLISH_LOCK_FILE));
+	try {
+		const preview = await previewPublishVersion(libraryRoot, spec, { slug: input.slug, namespace }, opts);
+		const latestVersion = preview.latestVersion;
+
+		// Collision guard. Slugs derive from the trailing path segment of the source
+		// repo, so two unrelated projects (acme/whisper and openai/whisper) collapse
+		// onto one slug. Without this check the second publish would append its spec
+		// to the first project's version history, and the index would then report the
+		// newcomer's source_repo as though it owned every prior version. Checked
+		// before the idempotence branch below, because a metadata-only update would
+		// overwrite the wrong entry just as silently.
+		if (latestVersion > 0 && !opts.allowSourceRepoChange) {
+			const recorded = await readRecordedSourceRepo(libraryRoot, namespace, input.slug, latestVersion);
+			if (recorded !== null && !sameSourceRepo(recorded, input.source_repo)) {
+				const label = namespace ? `${namespace}/${input.slug}` : input.slug;
+				throw new SourceRepoMismatchError(
+					`Refusing to publish: entry "${label}" v${latestVersion} records source_repo ` +
+						`"${recorded}", but this publish carries "${input.source_repo}". Publishing would ` +
+						`append this spec to a different project's version history. Publish this project ` +
+						`under a distinct slug to shelve it separately, or — if the repository itself ` +
+						`moved (rename, org transfer, host change) — re-publish with the source-repo ` +
+						`change allowed: allow_source_repo_change on codecarto_publish, ` +
+						`allowSourceRepoChange in PublishOptions.`,
+					recorded,
+					input.source_repo,
+				);
+			}
+		}
+
+		// Confidentiality guard. Levels are ordered internal < shared < public. An
+		// entry may sit in a library at or below its own level, but one more
+		// restricted than its library would be exposed to everyone the library
+		// reaches: an internal spec in a public library is a leak. Either side that
+		// declares nothing counts as internal — the marker default initLibrary
+		// writes, and the entry default docs/library-format.md documents — so a
+		// library with no visibility field accepts everything it did before. Like
+		// the collision guard this runs ahead of the idempotence branch, so a
+		// metadata-only update cannot reclassify an entry past it, and it fails
+		// before anything is written.
+		const entryConfidentiality = input.confidentiality ?? DEFAULT_VISIBILITY;
+		const libraryVisibility = marker.visibility ?? DEFAULT_VISIBILITY;
+		if (!opts.allowConfidentialityMismatch && VISIBILITY_RANK[entryConfidentiality] < VISIBILITY_RANK[libraryVisibility]) {
 			const label = namespace ? `${namespace}/${input.slug}` : input.slug;
-			throw new SourceRepoMismatchError(
-				`Refusing to publish: entry "${label}" v${latestVersion} records source_repo ` +
-					`"${recorded}", but this publish carries "${input.source_repo}". Publishing would ` +
-					`append this spec to a different project's version history. Publish this project ` +
-					`under a distinct slug to shelve it separately, or — if the repository itself ` +
-					`moved (rename, org transfer, host change) — re-publish with the source-repo ` +
-					`change allowed: allow_source_repo_change on codecarto_publish, ` +
-					`allowSourceRepoChange in PublishOptions.`,
-				recorded,
-				input.source_repo,
+			const declared = input.confidentiality ? "" : " (the default when none is declared)";
+			throw new ConfidentialityMismatchError(
+				`Refusing to publish: entry "${label}" has confidentiality "${entryConfidentiality}"${declared}, ` +
+					`but library "${marker.name}" has visibility "${libraryVisibility}". Publishing would expose a ` +
+					`spec classified "${entryConfidentiality}" to everyone the "${libraryVisibility}" library reaches. ` +
+					`Publish it to a library whose visibility is "${entryConfidentiality}" or narrower, declare a ` +
+					`confidentiality of "${libraryVisibility}" or wider if the spec may travel that far, or — if ` +
+					`this exposure is intended — re-publish with the mismatch allowed: ` +
+					`allow_confidentiality_mismatch on codecarto_publish, allowConfidentialityMismatch in PublishOptions.`,
+				entryConfidentiality,
+				libraryVisibility,
 			);
 		}
-	}
 
-	// Confidentiality guard. Levels are ordered internal < shared < public. An
-	// entry may sit in a library at or below its own level, but one more
-	// restricted than its library would be exposed to everyone the library
-	// reaches: an internal spec in a public library is a leak. Either side that
-	// declares nothing counts as internal — the marker default initLibrary
-	// writes, and the entry default docs/library-format.md documents — so a
-	// library with no visibility field accepts everything it did before. Like
-	// the collision guard this runs ahead of the idempotence branch, so a
-	// metadata-only update cannot reclassify an entry past it, and it fails
-	// before anything is written.
-	const entryConfidentiality = input.confidentiality ?? DEFAULT_VISIBILITY;
-	const libraryVisibility = marker.visibility ?? DEFAULT_VISIBILITY;
-	if (!opts.allowConfidentialityMismatch && VISIBILITY_RANK[entryConfidentiality] < VISIBILITY_RANK[libraryVisibility]) {
-		const label = namespace ? `${namespace}/${input.slug}` : input.slug;
-		const declared = input.confidentiality ? "" : " (the default when none is declared)";
-		throw new ConfidentialityMismatchError(
-			`Refusing to publish: entry "${label}" has confidentiality "${entryConfidentiality}"${declared}, ` +
-				`but library "${marker.name}" has visibility "${libraryVisibility}". Publishing would expose a ` +
-				`spec classified "${entryConfidentiality}" to everyone the "${libraryVisibility}" library reaches. ` +
-				`Publish it to a library whose visibility is "${entryConfidentiality}" or narrower, declare a ` +
-				`confidentiality of "${libraryVisibility}" or wider if the spec may travel that far, or — if ` +
-				`this exposure is intended — re-publish with the mismatch allowed: ` +
-				`allow_confidentiality_mismatch on codecarto_publish, allowConfidentialityMismatch in PublishOptions.`,
-			entryConfidentiality,
-			libraryVisibility,
-		);
-	}
+		// Content-hash idempotence: if the latest version's spec matches bytes-for-bytes
+		// (decided by previewPublishVersion above), update metadata in place and
+		// return without bumping the version.
+		if (!preview.isNewVersion) {
+			const latestVersionDir = versionDir(libraryRoot, namespace, input.slug, latestVersion);
+			// buildMetadata writes provenance only when the input carries it, and
+			// neither surface sends it on publish — so without this the rewrite
+			// would drop the block the version's original publish recorded.
+			const provenance = input.provenance ?? (await readRecordedProvenance(libraryRoot, namespace, input.slug, latestVersion));
+			const metadata = buildMetadata({ ...input, provenance }, latestVersion);
+			await atomicWriteYaml(join(latestVersionDir, METADATA_FILE), metadata);
+			if (!opts.skipReindex) await reindex(libraryRoot);
+			return {
+				slug: input.slug,
+				namespace,
+				version: latestVersion,
+				isNewVersion: false,
+				entryDir,
+				versionDir: latestVersionDir,
+			};
+		}
 
-	// Content-hash idempotence: if the latest version's spec matches bytes-for-bytes
-	// (decided by previewPublishVersion above), update metadata in place and
-	// return without bumping the version.
-	if (!preview.isNewVersion) {
-		const latestVersionDir = versionDir(libraryRoot, namespace, input.slug, latestVersion);
-		// buildMetadata writes provenance only when the input carries it, and
-		// neither surface sends it on publish — so without this the rewrite
-		// would drop the block the version's original publish recorded.
-		const provenance = input.provenance ?? (await readRecordedProvenance(libraryRoot, namespace, input.slug, latestVersion));
-		const metadata = buildMetadata({ ...input, provenance }, latestVersion);
-		await atomicWriteYaml(join(latestVersionDir, METADATA_FILE), metadata);
+		const nextVersion = preview.version;
+		const finalVersionDir = versionDir(libraryRoot, namespace, input.slug, nextVersion);
+		const stagingDir = `${entryDir}.publish.${uniqueTempSuffix()}`;
+
+		// Stage all files under a sibling directory, then atomically rename it
+		// into place as v<N>. If the rename fails partway, the staging dir is
+		// left for the user to inspect or remove.
+		await mkdir(stagingDir, { recursive: true });
+		try {
+			const metadata = buildMetadata({ ...input, provenance: input.provenance ?? { prior_version: latestVersion === 0 ? null : latestVersion, mutation_source: null } }, nextVersion);
+			await writeFile(join(stagingDir, SPEC_FILE), spec, "utf8");
+			await atomicWriteYaml(join(stagingDir, METADATA_FILE), metadata);
+			await mkdir(entryDir, { recursive: true });
+			await rename(stagingDir, finalVersionDir);
+		} catch (err) {
+			// Best-effort cleanup of the staging directory.
+			try {
+				await rm(stagingDir, { recursive: true, force: true });
+			} catch {
+				// swallow — leave the staging dir for diagnostics
+			}
+			throw err;
+		}
+
+		await writeLatestPointer(entryDir, `v${nextVersion}`);
 		if (!opts.skipReindex) await reindex(libraryRoot);
+
 		return {
 			slug: input.slug,
 			namespace,
-			version: latestVersion,
-			isNewVersion: false,
+			version: nextVersion,
+			isNewVersion: true,
 			entryDir,
-			versionDir: latestVersionDir,
+			versionDir: finalVersionDir,
 		};
+	} finally {
+		await lock.release();
 	}
-
-	const nextVersion = preview.version;
-	const finalVersionDir = versionDir(libraryRoot, namespace, input.slug, nextVersion);
-	const stagingDir = `${entryDir}.publish.${process.pid}.${Date.now()}`;
-
-	// Stage all files under a sibling directory, then atomically rename it
-	// into place as v<N>. If the rename fails partway, the staging dir is
-	// left for the user to inspect or remove.
-	await mkdir(stagingDir, { recursive: true });
-	try {
-		const metadata = buildMetadata({ ...input, provenance: input.provenance ?? { prior_version: latestVersion === 0 ? null : latestVersion, mutation_source: null } }, nextVersion);
-		await writeFile(join(stagingDir, SPEC_FILE), spec, "utf8");
-		await atomicWriteYaml(join(stagingDir, METADATA_FILE), metadata);
-		await mkdir(entryDir, { recursive: true });
-		await rename(stagingDir, finalVersionDir);
-	} catch (err) {
-		// Best-effort cleanup of the staging directory.
-		try {
-			await rm(stagingDir, { recursive: true, force: true });
-		} catch {
-			// swallow — leave the staging dir for diagnostics
-		}
-		throw err;
-	}
-
-	await writeLatestPointer(entryDir, `v${nextVersion}`);
-	if (!opts.skipReindex) await reindex(libraryRoot);
-
-	return {
-		slug: input.slug,
-		namespace,
-		version: nextVersion,
-		isNewVersion: true,
-		entryDir,
-		versionDir: finalVersionDir,
-	};
 }
 
 function buildMetadata(input: PublishInput & { version?: number }, version: number): EntryMetadata {
@@ -1107,10 +1118,7 @@ async function writeIndexMarkdown(libraryRoot: string, index: LibraryIndex, mark
 	}
 
 	const content = lines.join("\n");
-	const path = join(libraryRoot, LIBRARY_INDEX_MD_FILE);
-	const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-	await writeFile(tempPath, content, "utf8");
-	await rename(tempPath, path);
+	await atomicWriteFile(join(libraryRoot, LIBRARY_INDEX_MD_FILE), content);
 }
 
 function formatIndexRow(e: LibraryIndexEntry, namespaced: boolean): string {
@@ -1204,10 +1212,7 @@ async function findProvenanceConflict(
 // ─── Atomic YAML write ──────────────────────────────────────────────────────
 
 async function atomicWriteYaml(path: string, value: unknown): Promise<void> {
-	const serialized = `${stringifySimpleYaml(value)}\n`;
-	const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-	await writeFile(tempPath, serialized, "utf8");
-	await rename(tempPath, path);
+	await atomicWriteFile(path, `${stringifySimpleYaml(value)}\n`);
 }
 
 // ─── Hash ───────────────────────────────────────────────────────────────────

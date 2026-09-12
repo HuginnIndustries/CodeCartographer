@@ -11,7 +11,7 @@
 // Same one-shot pattern as agent-rewriter.ts:runRewriterOnce — different
 // system prompt, different output target. Never throws.
 
-import { readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -25,6 +25,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import {
+	atomicWriteFile,
 	computeTotals,
 	NARRATION_CACHE_RELATIVE_PATH,
 	loadUsage,
@@ -180,10 +181,7 @@ async function writeNarrationCache(workspaceDir: string, content: string, phaseC
 	const generatedAt = new Date().toISOString();
 	const frontmatter = stringifySimpleYaml({ generatedAt, phaseCountAtGeneration: phaseCount });
 	const body = `---\n${frontmatter}\n---\n${content}\n`;
-	const path = join(workspaceDir, NARRATION_CACHE_RELATIVE_PATH);
-	const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-	await writeFile(tempPath, body, "utf8");
-	await rename(tempPath, path);
+	await atomicWriteFile(join(workspaceDir, NARRATION_CACHE_RELATIVE_PATH), body);
 }
 
 async function runNarratorOnce(ctx: ExtensionContext, prompt: string): Promise<string> {

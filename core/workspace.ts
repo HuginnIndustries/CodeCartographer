@@ -4,12 +4,12 @@
 // atomic status-update primitive used by /codecarto-complete.
 
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, copyFile, cp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, cp, mkdir, readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock, applyHandoff, createEmptyStatus, normalizeStatus, parseHandoff } from "./status.ts";
 import type { PhaseHandoff, PipelineFile, StatusFile, WorkspaceState } from "./types.ts";
-import { compareDottedVersions, newlineIfUnterminated, pathExists } from "./utils.ts";
+import { atomicWriteFile, compareDottedVersions, newlineIfUnterminated, pathExists } from "./utils.ts";
 import { loadYamlFile, stringifySimpleYaml } from "./yaml.ts";
 
 // Walk up from the current file to find the package root. Needed because the
@@ -498,10 +498,7 @@ export async function updateStatusAtomically(
 		}
 		assertCanonicalStatus(nextState.status);
 
-		const serialized = `${stringifySimpleYaml(nextState.status)}\n`;
-		const tempPath = `${statusPath}.${process.pid}.${Date.now()}.tmp`;
-		await writeFile(tempPath, serialized, "utf8");
-		await rename(tempPath, statusPath);
+		await atomicWriteFile(statusPath, `${stringifySimpleYaml(nextState.status)}\n`);
 
 		if (result.afterCommit) {
 			try {
@@ -595,10 +592,7 @@ export async function switchPipeline(
 		freshStatus.last_updated = new Date().toISOString();
 
 		assertCanonicalStatus(freshStatus);
-		const serialized = `${stringifySimpleYaml(freshStatus)}\n`;
-		const tempPath = `${statusPath}.${process.pid}.${Date.now()}.tmp`;
-		await writeFile(tempPath, serialized, "utf8");
-		await rename(tempPath, statusPath);
+		await atomicWriteFile(statusPath, `${stringifySimpleYaml(freshStatus)}\n`);
 
 		const state = await getWorkspaceState(cwd);
 		if (!state) throw new Error("Failed to reload workspace state after pipeline switch.");
