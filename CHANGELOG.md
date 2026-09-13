@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.3] — 2026-09-13
+
+### Fixed
+
+- **Accepting a `/codecarto-*` completion keeps the arguments typed before it.** Pi hands the completer everything after the command name and, on accept, replaces all of it with the chosen item's value. The `/codecarto-next` completer matched the last token but returned a bare flag, so with the completion popup open `/codecarto-next --auto --llm-steer` became `/codecarto-next --llm-steer` on Enter — the steered phase ran alone and the auto run never started; `--auto --strict` became `--strict`, the one combination the parser rejects. Every `/codecarto-*` completer now returns the whole argument line with the token under the cursor completed, and does not re-offer a flag already typed. The Broad-Side completer gains completion of lens names and flags after the action. #326.
+
 ## [0.22.2] — 2026-09-13
 
 One defect from the 0.22.1 live verification, fixed with its own live verification (#324).
