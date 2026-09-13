@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] — 2026-09-13
+
+The last open roadmap item, built on evidence rather than the design it was filed with (#143, #331).
+
+### Added
+
+- **`codecarto_broadside {action: "verify"}` / `/codecarto-broadside verify` — a verification pass over a collected run's top findings.** The batch sweep reads files without being able to look anything up, and its measured weakness is precision: on this repository the top twelve findings by severity were two real defects and ten claims a look at the guard, the caller, or the tsconfig dismissed. `verify` reads the top `top` (default 10) defect and security findings, most severe first, with one sync-priced chat completion each and three read-only tools confined to the repository's source files — `read_file` by line range, `grep`, `list_dir`, at most eight calls — and gives each a verdict: **confirmed** (a reachable failure; the model must name the trigger it found), **not-a-defect** (the claim is literally true of the code but nothing reaches the failure), **discarded** (the claim is wrong about the code), or **unclear**. In the comparison run that settled the design, the pass agreed with a reviewer's ground truth on all twelve for $0.13 — about a cent a finding on the default model; the rubric mattered more than the model, and `not-a-defect` is the verdict that keeps a cast every caller satisfies from being "confirmed" because it is literally there. It runs on the run's model without its `:batch` suffix (`model` overrides), at low reasoning effort; `max_cost` is a running cap that stops before the next finding and reports `partial`; a provider error is the finding's verdict, not a failure of the pass. `verified.md` and `verified.json` land beside `triage.md`, the pass is recorded on the run and shown by `status`, and the reading guide now says to read `verified.md` first. A confirmed verdict is still a model's reading: a strong lead for a human's next look, not a validated claim.
+
 ## [0.23.0] — 2026-09-13
 
 One change, a minor because a lens now spends where it used to skip.
