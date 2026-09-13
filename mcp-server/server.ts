@@ -1407,6 +1407,7 @@ export async function handleBroadside(args: {
 				includeSynthesis,
 				includeTriage,
 				retryTruncated,
+				signal: serverLifetime?.signal,
 				// One line per *change* of a lens's status. Every poll used to
 				// append a line, so a four-minute wait returned twenty-six
 				// "in_progress (0/1)" lines before the result (0.22.0 live run).
@@ -1436,6 +1437,7 @@ export async function handleBroadside(args: {
 		includeSynthesis,
 		includeTriage,
 		retryTruncated,
+		signal: serverLifetime?.signal,
 		...(runId && { runId }),
 	}).catch((error) => {
 		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
@@ -1799,7 +1801,7 @@ const TOOLS = [
 				},
 				wait_seconds: {
 					type: "number",
-					description: "For submit: after submitting, poll up to this many seconds before returning. For collect: poll up to this many seconds before returning with partial state. 0 polls each in-flight batch once and returns without waiting. Falls back to wait_seconds in .codecarto/broadside/config.yaml (default 0).",
+					description: "For submit: after submitting, poll up to this many seconds before returning. For collect: poll up to this many seconds before returning with partial state. 0 polls each in-flight batch once and returns without waiting. Falls back to wait_seconds in .codecarto/broadside/config.yaml (default 0). The wait is also bounded by the host's own tool-call timeout: if the host gives up first, the server stops polling and submits nothing further, the batches keep running server-side, and the next collect claims them — so prefer submit, then collect later, over a wait longer than the host allows.",
 				},
 				include_synthesis: {
 					type: "boolean",
@@ -1916,8 +1918,28 @@ export function buildServer() {
 	return server;
 }
 
+/**
+ * Fires when the stdio client goes away, so a Broad-Side wait that outlived
+ * the request that asked for it stops polling and submits nothing further
+ * (#322). Batches already accepted keep running server-side; the next collect
+ * claims them. Set only by {@link startStdioServer}; handlers driven directly
+ * (tests, in-process callers) see no signal.
+ */
+let serverLifetime: AbortController | null = null;
+
 export async function startStdioServer() {
 	const server = buildServer();
 	const transport = new StdioServerTransport();
+	serverLifetime = new AbortController();
+	const lifetime = serverLifetime;
+	server.onclose = () => lifetime.abort();
+	// The SDK's stdio transport listens for stdin `data` and `error` only — it
+	// never sees the end of the stream — so a client that exits mid-request
+	// leaves the server polling with nobody to answer to (#322, observed: a
+	// server outlived its client by fifteen minutes and submitted two paid
+	// post-passes on its own). End of stdin is the client going away.
+	const gone = () => lifetime.abort();
+	process.stdin.once("end", gone);
+	process.stdin.once("close", gone);
 	await server.connect(transport);
 }
