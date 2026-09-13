@@ -458,3 +458,51 @@ test("the Pi spend dialog mentions incremental only when it was requested", asyn
 		});
 	});
 });
+
+test("the MCP wait output reports a lens's status once per change, not once per poll", async () => {
+	// A four-minute wait on the 0.22.0 live run returned twenty-six identical
+	// "in_progress (0/1)" lines per lens before the result.
+	const lines = [];
+	const write = core.statusLineWriter(lines);
+	write("architecture", "in_progress", { completed: 0, total: 1 });
+	write("conventions", "in_progress", { completed: 0, total: 1 });
+	write("architecture", "in_progress", { completed: 0, total: 1 });
+	write("architecture", "in_progress", { completed: 0, total: 1 });
+	write("conventions", "in_progress", { completed: 0, total: 1 });
+	write("architecture", "completed", { completed: 1, total: 1 });
+	write("conventions", "in_progress", { completed: 0, total: 1 });
+	write("conventions", "completed", { completed: 1, total: 1 });
+	assert.deepEqual(lines, [
+		"  architecture: in_progress (0/1)",
+		"  conventions: in_progress (0/1)",
+		"  architecture: completed (1/1)",
+		"  conventions: completed (1/1)",
+	]);
+	// A count change on the same status is a change worth a line.
+	write("defect", "in_progress", { completed: 3, total: 13 });
+	write("defect", "in_progress", { completed: 7, total: 13 });
+	assert.deepEqual(lines.slice(-2), ["  defect: in_progress (3/13)", "  defect: in_progress (7/13)"]);
+
+	// And the handler uses it: one poll in flight, then done, no repeats.
+	await withRepo(async (dir) => {
+		let polls = 0;
+		const fetcher = async (url, init) => {
+			if (init?.method === "POST") return response(202, { id: "batch-1", status: "validating" });
+			if (String(url).includes("/models")) return catalog();
+			polls += 1;
+			if (polls < 2) return response(200, { id: "batch-1", status: "in_progress", request_counts: { completed: 0, total: 1 } });
+			return response(200, {
+				id: "batch-1",
+				status: "completed",
+				request_counts: { completed: 1, total: 1 },
+				results: [{ custom_id: "architecture-root", response: { status_code: 200, body: { choices: [{ message: { content: JSON.stringify({ module: "root", findings: [], patterns_checked: [], files_scanned: 0 }) } }] } }, error: null }],
+				usage: { cost: 0.001 },
+			});
+		};
+		await withGlobalFetch(fetcher, async () => {
+			const result = await server.handleBroadside({ cwd: dir, action: "submit", lenses: ["architecture"], max_cost: 0, wait_seconds: 30, include_synthesis: false, include_triage: false });
+			const statusLines = result.content[0].text.split("\n").filter((l) => /^  architecture: (in_progress|completed) \(/.test(l));
+			assert.deepEqual(statusLines, ["  architecture: in_progress (0/1)", "  architecture: completed (1/1)"]);
+		});
+	});
+});
