@@ -1103,6 +1103,137 @@ test("collect re-submits truncated slices once with a doubled output cap", async
 	}
 });
 
+test("collect retries every truncated slice on one model in a single batch and one poll (#206)", async () => {
+	const dir = await makeFixture();
+	try {
+		const truncated = '{"module": "server", "findings": [';
+		const recovered = (customId) => JSON.stringify({ module: customId, findings: [], patterns_checked: [], files_scanned: 0 });
+		const posted = [];
+		const postedPhase = [];
+		const polls = [];
+		let phase = "submit";
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				posted.push(JSON.parse(init.body));
+				postedPhase.push(phase);
+				return fakeResponse(202, { id: `batch-${posted.length}`, status: "validating" });
+			}
+			if (String(url).includes("/models")) return fakeResponse(200, modelsCatalog([]));
+			const id = String(url).split("/").pop();
+			polls.push(id);
+			const index = Number(id.replace(/^batch-/, "")) - 1;
+			const payload = posted[index];
+			const isRetry = postedPhase[index] === "collect";
+			// Every slice the batch asked for comes back in it, matched by custom_id
+			// — truncated on the lens pass, whole on the retry.
+			return fakeResponse(200, {
+				id,
+				status: "completed",
+				results: payload.requests.map((r) => ({
+					custom_id: r.custom_id,
+					response: { status_code: 200, body: { choices: [{ message: { content: isRetry ? recovered(r.custom_id) : truncated } }] } },
+					error: null,
+				})),
+				usage: { cost: isRetry ? 0.004 : 0.001 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture", "security"], fetcher });
+		phase = "collect";
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeSynthesis: false, includeTriage: false });
+
+		assert.equal(collect.retriedCount, 2, "both truncated slices recovered");
+		assert.equal(collect.truncatedCount, 0);
+		// Two lens batches at submit, then ONE retry batch carrying both bumped
+		// requests — not one round trip per slice.
+		assert.equal(posted.length, 3, "two lens submits + one retry submit");
+		const lensIds = posted.slice(0, 2).map((p) => p.requests[0].custom_id).sort();
+		const retry = posted[2];
+		assert.equal(retry.model, BROADSIDE_MODEL);
+		assert.deepEqual(retry.requests.map((r) => r.custom_id).sort(), lensIds);
+		for (const r of retry.requests) {
+			const original = posted.find((p) => p.requests[0].custom_id === r.custom_id);
+			assert.equal(r.body.max_tokens, original.requests[0].body.max_tokens * 2, `${r.custom_id} retry must double its cap`);
+		}
+		assert.equal(polls.filter((id) => id === "batch-3").length, 1, "one poll for the one retry batch");
+		// Each recovered slice landed on disk under its own custom_id.
+		const runDir = join(dir, ".codecarto", "broadside", collect.runId);
+		for (const customId of lensIds) {
+			const parsed = JSON.parse(await readFile(join(runDir, `${customId}.json`), "utf8"));
+			assert.equal(parsed.module, customId, `${customId}.json must hold that slice's recovered result`);
+		}
+		// The retry batch's cost is added once, not once per slice.
+		const meta = JSON.parse(await readFile(join(runDir, "run-meta.json"), "utf8"));
+		assert.ok(Math.abs(meta.total_cost - 0.006) < 1e-9, `cost must be 2×0.001 + 0.004, got ${meta.total_cost}`);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("collect groups truncation retries by model: one batch per model in a mixed-model run (#206)", async () => {
+	const dir = await makeFixture();
+	try {
+		await mkdir(join(dir, ".codecarto", "broadside"), { recursive: true });
+		await writeFile(join(dir, ".codecarto", "broadside", "config.yaml"), "lens_models:\n  defect: vendor/strong:batch\n");
+
+		const truncated = '{"module": "root", "findings": [';
+		const recovered = JSON.stringify({ module: "root", findings: [], patterns_checked: [], files_scanned: 0 });
+		const posted = [];
+		let phase = "submit";
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				posted.push({ phase, payload: JSON.parse(init.body) });
+				return fakeResponse(202, { id: `batch-${posted.length}`, status: "validating" });
+			}
+			if (String(url).includes("/models")) {
+				return fakeResponse(200, modelsCatalog([
+					{
+						id: "vendor/strong:batch",
+						name: "Strong",
+						pricing: { prompt: "0.000005", completion: "0.000025" },
+						context_length: 200000,
+						top_provider: { max_completion_tokens: 32000 },
+						supported_parameters: ["structured_outputs"],
+					},
+				]));
+			}
+			const id = String(url).split("/").pop();
+			const record = posted[Number(id.replace(/^batch-/, "")) - 1];
+			return fakeResponse(200, {
+				id,
+				status: "completed",
+				results: record.payload.requests.map((r) => ({
+					custom_id: r.custom_id,
+					response: { status_code: 200, body: { choices: [{ message: { content: record.phase === "collect" ? recovered : truncated } }] } },
+					error: null,
+				})),
+				usage: { cost: 0.001 },
+			});
+		};
+
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture", "security", "defect"], fetcher, confirm: () => true });
+		phase = "collect";
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeSynthesis: false, includeTriage: false });
+
+		assert.equal(collect.retriedCount, 3);
+		assert.equal(collect.truncatedCount, 0);
+		// Three lens batches, then exactly two retry batches: architecture and
+		// security share the run default; defect rides alone on its override.
+		const lensSubmits = posted.filter((p) => p.phase === "submit").map((p) => p.payload);
+		const retries = posted.filter((p) => p.phase === "collect").map((p) => p.payload);
+		assert.equal(lensSubmits.length, 3);
+		assert.equal(retries.length, 2, `one retry batch per model, got ${retries.length}`);
+		const lensCustomIds = Object.fromEntries(lensSubmits.map((p) => [p.requests[0].custom_id.split("-")[0], p.requests[0].custom_id]));
+		const byModel = Object.fromEntries(retries.map((p) => [p.model, p.requests.map((r) => r.custom_id).sort()]));
+		assert.deepEqual(byModel[BROADSIDE_MODEL], [lensCustomIds.architecture, lensCustomIds.security].sort());
+		assert.deepEqual(byModel["vendor/strong:batch"], [lensCustomIds.defect]);
+		// Every retried request carries its own model, matching the batch it rides in.
+		for (const p of retries) for (const r of p.requests) assert.equal(r.body.model, p.model);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 test("collect leaves truncated slices alone when retry_truncated is false", async () => {
 	const dir = await makeFixture();
 	try {
