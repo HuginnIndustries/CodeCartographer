@@ -276,10 +276,15 @@ test("the collect report names a post-pass still running or held elsewhere, and 
 			});
 		};
 		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher, maxCost: 0 });
-		const result = await runBroadsideCollect(dir, "sk-fake", { fetcher, pollIntervalMs: 30, waitMs: 100 });
+		// A budget that admits many polls at a short interval: on a loaded CI
+		// runner a 100 ms budget expired after one poll each and the "polled
+		// through the budget" assertion below failed on timing alone.
+		const result = await runBroadsideCollect(dir, "sk-fake", { fetcher, pollIntervalMs: 25, waitMs: 1000 });
 		assert.equal(result.synthesis.status, "submitted");
 		assert.equal(result.triage.status, "submitted");
 		assert.ok(polls.synthesis >= 2 && polls.triage >= 2, `both passes polled through the budget: ${JSON.stringify(polls)}`);
-		assert.ok(Math.abs(polls.synthesis - polls.triage) <= 1, `polled together, not in turn: ${JSON.stringify(polls)}`);
+		// Polled together: the counts move in step. Polled in turn, the first
+		// pass would take every poll of the budget and the second would get one.
+		assert.ok(Math.abs(polls.synthesis - polls.triage) <= 2, `polled together, not in turn: ${JSON.stringify(polls)}`);
 	});
 });
