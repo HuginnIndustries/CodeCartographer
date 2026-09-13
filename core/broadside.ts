@@ -3954,6 +3954,22 @@ export function collectResultText(result: BroadsideCollectResult): string {
 	return lines.join("\n");
 }
 
+/**
+ * An `onStatus` callback that appends one line to `lines` per *change* of a
+ * lens's polled status. Every poll used to append a line, so a four-minute
+ * wait returned twenty-six identical "in_progress (0/1)" lines per lens
+ * before the result (0.22.0 live run).
+ */
+export function statusLineWriter(lines: string[]): (lensId: string, status: string, counts: Record<string, unknown>) => void {
+	const last = new Map<string, string>();
+	return (lensId, status, counts) => {
+		const line = `  ${lensId}: ${status} (${counts.completed ?? 0}/${counts.total ?? "?"})`;
+		if (last.get(lensId) === line) return;
+		last.set(lensId, line);
+		lines.push(line);
+	};
+}
+
 export function statusText(state: BroadsideStateFile): string {
 	if (state.runs.length === 0) {
 		return "No Broad-Side runs recorded. Call codecarto_broadside with action 'submit' first.";

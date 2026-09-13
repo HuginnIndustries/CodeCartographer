@@ -100,6 +100,7 @@ import {
 	runBroadsideSubmit,
 	seedOrchestratorFiles,
 	type StatusFile,
+	statusLineWriter,
 	statusText,
 	stringifySimpleYaml,
 	switchPipeline,
@@ -1406,8 +1407,10 @@ export async function handleBroadside(args: {
 				includeSynthesis,
 				includeTriage,
 				retryTruncated,
-				onStatus: (lensId, status, counts) =>
-					lines.push(`  ${lensId}: ${status} (${counts.completed ?? 0}/${counts.total ?? "?"})`),
+				// One line per *change* of a lens's status. Every poll used to
+				// append a line, so a four-minute wait returned twenty-six
+				// "in_progress (0/1)" lines before the result (0.22.0 live run).
+				onStatus: statusLineWriter(lines),
 			}).catch((error) => {
 				// The `collect` action normalizes this same call; without it here,
 				// a failure during submit-with-wait reached the client as an
