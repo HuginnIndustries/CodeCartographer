@@ -6,6 +6,7 @@
 //   /codecarto-broadside collect --wait=900
 //   /codecarto-broadside status
 //   /codecarto-broadside models --benchmarks
+//   /codecarto-broadside verify --top=10       → read the top findings against the source
 //
 // Flags mirror the codecarto_broadside tool parameters, with the negative
 // forms spelled out because a slash command has no place to pass `false`:
@@ -14,8 +15,9 @@
 //   --max-cost=N           --no-retry-truncated
 //   --wait=SECONDS         --benchmarks (models only)
 //   --run=ID (collect only: an older run, as listed by status)
-//   --model=ID (submit only: the run's batch model, as listed by models)
+//   --model=ID (submit: the run's batch model, as listed by models; verify: the sync model to read with)
 //   --lens-model=LENS:ID (submit only, repeatable: one lens on its own model)
+//   --top=N (verify only: how many findings to read, most severe first)
 //
 // A model id itself contains a colon (`vendor/name:batch`), so --lens-model
 // splits on the first colon only: `security:deepseek/deepseek-v4-pro:batch`.
@@ -30,7 +32,7 @@
 
 import { BROADSIDE_LENS_IDS, type BroadsideLensId } from "../../core/index.ts";
 
-export type BroadsideAction = "submit" | "collect" | "status" | "models";
+export type BroadsideAction = "submit" | "collect" | "status" | "models" | "verify";
 
 export interface BroadsideFlags {
 	action: BroadsideAction;
@@ -54,13 +56,15 @@ export interface BroadsideFlags {
 	model?: string;
 	/** For submit: per-lens model overrides, layered over config.yaml's (#141). */
 	lensModels?: Partial<Record<BroadsideLensId, string>>;
+	/** For verify: how many findings to read (#143). */
+	top?: number;
 	benchmarks: boolean;
 	unknown: string[];
 	/** Set on an invalid combination. The caller surfaces it as an error. */
 	error?: string;
 }
 
-const ACTIONS = new Set<BroadsideAction>(["submit", "collect", "status", "models"]);
+const ACTIONS = new Set<BroadsideAction>(["submit", "collect", "status", "models", "verify"]);
 
 /** Every token the completer offers, in the order it offers them. */
 export const KNOWN_BROADSIDE_TOKENS = [
@@ -68,6 +72,7 @@ export const KNOWN_BROADSIDE_TOKENS = [
 	"collect",
 	"status",
 	"models",
+	"verify",
 	...BROADSIDE_LENS_IDS,
 	"--incremental",
 	"--no-incremental",
@@ -76,6 +81,7 @@ export const KNOWN_BROADSIDE_TOKENS = [
 	"--run=",
 	"--model=",
 	"--lens-model=",
+	"--top=",
 	"--no-synthesis",
 	"--no-triage",
 	"--no-retry-truncated",
@@ -138,6 +144,12 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 			result.runId = value || undefined;
 			continue;
 		}
+		if (token.startsWith("--top=")) {
+			const value = parseNumeric(token, "--top", result);
+			if (value !== undefined && (!Number.isInteger(value) || value < 1)) result.error ??= `--top needs a positive whole number (got "${token.slice("--top=".length)}").`;
+			else if (value !== undefined) result.top = value;
+			continue;
+		}
 		if (token.startsWith("--model=")) {
 			const value = token.slice("--model=".length).trim();
 			// An empty value is a mistyped selection, not "use the default":
@@ -181,11 +193,17 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 	if (result.action === "status" && result.waitSeconds !== undefined) {
 		result.error ??= "--wait is only meaningful for submit and collect; status reads recorded state.";
 	}
-	if (result.runId !== undefined && result.action !== "collect") {
-		result.error ??= `--run is only meaningful for collect (got action "${result.action}").`;
+	if (result.runId !== undefined && result.action !== "collect" && result.action !== "verify") {
+		result.error ??= `--run is only meaningful for collect and verify (got action "${result.action}").`;
 	}
-	if (result.model !== undefined && result.action !== "submit") {
-		result.error ??= `--model is only meaningful for submit (got action "${result.action}").`;
+	if (result.model !== undefined && result.action !== "submit" && result.action !== "verify") {
+		result.error ??= `--model is only meaningful for submit and verify (got action "${result.action}").`;
+	}
+	if (result.top !== undefined && result.action !== "verify") {
+		result.error ??= `--top is only meaningful for verify (got action "${result.action}").`;
+	}
+	if (result.action === "verify" && result.waitSeconds !== undefined) {
+		result.error ??= "--wait is only meaningful for submit and collect; verify runs to completion.";
 	}
 	if (result.lensModels !== undefined && result.action !== "submit") {
 		result.error ??= `--lens-model is only meaningful for submit (got action "${result.action}").`;

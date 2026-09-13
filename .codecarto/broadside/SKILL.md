@@ -26,7 +26,21 @@ not replace any phase; it tells phases where to look.
 
 ## Reading a Broad-Side run
 
-1. Read `synthesis.md` first. It carries the executive summary, severity counts,
+0. If `verified.md` exists, read it first. A verification pass
+   (`codecarto_broadside {action: "verify"}`, `/codecarto-broadside verify`)
+   has read the top defect and security findings against the real source with
+   read-only tools and given each a verdict: **confirmed** (a reachable
+   failure, with the input or call site that triggers it), **not-a-defect**
+   (the claim is literally true of the code but nothing can reach the failure
+   it describes), **discarded** (the claim is wrong about the code, with the
+   guard or line that shows it), or **unclear**. Start from the confirmed
+   ones; treat a discarded one as answered unless the reasoning is thin.
+   Measured on this repository, the top twelve findings by severity were two
+   real defects and ten that a look at the guard, the caller, or the tsconfig
+   dismissed — the pass agreed with a reviewer on all twelve for about a cent
+   a finding. A confirmed verdict is still a model's reading: a strong lead for
+   a human's next look, not a validated claim.
+1. Read `synthesis.md`. It carries the executive summary, severity counts,
    the top cross-lens findings, and per-module risk levels.
 2. Read `triage.md` for the work order: each lead scored by impact ×
    difficulty with a P0–P3 priority and an effort estimate. It is a starting
@@ -66,6 +80,7 @@ Broad-Side is an executable-surface feature. On the Pi extension:
 /codecarto-broadside collect            # poll, save, synthesize
 /codecarto-broadside status             # show recorded runs
 /codecarto-broadside models             # compare batch models
+/codecarto-broadside verify --top=10    # read the top findings against the source
 ```
 
 On the MCP server:
@@ -75,6 +90,7 @@ codecarto_broadside {cwd, action: "submit", lenses: [...]}   # fire the batches
 codecarto_broadside {cwd, action: "collect"}                  # poll, save, synthesize
 codecarto_broadside {cwd, action: "status"}                   # show recorded runs
 codecarto_broadside {cwd, action: "models"}                   # compare batch models
+codecarto_broadside {cwd, action: "verify", top: 10}          # read the top findings against the source
 ```
 
 The `models` action lists every `:batch` variant on OpenRouter — pricing per
@@ -104,6 +120,18 @@ repository being more than you meant to spend.
 Collect runs two cross-lens post-passes by default: **synthesis** (the
 executive report) and **triage** (the prioritized work order). Pass
 `include_synthesis: false` or `include_triage: false` on collect to skip one.
+
+`verify` is the third pass, run separately after collect because it is
+sync-priced rather than batch-priced: for each of the top `top` findings
+(default 10, most severe first) of the defect and security lenses, one chat
+completion on the run's model without its `:batch` suffix (`model` overrides),
+with three read-only tools confined to the repository's source files —
+`read_file` by line range, `grep`, `list_dir` — at most eight tool calls, low
+reasoning effort, then a verdict. It writes `verified.md` and `verified.json`
+beside `triage.md` and records the pass on the run. `max_cost` is a running
+cap here, since a sync call's cost is known only when it returns: the pass
+stops before the next finding once the calls so far have reached it and
+reports `partial`. About a cent a finding on the default model.
 
 Two caveats apply to any model you pick. The `models` action lists every id
 OpenRouter advertises a `:batch` variant for, and many of those variants do not

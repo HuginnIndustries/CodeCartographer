@@ -95,7 +95,11 @@ Two more economies worth knowing:
 
 ## Reading a run
 
-Results land in `.codecarto/broadside/<run>/`. Read them in this order:
+Results land in `.codecarto/broadside/<run>/`. If `verified.md` is there, read
+it before anything else: `action: "verify"` has read the top defect and
+security findings against the source with read-only tools and given each a
+verdict (confirmed with its trigger, not-a-defect, discarded with the guard
+that shows it, unclear). Then, in this order:
 
 1. `synthesis.md` — executive summary, severity counts, top cross-lens
    findings, per-module risk.
