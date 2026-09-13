@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] — 2026-09-13
+
+The remaining open issues after the self-audit, in one pass: the last Broad-Side roadmap item (#141), the retry serialization it uncovered (#206), the Codex verification gap (#218), and the repository's own workspace state (#276). A minor because `codecarto_broadside` and `/codecarto-broadside` gain parameters and the `models` listing changes shape.
+
+### Added
+
+- **Broad-Side model selection on both surfaces.** `core/` already routed lenses through config.yaml's `lens_models`, but neither surface took a model, so the `models` action helped choose one that could then only be applied by hand-editing the file. `codecarto_broadside` submit takes `model` and `lens_models` (validated before anything is priced); `/codecarto-broadside` takes `--model=ID` and a repeatable `--lens-model=LENS:ID`, split on the first colon since a batch id carries one. A lens set both on the call and in the file takes the call's. Either path reaches the existing pre-flight — priced from the catalog, refused without structured-output support, clamped to the model's ceiling. #141.
+
+- **The `models` listing is advisory, and says so.** OpenRouter's catalog returns a `:batch` id for models whose Batch API then refuses the job (`does not have a :batch endpoint`), with nothing in the entry to tell them apart. A submit now records what the provider said about each model it posted to in `broadside/batch-endpoints.json` — accepted, or refused for that reason; a quota or network failure says nothing about the endpoint — and the listing tags rows `[no batch endpoint, refused <date>]` / `[batch OK <date>]`, untried rows carrying no tag. The MCP result carries `catalogAdvisory: true` and the `endpoints` map. #141.
+
+- **Codex can be verified headlessly.** `codex exec` refuses MCP tool calls under its forced `approval_policy=never`; the per-server key `mcp_servers.<name>.default_tools_approval_mode = "approve"` lifts it without disabling the shell sandbox. Verified against this build (`codecarto_init` then `codecarto_status` through Codex 0.154.0 over stdio, workspace on disk, tool text echoed). CONTRIBUTING carries the recipe and what a failed approval looks like; `docs/client-surfaces.md` replaces the four-release "unknown" row with the run. #218.
+
+### Changed
+
+- **The truncation retry runs as one batch per model.** Each truncated slice used to be submitted as its own single-request batch and polled to terminal before the next was submitted — the serialization #136 removed from the lens pass, still present here — so a model that truncated 11 of 13 slices turned one collect into eleven sequential round trips and eleven of the sixteen concurrent-job quota. Bumped requests are now grouped by the model they must run on, submitted as one batch per model, polled together against the caller's remaining deadline, and matched back by `custom_id`; per-slice bookkeeping is unchanged, the batch's cost is added once, and the `onStatus` label is `retry:<model>`. #206.
+
+- **Broad-Side refusals say what to do.** A rejected lens in the submit report was a bare `rejected`; it now carries the reason, and the two refusals a run meets in practice are explained: the missing batch endpoint above, and `job-submission-count` — the per-account limit on concurrent batch jobs, which one job per lens fills after a few runs on the same key. The quota can also fill after acceptance, in which case the batch completes with every request failed and the lens read `completed, 0 result(s)` with the reason buried in `<id>.error.json`; collect now reports `all N request(s) failed: <reason>` on that lens. #141.
+
+- **This repository's `.codecarto/` workspace files are pristine.** The tracked `BACKLOG.md`, `THREAD_LOG.md`, and `closeouts/` carried a 2026-05-02 framework session. Init never copied them and the tarball negates them, so no user received them; but a fresh clone reported an existing workspace, the GUIDE's first-time heuristic was wrong from the first call, and the self-audit appended to that session's log. They now equal their templates, `closeouts/` holds a `.gitkeep`, and the framework's own history lives in `docs/history/`. No ignore-rule change: a user's backlog, log, and closeouts are their project's history and stay tracked. #276.
+
 ## [0.21.0] — 2026-09-12
 
 The third and last release from the self-audit ([`self-audit/`](self-audit/2026-09-11-v0.19.5-full-with-deep-audit/), issues #223–#279): the six remaining highs, every low group, and the template notes from driving the pipeline. One issue stays open — #276, whether this repository should keep tracking its own `.codecarto/` workspace state — because that is a maintainer's call, not a defect. A minor because three guardrails now refuse where they used to proceed: a pipeline that cannot finish is reported as stuck rather than complete, Broad-Side ships with a spend cap, and an unreadable Broad-Side config or state file stops the run instead of being read as empty.
