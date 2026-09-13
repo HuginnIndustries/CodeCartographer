@@ -98,6 +98,8 @@ import {
 	runBroadsideCollect,
 	runBroadsideStatus,
 	runBroadsideSubmit,
+	runBroadsideVerify,
+	verifyResultText,
 	seedOrchestratorFiles,
 	type StatusFile,
 	statusLineWriter,
@@ -1270,7 +1272,7 @@ function resolveBroadsideApiKey(explicit: string | undefined, config: { apiKey: 
 
 export async function handleBroadside(args: {
 	cwd: string;
-	action: "submit" | "collect" | "status" | "models";
+	action: "submit" | "collect" | "status" | "models" | "verify";
 	lenses?: string[];
 	api_key?: string;
 	wait_seconds?: number;
@@ -1284,11 +1286,12 @@ export async function handleBroadside(args: {
 	incremental?: boolean;
 	model?: string;
 	lens_models?: Record<string, string>;
+	top?: number;
 }) {
 	const cwd = await validateCwd(args.cwd);
 	const action = args.action ?? "submit";
-	if (!["submit", "collect", "status", "models"].includes(action)) {
-		throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${action}. Valid actions: submit, collect, status, models.`);
+	if (!["submit", "collect", "status", "models", "verify"].includes(action)) {
+		throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${action}. Valid actions: submit, collect, status, models, verify.`);
 	}
 
 	// A config.yaml that exists but cannot be read refuses every action that
@@ -1430,8 +1433,42 @@ export async function handleBroadside(args: {
 		});
 	}
 
-	// action === "collect"
 	const runId = typeof args.run_id === "string" && args.run_id.trim() ? args.run_id.trim() : undefined;
+
+	if (action === "verify") {
+		// The verification pass (#143): one sync call per finding with read-only
+		// tools, most severe first. `max_cost` is a running cap here — a sync
+		// call's cost is known only when it returns — so the pass stops before
+		// the next finding once reached; absent, config.yaml's cap applies.
+		if (args.top !== undefined && !(typeof args.top === "number" && Number.isInteger(args.top) && args.top >= 1)) {
+			throw new McpError(ErrorCode.InvalidParams, "top must be a positive integer.");
+		}
+		if (args.model !== undefined && !(typeof args.model === "string" && args.model.trim())) {
+			throw new McpError(ErrorCode.InvalidParams, "model must be a non-empty OpenRouter model id.");
+		}
+		const maxCost = typeof args.max_cost === "number" && args.max_cost >= 0 ? args.max_cost : config.maxCost;
+		const verified = await runBroadsideVerify(cwd, apiKey, {
+			...(runId && { runId }),
+			...(args.top !== undefined && { top: args.top }),
+			...(typeof args.model === "string" && args.model.trim() && { model: args.model.trim() }),
+			maxCost,
+			signal: serverLifetime?.signal,
+		}).catch((error) => {
+			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		});
+		return textResult(verifyResultText(verified), {
+			runId: verified.runId,
+			outputDir: verified.outputDir,
+			status: verified.status,
+			model: verified.model,
+			candidates: verified.candidates,
+			totalCost: verified.totalCost,
+			...(verified.stoppedByCost && { stoppedByCost: true }),
+			findings: verified.findings,
+		});
+	}
+
+	// action === "collect"
 	const collect = await runBroadsideCollect(cwd, apiKey, {
 		waitMs,
 		includeSynthesis,
@@ -1783,8 +1820,8 @@ const TOOLS = [
 				cwd: { type: "string", description: "Absolute path to the target repository." },
 				action: {
 					type: "string",
-					enum: ["submit", "collect", "status", "models"],
-					description: "submit fires all lens batches and returns batch ids; collect polls submitted batches, saves results, and optionally runs the synthesis pass; status shows recorded runs; models lists batch-capable models with pricing and capabilities.",
+					enum: ["submit", "collect", "status", "models", "verify"],
+					description: "submit fires all lens batches and returns batch ids; collect polls submitted batches, saves results, and optionally runs the synthesis pass; status shows recorded runs; models lists batch-capable models with pricing and capabilities; verify reads a collected run's top defect and security findings against the repository with read-only tools (one sync-priced call each, about a cent on the default model) and writes verified.md/verified.json beside triage.md with a verdict per finding: confirmed (a reachable failure, with the trigger), not-a-defect, discarded, or unclear.",
 				},
 				lenses: {
 					type: "array",
@@ -1797,7 +1834,11 @@ const TOOLS = [
 				},
 				run_id: {
 					type: "string",
-					description: "For collect: the run to collect, as listed by the status action. Defaults to the most recent run; pass this to collect an older run that is still in flight after a newer submit.",
+					description: "For collect and verify: the run to act on, as listed by the status action. Defaults to the most recent run; pass this to collect an older run that is still in flight after a newer submit.",
+				},
+				top: {
+					type: "integer",
+					description: "For verify: how many findings to read, most severe first (default 10). Each costs one sync call; max_cost caps the pass as a running total.",
 				},
 				wait_seconds: {
 					type: "number",
@@ -1820,7 +1861,7 @@ const TOOLS = [
 				max_cost: {
 					type: "number",
 					description:
-						"Approximate run expense limit in USD. The submit action estimates the run cost from slice sizes and the configured model's per-token pricing (live OpenRouter lookup, cached 24h) and refuses to submit when the estimate exceeds the limit unless force is true. Falls back to max_cost in .codecarto/broadside/config.yaml, whose default is $1.00; pass 0 for no limit.",
+						"Approximate run expense limit in USD. The submit action estimates the run cost from slice sizes and the configured model's per-token pricing (live OpenRouter lookup, cached 24h) and refuses to submit when the estimate exceeds the limit unless force is true. For verify it is a running cap: the pass stops before the next finding once the calls so far have reached it. Falls back to max_cost in .codecarto/broadside/config.yaml, whose default is $1.00; pass 0 for no limit.",
 				},
 				force: {
 					type: "boolean",
@@ -1838,7 +1879,7 @@ const TOOLS = [
 				model: {
 					type: "string",
 					description:
-						"For submit: the OpenRouter batch model for this run (an id ending in :batch, as listed by action 'models'). Falls back to model in .codecarto/broadside/config.yaml, then the shipped default. Pre-flighted like the configured model: priced from the live catalog, refused without structured-output support, clamped to its completion ceiling. The models listing is advisory — some catalog ids have no batch endpoint and are refused at submit, at no cost; the listing tags ids this repository has already seen accepted or refused.",
+						"For verify: the sync (non-batch) OpenRouter model to read with; defaults to the run's model without its :batch suffix. For submit: the OpenRouter batch model for this run (an id ending in :batch, as listed by action 'models'). Falls back to model in .codecarto/broadside/config.yaml, then the shipped default. Pre-flighted like the configured model: priced from the live catalog, refused without structured-output support, clamped to its completion ceiling. The models listing is advisory — some catalog ids have no batch endpoint and are refused at submit, at no cost; the listing tags ids this repository has already seen accepted or refused.",
 				},
 				lens_models: {
 					type: "object",

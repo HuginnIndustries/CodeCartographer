@@ -128,7 +128,7 @@ test("every completion token the command offers is one the parser accepts", () =
 		// Value-taking flags are offered as a prefix ("--max-cost="); complete
 		// them with a value before parsing.
 		const arg = token === "--lens-model=" ? `${token}security:vendor/name:batch` : token.endsWith("=") ? `${token}1` : token;
-		const context = token === "--benchmarks" ? "models " : token === "--wait=" || token === "--run=" ? "collect " : "";
+		const context = token === "--benchmarks" ? "models " : token === "--wait=" || token === "--run=" ? "collect " : token === "--top=" ? "verify " : "";
 		const r = parseBroadsideFlags(`${context}${arg}`);
 		assert.deepEqual(r.unknown, [], `completion token ${token} parses as unknown`);
 		assert.equal(r.error, undefined, `completion token ${token} errors: ${r.error}`);
@@ -165,4 +165,22 @@ test("--lens-model=LENS:ID splits on the first colon and is repeatable", () => {
 	assert.match(parseBroadsideFlags("--lens-model=security:").error, /needs LENS:MODEL/);
 	assert.match(parseBroadsideFlags("--lens-model=").error, /needs LENS:MODEL/);
 	assert.match(parseBroadsideFlags("collect --lens-model=security:vendor/name:batch").error, /only meaningful for submit/);
+});
+
+// ---------- verify (#143) ----------
+
+test("verify takes --top, --model, --run, and --max-cost, and nothing that belongs to a batch", () => {
+	const r = parseBroadsideFlags("verify --top=5 --model=google/gemini-3.7-flash --run=2026-09-13T20-00-19-293Z --max-cost=0.25");
+	assert.equal(r.action, "verify");
+	assert.equal(r.top, 5);
+	assert.equal(r.model, "google/gemini-3.7-flash");
+	assert.equal(r.runId, "2026-09-13T20-00-19-293Z");
+	assert.equal(r.maxCost, 0.25);
+	assert.equal(r.error, undefined);
+	assert.match(parseBroadsideFlags("verify --top=0").error, /--top needs a positive whole number/);
+	assert.match(parseBroadsideFlags("verify --top=2.5").error, /--top needs a positive whole number/);
+	assert.match(parseBroadsideFlags("verify --top=").error, /--top needs a non-negative number/);
+	assert.match(parseBroadsideFlags("submit --top=3").error, /--top is only meaningful for verify/);
+	assert.match(parseBroadsideFlags("verify --wait=10").error, /verify runs to completion/);
+	assert.match(parseBroadsideFlags("verify security").error, /Lens names are only meaningful for submit/);
 });

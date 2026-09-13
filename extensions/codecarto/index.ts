@@ -66,6 +66,8 @@ import {
 	runBroadsideCollect,
 	runBroadsideStatus,
 	runBroadsideSubmit,
+	runBroadsideVerify,
+	verifyResultText,
 	statusText,
 	describeConfigProblems,
 	describeIncrementalFallback,
@@ -1147,7 +1149,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("codecarto-broadside", {
-		description: "Batch reconnaissance (Broad-Side): /codecarto-broadside [submit|collect|status|models] [lenses…] [--model=ID] [--lens-model=LENS:ID] [flags]",
+		description: "Batch reconnaissance (Broad-Side): /codecarto-broadside [submit|collect|status|models|verify] [lenses…] [--model=ID] [--lens-model=LENS:ID] [--top=N] [flags]",
 		// Completes the token under the cursor, so lens names and flags are
 		// offered after the action too, and keeps everything typed before it.
 		getArgumentCompletions: (prefix) => completeLastToken(prefix, KNOWN_BROADSIDE_TOKENS.map((value) => ({ value }))),
@@ -1349,6 +1351,34 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 							`${error instanceof Error ? error.message : String(error)}. Retry with /codecarto-broadside collect.`,
 						"error",
 					);
+				}
+				return;
+			}
+
+			if (flags.action === "verify") {
+				// The verification pass (#143): one sync call per finding with
+				// read-only tools; the widget counts verdicts as they land.
+				const tally = { done: 0 };
+				renderProgress("Reading the top findings against the source…");
+				try {
+					const verified = await runBroadsideVerify(ctx.cwd, apiKey, {
+						...(flags.runId && { runId: flags.runId }),
+						...(flags.top !== undefined && { top: flags.top }),
+						...(flags.model && { model: flags.model }),
+						maxCost: flags.maxCost ?? config.maxCost,
+						signal: ctx.signal,
+						onProgress: (finding) => {
+							tally.done += 1;
+							progress.set(`#${finding.index}`, `${finding.verdict} — ${finding.title}`);
+							renderProgress(`Verifying findings… ${tally.done} read`);
+						},
+					});
+					const lines = verifyResultText(verified).split("\n");
+					const confirmed = verified.findings.filter((f) => f.verdict === "confirmed").length;
+					finish(lines, `Broad-Side verify: ${confirmed} confirmed of ${verified.findings.length} read`, verified.status === "completed" ? "info" : "warning");
+				} catch (error) {
+					if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
+					notifyCtx(ctx, `Broad-Side verify failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 				}
 				return;
 			}

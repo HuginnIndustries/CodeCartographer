@@ -160,6 +160,7 @@ On a repository too large to skim, `codecarto_broadside` fires six analysis lens
 ```
 codecarto_broadside {cwd: "/abs/path/to/repo", action: "submit"}
 codecarto_broadside {cwd: "/abs/path/to/repo", action: "collect"}
+codecarto_broadside {cwd: "/abs/path/to/repo", action: "verify"}   # then read verified.md first
 ```
 
 It needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY`, or `.codecarto/broadside/config.yaml`) and works on any git repository, with or without a workspace. Submit prices the run first and refuses anything over `max_cost`. `action: "models"` lists the batch catalog — advisory, since some listed ids are refused at submit for having no batch endpoint (free, and the listing tags what this repository has tried) — and `model` / `lens_models` on submit pick one for the run or per lens. Keep `wait_seconds` under your host's tool-call timeout (Claude Code's is a few minutes): if the host gives up mid-wait, the server stops polling and submits nothing further, the batches keep running, and the next `collect` claims them — two collects on one run never pay for the synthesis, triage, or retry twice. Its findings are **unverified leads, not evidence** — see the [Broad-Side section](../README.md#broad-side-batch-reconnaissance) in the README.

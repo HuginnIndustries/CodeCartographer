@@ -327,6 +327,18 @@ export type BroadsideTriageEntry = {
 	error?: string;
 };
 
+/** Recorded on the run once a verification pass has run (#143); see core/broadside-verify.ts. */
+export type BroadsideVerifyEntry = {
+	/** `completed`: every selected finding got a verdict; `partial`: the cost cap or an abort stopped it early. */
+	status: "completed" | "partial";
+	model: string;
+	top: number;
+	verified: number;
+	confirmed: number;
+	cost: number;
+	at: string;
+};
+
 /** The truncation retry pass of one run: one batch per model (#206). */
 export type BroadsideRetryEntry = {
 	status: "submitted" | "completed" | "failed";
@@ -357,6 +369,8 @@ export type BroadsideRun = {
 	 * run cannot both submit it (#322). Absent until a collect claims it.
 	 */
 	retry?: BroadsideRetryEntry;
+	/** The verification pass over the top findings, when one has run (#143). */
+	verify?: BroadsideVerifyEntry;
 	totalCost?: number;
 	pricing?: ModelPricing;
 	maxCost?: number;
@@ -1389,7 +1403,7 @@ const SOURCE_SPECS: Record<string, { glob: string; exts: string[] }> = {
  * file list with uncommitted contents and never saw an untracked file (#248).
  * A target that is not a git repository gets a bounded walk.
  */
-async function listRepoFiles(targetDir: string): Promise<{ files: string[]; snapshot: RepoSnapshotSource }> {
+export async function listRepoFiles(targetDir: string): Promise<{ files: string[]; snapshot: RepoSnapshotSource }> {
 	try {
 		const listed = await execFileAsync(
 			"git",
@@ -1673,7 +1687,7 @@ function matchesAnyGlob(path: string, globs: string[]): boolean {
 	return false;
 }
 
-function isSlurpable(relPath: string): boolean {
+export function isSlurpable(relPath: string): boolean {
 	// A credential store is never a lens input, whatever its globs say (#252).
 	if (isSecretFile(relPath)) return false;
 	const segments = relPath.split("/");
@@ -2134,6 +2148,9 @@ export async function persistBroadsideRunMerging(broadsideDir: string, run: Broa
 			if (passEntryRank(onDisk.synthesis) > passEntryRank(run.synthesis)) run.synthesis = onDisk.synthesis;
 			if (passEntryRank(onDisk.triage) > passEntryRank(run.triage)) run.triage = onDisk.triage;
 			if (retryEntryRank(onDisk.retry) > retryEntryRank(run.retry)) run.retry = onDisk.retry;
+			// A verification pass another process recorded is never dropped by
+			// a collect that never knew about it; a newer pass replaces an older.
+			if (onDisk.verify && (!run.verify || onDisk.verify.at > run.verify.at)) run.verify = onDisk.verify;
 			for (const [lensId, theirs] of Object.entries(onDisk.batches) as Array<[BroadsideLensId, BroadsideBatchEntry | undefined]>) {
 				if (theirs && batchEntryRank(theirs) > batchEntryRank(run.batches[lensId])) run.batches[lensId] = theirs;
 			}
@@ -4302,6 +4319,9 @@ export function statusText(state: BroadsideStateFile): string {
 		}
 		lines.push(`  synthesis: ${run.synthesis.status}`);
 		lines.push(`  triage: ${run.triage?.status ?? "pending"}`);
+		if (run.verify) {
+			lines.push(`  verify: ${run.verify.status} — ${run.verify.confirmed} confirmed of ${run.verify.verified} read on ${run.verify.model}, $${run.verify.cost.toFixed(4)}`);
+		}
 		if (run.totalCost !== undefined) lines.push(`  total cost: $${run.totalCost.toFixed(6)}`);
 	}
 	return lines.join("\n");
