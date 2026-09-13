@@ -51,8 +51,11 @@ file only moves when a tier completes.
 | Item | Issue | Notes |
 |---|---|---|
 | **Triage lens** — prioritized fix queue (impact × difficulty, grouped by module) | [#135](https://github.com/HuginnIndustries/CodeCartographer/issues/135) | **Shipped**: triage pass runs on collect alongside synthesis (`include_triage` to skip) |
-| **Truncation repair** — detect max_tokens-cutoff JSON, resubmit slices, report truncation in summaries | [#133](https://github.com/HuginnIndustries/CodeCartographer/issues/133) | **Shipped**: fence-tolerant parsing + `truncated` flags + automatic re-submit of truncated slices with a doubled output cap |
-| **Concurrent polling** — poll all in-flight batches round-robin against one deadline | [#136](https://github.com/HuginnIndustries/CodeCartographer/issues/136) | **Shipped**: `pollBatchesConcurrently` polls in parallel with per-lens progress tags |
+| **Truncation repair** — detect max_tokens-cutoff JSON, resubmit slices, report truncation in summaries | [#133](https://github.com/HuginnIndustries/CodeCartographer/issues/133) | **Shipped**: fence-tolerant parsing + `truncated` flags + automatic re-submit of truncated slices with a doubled output cap; since 0.22.1 the retry runs as one batch per model (#206) at low reasoning effort, because a token cap is ignored by Gemini 3.x and doubling the budget doubled the thinking (#320) |
+| **Concurrent polling** — poll all in-flight batches round-robin against one deadline | [#136](https://github.com/HuginnIndustries/CodeCartographer/issues/136) | **Shipped**: `pollBatchesConcurrently` polls in parallel with per-lens progress tags; retries and post-passes poll the same way (0.22.1, 0.22.2) |
+| **Reasoning control** — stop thinking from eating the output budget | [#320](https://github.com/HuginnIndustries/CodeCartographer/pull/320) | **Shipped**: every lens request asks for `effort: low`; measured on `gemini-3.8-flash:batch`, a `max_tokens` cap was ignored (11,518 thinking tokens under a 5,800 cap) while low effort reasoned 0 tokens at a twelfth of the cost |
+| **Lens scope fallback** — a security review for repositories with no `server/` | [#319](https://github.com/HuginnIndustries/CodeCartographer/issues/319) | **Shipped** (0.23.0): the security and API lenses read every source file when their targeted globs match nothing, priced and reported as such |
+| **Concurrent-collect safety** — two collects on one run must not pay twice | [#322](https://github.com/HuginnIndustries/CodeCartographer/issues/322) | **Shipped** (0.22.2): post-passes and the retry are claimed in the run's state before submission; writes merge slot by slot; a server whose client is gone stops polling |
 | **Per-language prompts** — Go/Python/Rust/TS lens prompts; globs already adapt | [#137](https://github.com/HuginnIndustries/CodeCartographer/issues/137) | **Shipped**: language profiles drive defect/conventions prompts; schemas unchanged |
 
 ## Tier 2 — integration depth
@@ -75,7 +78,7 @@ file only moves when a tier completes.
 
 | Item | Issue | Notes |
 |---|---|---|
-| **Headless-agent lens queue** — sync-priced, tool-using variant via `@openrouter/agent` | [#143](https://github.com/HuginnIndustries/CodeCartographer/issues/143) | 2× batch pricing; overlaps the interactive pipeline. The likelier winner is the hybrid: batch sweeps + one sync-priced verification pass on the top N findings |
+| **Headless-agent lens queue** — sync-priced, tool-using variant via `@openrouter/agent` | [#143](https://github.com/HuginnIndustries/CodeCartographer/issues/143) | 2× batch pricing; overlaps the interactive pipeline. The measured weakness of the batch pass is verification, not coverage (#141 scorecard: 6/6 local bugs found, the same two false positives repeated, 0/4 lifecycle bugs), so the variant worth building is the hybrid: batch sweeps, then one sync-priced, read-only-tools verification pass over the top-N triage items writing `verified.md` next to `triage.md`. Needs a funded comparison run on a real repository before it is more than a sketch |
 
 ## Principles
 
