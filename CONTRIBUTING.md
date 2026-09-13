@@ -90,10 +90,11 @@ So before pushing a tag, drive one real phase through each surface in [`docs/cli
 
 | Surface | Run | Record |
 |---|---|---|
-| Pi | `/codecarto-init` then `/codecarto-next` in a scratch repo | the phase prompt Pi displayed |
+| Pi | `/codecarto-init architecture-only` then `/codecarto-next --auto` in a scratch repo, on a real model (cheapest known: `--model openrouter/google/gemini-3.7-flash` with `OPENROUTER_API_KEY`, ~$0.25 for a phase on a ten-file repo) | the notifications through "Auto pipeline complete", `current_phase: complete`, the artifact's `**Overall:**` line |
 | Claude Code | `codecarto_init` then `codecarto_next` via MCP | the first line of the tool result |
 | Codex | same, via `codex mcp add codecartographer -- codecarto-mcp`; headless needs the per-server approval key (below) | the first line of the tool result |
 | Hermes | same | the first line of the tool result |
+| Broad-Side (when `core/broadside.ts` or the wrappers' broadside paths changed) | a live submit → collect on a small real repository with a scoped OpenRouter key (below) | the submit report and the collect report, plus OpenRouter's batch list for the run |
 
 Paste the actual returns into the release PR. **A checked box is not evidence; a prompt is.** A result that is empty, truncated, or a bare object rather than the prompt text is the failure this step exists to catch, and it is invisible in a summary.
 
@@ -135,6 +136,17 @@ codex exec --ephemeral --skip-git-repo-check -s read-only -C /path/to/scratch-re
 ```
 
 The transcript shows `mcp: ccrel/codecarto_init (completed)` per call; `(failed)` with the approval message means the key did not take — re-check `codex exec --help` and `codex mcp get` for that release before falling back to an interactive session (#218).
+
+**Broad-Side is verified live, not mocked.** Every Broad-Side defect found in the 0.22.x cycle — a reasoning cap the provider ignored, a request shape the provider refused after accepting the batch, two collects paying for the post-passes twice, a lens skipping the repository it existed for — was invisible to the fake fetcher and obvious on the first real run. When a release touches `core/broadside.ts` or the wrappers' Broad-Side paths, run one small real scan with a scoped key (a 24-hour, few-dollar key is plenty; a whole day of this cost under a dollar) against a ten-file repository, and read three things: the submit report (what was scanned, on what, for how much), the collect report, and OpenRouter's own record of the run:
+
+```bash
+# every batch the key has submitted, newest first, with status and cost
+curl -s "https://openrouter.ai/api/beta/batches?limit=10" -H "Authorization: Bearer $OPENROUTER_API_KEY"
+# one batch's results: finish_reason and usage.completion_tokens_details.reasoning_tokens explain a truncation
+curl -s "https://openrouter.ai/api/beta/batches/<id>" -H "Authorization: Bearer $OPENROUTER_API_KEY"
+```
+
+The batch list is how a duplicate post-pass or retry shows up — the collect report cannot see a batch another process submitted. Drive the server the way a host does (an MCP client over stdio against the tarball's `bin.mjs`) and give the client a request timeout longer than `wait_seconds`; the SDK's default is 60 s, and a client that gives up mid-wait is the #322 scenario, which is worth reproducing on purpose once: the server must exit within seconds and the next collect must submit exactly one synthesis and one triage. Batch jobs take five to twenty minutes on a tiny repository, so run the collect in the background and check back.
 
 Also confirm the prompt is present in **both** `content` and `structuredContent`. Clients disagree about which they read (see [`docs/client-surfaces.md`](docs/client-surfaces.md)), and #94 shipped a `codecarto_next` whose `structuredContent` carried `{phase, forced}` and no prompt. Checking both fields is what makes that shape impossible for any client, rather than for the ones you happened to test.
 
