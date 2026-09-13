@@ -92,9 +92,18 @@
 # Override only with a raised lens output budget, or the JSON truncates exactly
 # as above.
 #
+# Set `effort` OR `max_tokens`, not both: OpenRouter refuses a request that
+# carries both ("Only one of reasoning.effort and reasoning.max_tokens can be
+# specified") — per request, after the batch is accepted, so every lens fails
+# at $0. Submit refuses a config.yaml that sets both.
+#
 # reasoning:
 #   effort: low        # minimal | low | medium | high
+#
+# reasoning:
 #   max_tokens: 2000   # or set the thinking budget directly
+#
+# reasoning:
 #   enabled: false     # only where the provider allows it
 
 # Approximate run expense limit in USD. The default is 1.00, and it applies

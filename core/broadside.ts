@@ -262,6 +262,8 @@ export type BroadsideBatchEntry = {
 	cost?: number;
 	resultCount?: number;
 	error?: unknown;
+	/** Why a `skipped` lens had nothing to submit: the globs that matched no file. */
+	reason?: string;
 	/** Set when this lens used a model other than the run default. */
 	model?: string;
 	/** The completion ceiling of this lens's model; bounds the truncation retry. */
@@ -2010,6 +2012,24 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 			if (typeof parsed !== "object" || Array.isArray(parsed)) throw new BroadsideConfigError(configPath, "is not a YAML mapping");
 			raw = parsed as Record<string, unknown>;
 		}
+		// OpenRouter accepts `reasoning.effort` or `reasoning.max_tokens`, not
+		// both: a request carrying both is refused per request *after* the batch
+		// is accepted, so every lens fails at $0 with the reason in each
+		// result's error. Seen live on 0.22.0 with the two keys set together.
+		// Refuse here, where the file can be fixed, rather than submit a run
+		// that cannot produce a result.
+		const reasoning = raw.reasoning;
+		if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+			const value = reasoning as Record<string, unknown>;
+			const hasEffort = typeof value.effort === "string";
+			const hasBudget = typeof value.max_tokens === "number" && value.max_tokens > 0;
+			if (hasEffort && hasBudget) {
+				throw new BroadsideConfigError(
+					configPath,
+					'sets both reasoning.effort and reasoning.max_tokens; OpenRouter accepts one or the other ("Only one of reasoning.effort and reasoning.max_tokens can be specified"), and every lens request would fail after the batch is accepted. Keep one',
+				);
+			}
+		}
 	}
 	return buildBroadsideConfig(raw);
 }
@@ -2725,6 +2745,8 @@ export async function runBroadsideSubmit(
 
 	// Slice offline first so the estimate covers every request we would send.
 	const slicesByLens = new Map<BroadsideLensId, FileSlice[]>();
+	// Why a lens ended up with nothing to submit, for the report (see below).
+	const skipReasons = new Map<BroadsideLensId, string>();
 	let estimatedInputTokens = 0;
 	let estimatedOutputTokens = 0;
 	let estimatedTotalCost = 0;
@@ -2748,12 +2770,24 @@ export async function runBroadsideSubmit(
 			redactedValues += slice.redactedValues ?? 0;
 			for (const file of slice.redactedFiles ?? []) redactedFiles.add(file);
 		}
+		const matchedBeforeIncremental = slices.length;
 		if (changed) {
 			// Repo-info slices (empty files, e.g. architecture) always run;
 			// file-backed slices run only when one of their files changed.
 			slices = slices.filter((s) => s.files.length === 0 || s.files.some((f) => changed!.has(f)));
 		}
 		slicesByLens.set(lensId, slices);
+		if (slices.length === 0) {
+			const globs = lens.globsFor(info).filter(Boolean);
+			skipReasons.set(
+				lensId,
+				globs.length === 0
+					? "the lens has no file patterns for this language"
+					: matchedBeforeIncremental > 0
+						? "incremental: none of this lens's files changed since the previous run"
+						: `no files matched ${globs.join(", ")}${lens.skipTestFiles ? " (test files excluded)" : ""}`,
+			);
+		}
 		const lensModel = modelForLens(lensId);
 		const { pricing: lensPricing, outputCap: lensOutputCap } = resolved.get(lensModel)!;
 		const maxTokens = lensOutputCap ? Math.min(lens.maxTokens, lensOutputCap) : lens.maxTokens;
@@ -2869,7 +2903,14 @@ export async function runBroadsideSubmit(
 		if (requests.length === 0) {
 			// No files matched the lens's globs. That is a coverage gap to
 			// report, not a batch to submit — the API rejects empty batches.
+			// Name the globs: a JavaScript service whose server lives at
+			// src/server.js gets no security review (that lens reads server/**,
+			// **/auth*, **/middleware/**), and "skipped (0 request(s))" alone
+			// read as an empty repository rather than a lens that looked in
+			// the wrong place.
 			entry.status = "skipped";
+			const reason = skipReasons.get(lensId);
+			if (reason) entry.reason = reason;
 			continue;
 		}
 
@@ -2891,6 +2932,11 @@ export async function runBroadsideSubmit(
 		);
 	}
 	await Promise.allSettled(submissions);
+	// A run with no batch behind it has nothing in flight. Every lens was
+	// skipped or refused, so no poll will ever complete it; leaving it
+	// "in-flight" had status listing a refused run above the completed ones
+	// with synthesis and triage "pending" forever.
+	if (!Object.values(run.batches).some((entry) => entry.batchId)) run.status = "failed";
 	await persistBroadsideRun(broadsideDir, run);
 	// What the provider just said about each model's batch endpoint outlives
 	// the run: the `models` action reads it back (#141).
@@ -3676,8 +3722,13 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		const override = entry.model ? ` on ${entry.model}` : "";
 		// A rejected lens says why: the message is the only way to tell a
 		// catalog id with no batch endpoint from a full job quota, and both
-		// used to read as a bare "rejected".
-		const reason = !entry.batchId && entry.error ? ` — ${explainBatchError(entry.error)}` : "";
+		// used to read as a bare "rejected". A skipped lens names the globs
+		// that matched nothing.
+		const reason = !entry.batchId && entry.error
+			? ` — ${explainBatchError(entry.error)}`
+			: !entry.batchId && entry.reason
+				? ` — ${entry.reason}`
+				: "";
 		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})${override}${reason}`);
 	}
 	if (result.repo) {
@@ -3895,7 +3946,10 @@ export function statusText(state: BroadsideStateFile): string {
 		for (const lensId of BROADSIDE_LENS_IDS) {
 			const entry = run.batches[lensId];
 			if (!entry) continue;
-			lines.push(`  ${lensId}: ${entry.status}${entry.batchId ? ` (${entry.batchId})` : ""}${entry.cost !== undefined ? `, $${entry.cost.toFixed(6)}` : ""}`);
+			lines.push(
+				`  ${lensId}: ${entry.status}${entry.batchId ? ` (${entry.batchId})` : ""}${entry.cost !== undefined ? `, $${entry.cost.toFixed(6)}` : ""}` +
+					(entry.status === "skipped" && entry.reason ? ` — ${entry.reason}` : ""),
+			);
 		}
 		lines.push(`  synthesis: ${run.synthesis.status}`);
 		lines.push(`  triage: ${run.triage?.status ?? "pending"}`);
