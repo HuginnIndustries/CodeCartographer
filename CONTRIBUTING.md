@@ -92,7 +92,7 @@ So before pushing a tag, drive one real phase through each surface in [`docs/cli
 |---|---|---|
 | Pi | `/codecarto-init` then `/codecarto-next` in a scratch repo | the phase prompt Pi displayed |
 | Claude Code | `codecarto_init` then `codecarto_next` via MCP | the first line of the tool result |
-| Codex | same, via `codex mcp add codecartographer -- codecarto-mcp` | the first line of the tool result |
+| Codex | same, via `codex mcp add codecartographer -- codecarto-mcp`; headless needs the per-server approval key (below) | the first line of the tool result |
 | Hermes | same | the first line of the tool result |
 
 Paste the actual returns into the release PR. **A checked box is not evidence; a prompt is.** A result that is empty, truncated, or a bare object rather than the prompt text is the failure this step exists to catch, and it is invisible in a summary.
@@ -123,6 +123,18 @@ If `pi auth check --provider <name>` reports `not_ready`, that is a separate and
 npm run build && npm pack
 node scripts/smoke-mcp.mjs --tarball "$(pwd)/codecartographer-pi-<version>.tgz"
 ```
+
+**Codex headless needs the server's tools pre-approved.** `codex exec` runs with `approval_policy=never`, and an MCP tool call requires approval under that policy, so by default every call is refused before it reaches the server (`MCP tool call requires approval, but approval policy is never`). `-a`, `-c approval_policy=…`, `trusted=true`, and `--sandbox` do not lift it, and `--dangerously-bypass-approvals-and-sandbox` also unsandboxes shell commands, which is not a routine release step. The supported key is per server: `mcp_servers.<name>.default_tools_approval_mode = "approve"` (Codex 0.154.0; `[mcp_servers.<name>.tools.<tool>] approval_mode = "approve"` is the per-tool form). It works with `-s read-only`, since the server runs outside the exec sandbox. Point a scratch server name at the tarball's `bin.mjs` so the thing exercised is the thing being published, and disable the installed registration for the run so the two cannot be confused:
+
+```bash
+codex exec --ephemeral --skip-git-repo-check -s read-only -C /path/to/scratch-repo \
+  -c 'mcp_servers.ccrel.command="node"' -c 'mcp_servers.ccrel.args=["/abs/path/to/unpacked/dist/mcp-server/bin.mjs"]' \
+  -c 'mcp_servers.ccrel.default_tools_approval_mode="approve"' \
+  -c 'mcp_servers.codecartographer.enabled=false' \
+  'Do exactly these MCP tool calls in order, no shell commands: (1) ccrel/codecarto_init with {"cwd": "/path/to/scratch-repo", "pipeline": "lite"}; (2) ccrel/codecarto_next with {"cwd": "/path/to/scratch-repo"}. Reply with the first line of each tool result verbatim.'
+```
+
+The transcript shows `mcp: ccrel/codecarto_init (completed)` per call; `(failed)` with the approval message means the key did not take — re-check `codex exec --help` and `codex mcp get` for that release before falling back to an interactive session (#218).
 
 Also confirm the prompt is present in **both** `content` and `structuredContent`. Clients disagree about which they read (see [`docs/client-surfaces.md`](docs/client-surfaces.md)), and #94 shipped a `codecarto_next` whose `structuredContent` carried `{phase, forced}` and no prompt. Checking both fields is what makes that shape impossible for any client, rather than for the ones you happened to test.
 
