@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] — 2026-09-13
+
+One change, a minor because a lens now spends where it used to skip.
+
+### Changed
+
+- **The security and API lenses fall back to every source file when their targeted globs match nothing.** Both lenses target the paths where a trust boundary usually lives — `server/**`, `**/auth*`, `**/middleware/**`, `SECURITY.md` for security; `server/**`, `api/**`, `src/server/**`, `src/api/**`, routers, handlers, endpoints for API. A Node service whose server is `src/server.js` matched none of them, and the lens that exists to find exactly that code reported "skipped" (#319). When the targeted patterns find nothing, the two lenses now read the language's whole source set instead — priced as a real scan (whole-repo slices are chunked at the lens's slice size, not truncated, so `max_cost` remains the guard on a large repository), recorded on the batch entry, and said so on the lens line of the estimate (Pi's dialog and the MCP submit text), in `status`, and in the prompt, which tells the model these are all the sources so it locates the trust boundary wherever it lives rather than reporting the missing directory. A lens whose targeted patterns and fallback both find nothing (only test files, say) is skipped with a reason naming both. Verified live on the service that exposed the gap: the security lens found the `===` bearer-token comparison, auth-off-by-default, error-message leakage, and a shared temp-file race, for $0.002. #328.
+
 ## [0.22.3] — 2026-09-13
 
 ### Fixed
