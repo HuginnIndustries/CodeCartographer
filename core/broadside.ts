@@ -3174,9 +3174,19 @@ export async function runBroadsideCollect(
 	// #133: re-submit truncated slices once with a bumped output cap. Batch
 	// requests are pure, so re-running is always safe; the aim is to recover
 	// coverage the first pass lost to a max_tokens cutoff, not to loop forever.
+	//
+	// All bumped requests for one model go out as ONE batch, and the batches
+	// (one per model, since a batch carries a single model) are polled
+	// together against the shared deadline. Each truncated slice used to be
+	// submitted and polled to terminal before the next was submitted, so a
+	// model that truncated 11 of 13 slices turned a five-minute collect into
+	// eleven sequential round trips — the serialization #136 removed from the
+	// lens pass, still present here (#206). Grouping also keeps the retry to
+	// one job per model against OpenRouter's 16-concurrent-job quota.
 	let retriedCount = 0;
 	if (opts.retryTruncated !== false && truncatedCount > 0) {
 		const requestsByCustomId = await loadStoredRequests(runDir);
+		const byModel = new Map<string, { requests: BatchRequest[]; slices: Map<string, StoredLensResult> }>();
 		for (const stored of allLensResults) {
 			if (!stored.truncated) continue;
 			const original = requestsByCustomId[stored.customId];
@@ -3191,40 +3201,56 @@ export async function runBroadsideCollect(
 			const bumpedMax = lensCap ? Math.min(previousMax * 2, lensCap) : previousMax * 2;
 			if (bumpedMax <= previousMax) continue; // already at the ceiling
 
-			const bumped: BatchRequest = {
-				...original,
-				body: { ...original.body, max_tokens: bumpedMax },
-			};
+			const group = byModel.get(lensModel) ?? { requests: [], slices: new Map() };
+			group.requests.push({ ...original, body: { ...original.body, max_tokens: bumpedMax } });
+			group.slices.set(stored.customId, stored);
+			byModel.set(lensModel, group);
+		}
+
+		// Submit every group, then poll whatever was accepted, together.
+		const submitted: Array<{ model: string; batchId: string }> = [];
+		for (const [model, group] of byModel) {
 			try {
-				const { batchId, error } = await submitBatch([bumped], apiKey, opts.fetcher, lensModel);
-				if (error) continue;
-				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
-					// Share the caller's deadline. Each of these polls used to
-					// start a fresh 25-minute budget, so `wait_seconds` bounded
-					// only the lens poll and a collect could run for the caller's
-					// budget plus fifty minutes.
-					deadlineMs: Math.max(0, deadline - Date.now()),
-					onStatus: (status, counts) => opts.onStatus?.(`${stored.lensId}:retry`, status, counts),
-					fetcher: opts.fetcher,
-				});
-				if (batch.status !== "completed") continue;
-				const results = Array.isArray(batch.results) ? (batch.results as Array<Record<string, unknown>>) : [];
-				const content = results.length > 0 ? extractContent(results[0]) : null;
-				if (content === null || parseLensJson(content) === null) continue; // still no good
+				const { batchId, error } = await submitBatch(group.requests, apiKey, opts.fetcher, model);
+				if (!error && batchId) submitted.push({ model, batchId });
+			} catch {
+				// A retry batch that fails to submit leaves its slices' original
+				// truncated results in place — nothing is lost.
+			}
+		}
+		const polled = await pollBatchesConcurrently(
+			submitted.map(({ model, batchId }) => ({ lensId: `retry:${model}` as BroadsideLensId, batchId })),
+			apiKey,
+			{
+				// Share the caller's deadline. Each of these polls used to start a
+				// fresh 25-minute budget, so `wait_seconds` bounded only the lens
+				// poll and a collect could run for the caller's budget plus fifty
+				// minutes.
+				deadlineMs: Math.max(0, deadline - Date.now()),
+				fetcher: opts.fetcher,
+				onStatus: opts.onStatus,
+			},
+		);
 
-				const usage = (batch.usage ?? {}) as Record<string, unknown>;
-				totalCost += typeof usage.cost === "number" ? usage.cost : 0;
-
+		for (const { model, batchId } of submitted) {
+			const batch = polled.get(batchId);
+			if (!batch || batch.status !== "completed") continue;
+			const group = byModel.get(model)!;
+			const usage = (batch.usage ?? {}) as Record<string, unknown>;
+			totalCost += typeof usage.cost === "number" ? usage.cost : 0;
+			const results = Array.isArray(batch.results) ? (batch.results as Array<Record<string, unknown>>) : [];
+			for (const result of results) {
+				const stored = group.slices.get(String(result.custom_id ?? ""));
+				if (!stored) continue;
+				const content = extractContent(result);
+				if (content === null) continue;
 				const parsed = parseLensJson(content);
+				if (parsed === null) continue; // still no good
 				await writeFile(join(runDir, `${sanitizeId(stored.customId)}.json`), `${JSON.stringify(parsed, null, "\t")}\n`, "utf8");
 				await writeFile(join(runDir, `${sanitizeId(stored.customId)}.md`), renderFindingsMarkdown(content), "utf8");
-
 				stored.content = content;
 				stored.truncated = false;
 				retriedCount += 1;
-			} catch {
-				// A retry that fails to submit/poll leaves the original
-				// truncated result in place — nothing is lost.
 			}
 		}
 		truncatedCount = allLensResults.filter((s) => s.truncated).length;
