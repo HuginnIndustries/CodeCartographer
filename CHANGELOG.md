@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.1] — 2026-09-13
+
+What running 0.22.0 against the real OpenRouter Batch API and a real Pi session turned up, in one PR (#320). Five defects, none of which a mocked fetcher had a reason to show; the first changes what every lens request asks a model for.
+
+### Changed
+
+- **Every lens request asks for low reasoning effort instead of a token cap.** The cap (`reasoning.max_tokens` at a quarter of the lens budget) is not honoured everywhere: Gemini 3.x models take a thinking *level*, not a budget. Measured on `google/gemini-3.8-flash:batch`, defect lens, same slice — under a 5,800-token cap the model reasoned 5,218 tokens and truncated; the #133 retry doubled `max_tokens` and the thinking doubled with it (11,518 tokens, truncated again, twice the price for no JSON); `effort: low` reasoned 0 tokens, finished cleanly, and cost a twelfth as much. `effort` is the one control OpenRouter translates for every provider, so it is the default (`BROADSIDE_DEFAULT_REASONING`). Still never `enabled: false`, which that endpoint refuses outright. `config.yaml`'s `reasoning:` block still overrides it.
+
+- **A truncated slice is retried at low effort as well as a doubled cap.** The cutoff is usually thinking, so the retry now replaces a configured token cap with `effort: low` (OpenRouter refuses a request carrying both) and lowers a higher effort; an effort already at or below low, or an explicit `enabled: false`, is left alone. Verified live: a slice truncated at 5,756 reasoning tokens under `effort: high` was recovered by one retry batch with 0 reasoning tokens.
+
+- **A headless `/codecarto-broadside` submit behaves like the MCP surface.** Under `pi -p` there is no dialog and the confirm stub answered "no" to every estimate, so a run well under `max_cost` reported "Broad-Side cancelled. Nothing was submitted." Without a UI, an estimate within the cap is approved by the cap itself, one over it is refused with a message that says so, and the per-lens breakdown is printed to stderr either way.
+
+### Fixed
+
+- **A `reasoning:` block with both `effort` and `max_tokens` refuses the run.** OpenRouter accepts one or the other; a request carrying both is refused per request after the batch is accepted, so every lens failed at $0 with the reason buried in each result's error — and the shipped `config.yaml` comment showed the two keys together. The loader now throws `BroadsideConfigError` for such a file, and the comment shows the three forms as alternatives.
+
+- **A skipped lens names the globs that matched nothing.** The security lens reads `server/**`, `**/auth*`, `**/middleware/**`; a JavaScript service whose server lives at `src/server.js` matched none of them and the report said only "skipped (0 request(s))", which read as an empty repository. The submit report and status now carry the reason (the globs, a language with no patterns, or an incremental run with none of the lens's files changed). #319 tracks the lens globs themselves.
+
+- **A run with no batch behind it is `failed`, not `in-flight`.** When every lens was skipped or refused, the run kept its initial status and `status` listed it above the completed runs with synthesis and triage pending forever.
+
+- **The MCP wait output reports a lens's status once per change.** A submit with `wait_seconds` returned one `in_progress (0/1)` line per poll per lens — twenty-six of them over a four-minute wait — before the result. #321.
+
+- **The Pi spend dialog mentions incremental only when it was requested**, and names the real reason a requested run did not apply, in the sentence the MCP report already used. It used to print "Incremental was requested but the tree is dirty" on every dirty tree.
+
 ## [0.22.0] — 2026-09-13
 
 The remaining open issues after the self-audit, in one pass: the last Broad-Side roadmap item (#141), the retry serialization it uncovered (#206), the Codex verification gap (#218), and the repository's own workspace state (#276). A minor because `codecarto_broadside` and `/codecarto-broadside` gain parameters and the `models` listing changes shape.
