@@ -45,6 +45,9 @@ const {
 
 process.env.OPENROUTER_API_KEY = "sk-fake";
 
+/** Every regex metacharacter escaped, so a model id can anchor a listing row. */
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const STRONG = "vendor/strong:batch";
 const GHOST = "vendor/ghost:batch";
 const NO_ENDPOINT = `Model '${GHOST}' does not have a :batch endpoint.`;
@@ -177,9 +180,9 @@ test("a submit remembers which models were accepted and which have no batch endp
 		assert.equal(listed.endpoints[GHOST].status, "rejected");
 		const listing = modelsText(listed.entries, { benchmarks: null, defaultModel: BROADSIDE_MODEL, endpoints: listed.endpoints });
 		assert.match(listing, /^Advisory: this is the catalog's list of :batch ids, not a list of working batch endpoints/m);
-		assert.match(listing, new RegExp(`^${GHOST.replace(/[/.]/g, "\\$&")}[^\\n]*\\[no batch endpoint, refused \\d{4}-\\d{2}-\\d{2}\\]`, "m"));
-		assert.match(listing, new RegExp(`^${BROADSIDE_MODEL.replace(/[/.]/g, "\\$&")}[^\\n]*\\(default\\)[^\\n]*\\[batch OK \\d{4}-\\d{2}-\\d{2}\\]`, "m"));
-		assert.doesNotMatch(listing, new RegExp(`^${STRONG.replace(/[/.]/g, "\\$&")}[^\\n]*\\[`, "m"), "an untried model carries no tag");
+		assert.match(listing, new RegExp(`^${escapeRegExp(GHOST)}[^\\n]*\\[no batch endpoint, refused \\d{4}-\\d{2}-\\d{2}\\]`, "m"));
+		assert.match(listing, new RegExp(`^${escapeRegExp(BROADSIDE_MODEL)}[^\\n]*\\(default\\)[^\\n]*\\[batch OK \\d{4}-\\d{2}-\\d{2}\\]`, "m"));
+		assert.doesNotMatch(listing, new RegExp(`^${escapeRegExp(STRONG)}[^\\n]*\\[`, "m"), "an untried model carries no tag");
 		assert.match(listing, /--model=|model parameter/);
 	});
 });
@@ -316,7 +319,7 @@ test("/codecarto-broadside --model= and --lens-model= reach the run", async () =
 			assert.equal(modelOf("security"), BROADSIDE_MODEL);
 			// The spend dialog priced the mixed run per lens.
 			assert.equal(ui.confirmations.length, 1);
-			assert.match(ui.confirmations[0].body, new RegExp(STRONG.replace(/[/.]/g, "\\$&")));
+			assert.match(ui.confirmations[0].body, new RegExp(escapeRegExp(STRONG)));
 
 			// A flag on the wrong action is refused before anything is priced.
 			const before = posted.length;
