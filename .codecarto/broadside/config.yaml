@@ -72,29 +72,50 @@
 
 # Reasoning control, sent on every lens request.
 #
-# By default Broad-Side caps thinking at a quarter of the lens's output budget,
-# leaving the other three quarters for the answer — which is exactly the split
-# the cost estimate already assumes.
+# By default Broad-Side asks every model for low reasoning effort
+# (`effort: low`), leaving the output budget for the answer — which is the
+# split the cost estimate already assumes.
 #
-# The cap exists because reasoning competes with the answer for `max_tokens`.
-# One measured run spent 5,758 of a 6,000-token budget thinking and left ~230
-# tokens for the JSON, which truncated mid-structure on 11 of 13 slices; those
-# tokens bill at the full output rate, so it paid for ~6,000 output tokens per
-# slice to receive ~230 usable ones. The shipped default model does the same
-# thing less consistently — reasoning from 0 to 5,757 tokens across 13 slices,
-# three of them cut off — so this is not something only exotic models do.
+# The control exists because reasoning competes with the answer for
+# `max_tokens`. One measured run spent 5,758 of a 6,000-token budget thinking
+# and left ~230 tokens for the JSON, which truncated mid-structure on 11 of 13
+# slices; those tokens bill at the full output rate, so it paid for ~6,000
+# output tokens per slice to receive ~230 usable ones. The shipped default
+# model does the same thing less consistently — reasoning from 0 to 5,757
+# tokens across 13 slices, three of them cut off — so this is not something
+# only exotic models do.
 #
-# It is a cap rather than an off switch on purpose. Some endpoints refuse to be
-# switched off: `google/gemini-3.8-flash:batch` rejects the entire batch with
-# "Reasoning is mandatory for this endpoint and cannot be disabled", which turns
-# a partial result into none at all. Capping works either way.
+# It is an effort level rather than a token cap because a cap is not honoured
+# everywhere. Gemini 3.x models take a thinking *level*, not a budget: under
+# `max_tokens: 5800`, google/gemini-3.8-flash:batch reasoned 5,218 tokens on
+# the first pass and 11,518 on the doubled-budget retry — the cap changed
+# nothing, both results truncated, and the retry cost twice the original for
+# no JSON. The same lens at `effort: low` reasoned 0 tokens, returned valid
+# JSON, and cost a twelfth as much. `effort` is what OpenRouter can translate
+# for every provider; a token cap reaches only the providers that take one.
 #
-# Override only with a raised lens output budget, or the JSON truncates exactly
-# as above.
+# And it is a level rather than an off switch on purpose. Some endpoints refuse
+# to be switched off: `google/gemini-3.8-flash:batch` rejects the entire batch
+# with "Reasoning is mandatory for this endpoint and cannot be disabled", which
+# turns a partial result into none at all. Low effort works either way.
+#
+# A slice that still truncates is re-submitted once with a doubled `max_tokens`
+# and, whatever this block says, low effort — the cutoff is usually thinking.
+#
+# Set `effort` OR `max_tokens`, not both: OpenRouter refuses a request that
+# carries both ("Only one of reasoning.effort and reasoning.max_tokens can be
+# specified") — per request, after the batch is accepted, so every lens fails
+# at $0. Submit refuses a config.yaml that sets both. Raise the effort only
+# together with a raised lens output budget, or the JSON truncates exactly as
+# above.
 #
 # reasoning:
 #   effort: low        # minimal | low | medium | high
-#   max_tokens: 2000   # or set the thinking budget directly
+#
+# reasoning:
+#   max_tokens: 2000   # a thinking budget, where the provider honours one
+#
+# reasoning:
 #   enabled: false     # only where the provider allows it
 
 # Approximate run expense limit in USD. The default is 1.00, and it applies

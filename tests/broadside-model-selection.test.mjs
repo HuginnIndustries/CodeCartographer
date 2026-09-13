@@ -329,3 +329,132 @@ test("/codecarto-broadside --model= and --lens-model= reach the run", async () =
 		});
 	});
 });
+
+// ---------- live-run follow-ups (0.22.0 verification on a real repository) ----------
+
+test("a skipped lens names the globs that matched nothing, and a run with no batch is not in flight", async () => {
+	// A JavaScript service whose server lives at src/server.js gets no security
+	// review — that lens reads server/**, **/auth*, **/middleware/** — and the
+	// report used to say only "skipped (0 request(s))". And a run whose every
+	// lens was skipped or refused stayed "in-flight" in status, above the
+	// completed runs, with synthesis and triage pending forever.
+	const dir = await mkdtemp(join(tmpdir(), "cc-bs-skip-"));
+	try {
+		await writeFile(join(dir, "package.json"), '{"name":"notesd","type":"module"}\n');
+		await mkdir(join(dir, "src"), { recursive: true });
+		await writeFile(join(dir, "src", "server.js"), "export function start() {}\n");
+		await writeFile(join(dir, "src", "store.js"), "export class Store {}\n");
+		const posted = [];
+		const result = await runBroadsideSubmit(dir, "sk-fake", {
+			lenses: ["security"],
+			fetcher: fetcherRecording(posted),
+			maxCost: 0,
+		});
+		assert.equal(posted.length, 0, "nothing to submit");
+		assert.equal(result.batches.security.status, "skipped");
+		assert.match(result.batches.security.reason, /^no files matched server\/\*\*, \*\*\/auth\*, \*\*\/middleware\/\*\*, SECURITY\.md \(test files excluded\)$/);
+		const text = estimateSubmitText(result, [getLens("security")]);
+		assert.match(text, /Security review: skipped \(0 request\(s\), ~\$0\.0000\) — no files matched server\/\*\*/);
+
+		const { state } = await core.runBroadsideStatus(dir);
+		const run = state.runs.find((r) => r.id === result.runId);
+		assert.equal(run.status, "failed", "no batch behind it: nothing is in flight");
+		const status = core.statusText(state);
+		assert.match(status, new RegExp(`Run ${result.runId} — failed`));
+		assert.match(status, /security: skipped — no files matched server\/\*\*/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+	// A refused-only run is failed too, with the refusal on the lens.
+	await withRepo(async (dir) => {
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher: fetcherRecording([]), maxCost: 0, model: GHOST });
+		assert.equal(result.batches.architecture.status, "rejected");
+		const { state } = await core.runBroadsideStatus(dir);
+		assert.equal(state.runs.find((r) => r.id === result.runId).status, "failed");
+	});
+	// A run with one real batch stays in flight even when another lens skipped.
+	await withRepo(async (dir) => {
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture", "security"], fetcher: fetcherRecording([]), maxCost: 0 });
+		assert.equal(result.batches.architecture.status, "validating");
+		const { state } = await core.runBroadsideStatus(dir);
+		assert.equal(state.runs.find((r) => r.id === result.runId).status, "in-flight");
+	});
+});
+
+test("a config.yaml that sets both reasoning.effort and reasoning.max_tokens refuses the run", async () => {
+	// Seen live: OpenRouter accepts the batch, then fails every request with
+	// "Only one of reasoning.effort and reasoning.max_tokens can be specified".
+	// The shipped config comment used to show the two keys together.
+	const dir = await mkdtemp(join(tmpdir(), "cc-bs-reasoning-"));
+	try {
+		await writeFile(join(dir, "config.yaml"), "reasoning:\n  effort: high\n  max_tokens: 5800\n", "utf8");
+		await assert.rejects(loadBroadsideConfig(dir), (error) => error instanceof core.BroadsideConfigError && /one or the other/.test(error.message) && /Keep one/.test(error.message));
+		// Either alone is fine, as is enabled with one of them.
+		await writeFile(join(dir, "config.yaml"), "reasoning:\n  effort: high\n", "utf8");
+		assert.deepEqual((await loadBroadsideConfig(dir)).reasoning, { effort: "high" });
+		await writeFile(join(dir, "config.yaml"), "reasoning:\n  max_tokens: 5800\n  enabled: true\n", "utf8");
+		assert.deepEqual((await loadBroadsideConfig(dir)).reasoning, { enabled: true, max_tokens: 5800 });
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+	// The shipped template no longer shows the two keys in one block.
+	const template = await readFile(join(REPO_ROOT, ".codecarto", "broadside", "config.yaml"), "utf8");
+	const block = template.slice(template.indexOf("# reasoning:"));
+	assert.doesNotMatch(block, /#   effort: [a-z]+[^\n]*\n#   max_tokens:/, "effort and max_tokens must not be shown together");
+	assert.match(template, /Set `effort` OR `max_tokens`, not both/);
+});
+
+test("a headless /codecarto-broadside submit is approved by the cap and refused over it, never by the missing dialog", async () => {
+	// Under `pi -p` there is no TUI and the confirm stub answers "no", so a
+	// headless submit could never fire: seen live as "Broad-Side cancelled.
+	// Nothing was submitted." on a run that was well under max_cost.
+	await withRepo(async (dir) => {
+		const posted = [];
+		await withGlobalFetch(fetcherRecording(posted), async () => {
+			const { commands, ctx, ui } = createHarness(dir);
+			ctx.hasUI = false;
+			ui.confirm = async () => { throw new Error("the dialog must not be shown headless"); };
+			// Without a TUI, notifications are written to stderr as
+			// "[codecarto] <level>: <message>" lines; capture them.
+			const stderr = [];
+			const originalWrite = process.stderr.write;
+			process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+			try {
+				await commands.get("codecarto-broadside").handler("submit architecture --max-cost=1 --wait=0", ctx);
+				assert.equal(posted.length, 1, "within the cap: submitted without a dialog");
+				assert.ok(stderr.some((m) => /Estimated total/.test(m)), `the breakdown is printed instead of shown: ${JSON.stringify(stderr)}`);
+				assert.ok(!stderr.some((m) => /cancelled|refused/.test(m)), `no refusal within the cap: ${JSON.stringify(stderr)}`);
+
+				stderr.length = 0;
+				await commands.get("codecarto-broadside").handler("submit architecture --max-cost=0.000001 --wait=0", ctx);
+				assert.equal(posted.length, 1, "over the cap: nothing submitted");
+				const refusal = stderr.find((m) => /\[codecarto\] error:/.test(m));
+				assert.ok(refusal, `an error line is expected: ${JSON.stringify(stderr)}`);
+				assert.match(refusal, /exceeds max_cost \$0\.00 and there is no dialog to approve it in a headless run/);
+				assert.doesNotMatch(refusal, /cancelled/);
+			} finally {
+				process.stderr.write = originalWrite;
+			}
+			assert.equal(ui.notifications.length, 0, "nothing went to the absent UI");
+		});
+	});
+});
+
+test("the Pi spend dialog mentions incremental only when it was requested", async () => {
+	// Seen live: a plain submit on a dirty tree printed "Incremental was
+	// requested but the tree is dirty — this is a full scan." Nobody asked.
+	await withRepo(async (dir) => {
+		const posted = [];
+		await withGlobalFetch(fetcherRecording(posted), async () => {
+			const { commands, ctx, ui } = createHarness(dir);
+			await commands.get("codecarto-broadside").handler("submit architecture --max-cost=1 --wait=0", ctx);
+			assert.equal(ui.confirmations.length, 1);
+			assert.doesNotMatch(ui.confirmations[0].body, /Incremental/, "no incremental line on a plain submit");
+
+			// Requested on a non-git directory: no baseline, said as such.
+			await commands.get("codecarto-broadside").handler("submit architecture --incremental --max-cost=1 --wait=0", ctx);
+			assert.equal(ui.confirmations.length, 2);
+			assert.match(ui.confirmations[1].body, /Incremental was requested but NOT applied — .*\. This is a full scan\./);
+		});
+	});
+});

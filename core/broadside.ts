@@ -210,33 +210,51 @@ export type FileSlice = {
 export type BroadsideReasoning = { enabled?: boolean; effort?: "minimal" | "low" | "medium" | "high"; max_tokens?: number };
 
 /**
- * The share of a lens's output budget reasoning may spend.
+ * The reasoning control every lens request carries: low effort.
  *
- * `estimateCost` already budgets output at 75% of `maxTokens`; capping thinking
- * at the remaining quarter makes that assumption true by construction and
- * guarantees the answer has room. A floor keeps the cap sane for a small lens.
+ * It used to be a token cap — `max_tokens` at a quarter of the lens's output
+ * budget, so three quarters stayed for the answer. Measured live on
+ * `google/gemini-3.8-flash:batch` (0.22.0 verification, defect lens, cap
+ * 5,800 of a 6,000 budget): the model reasoned 5,218 tokens on the first
+ * pass and **11,518 under the same cap** on the doubled-budget retry —
+ * thinking scaled with `max_tokens` and the cap changed nothing, both
+ * results truncated, and the retry cost twice the original for no JSON.
+ * The same lens with `effort: "low"` reasoned 0 tokens, finished with
+ * `stop`, returned valid JSON, and cost a twelfth as much. Gemini 3.x
+ * models take a thinking *level*, not a budget, and OpenRouter forwards a
+ * `max_tokens` cap to them as nothing at all; `effort` is what it can
+ * translate for every provider (a level where the provider has levels, a
+ * fraction of the budget where it takes a budget). So the default asks for
+ * little thinking in the one vocabulary that reaches everyone.
+ *
+ * Deliberately not `enabled: false`: `google/gemini-3.8-flash:batch` refuses
+ * the whole batch with *"Reasoning is mandatory for this endpoint and cannot
+ * be disabled"*, turning a partial result into none at all. Low effort works
+ * whether or not a provider allows reasoning to be switched off.
  */
-export const BROADSIDE_REASONING_BUDGET_FRACTION = 0.25;
-export const BROADSIDE_MIN_REASONING_TOKENS = 512;
+export const BROADSIDE_DEFAULT_REASONING: Readonly<BroadsideReasoning> = Object.freeze({ effort: "low" });
+
+/** The reasoning control a lens request carries when config.yaml sets none. */
+export function defaultReasoningFor(): BroadsideReasoning {
+	return { ...BROADSIDE_DEFAULT_REASONING };
+}
 
 /**
- * Cap reasoning for a lens request — deliberately a cap, not an off switch.
+ * The reasoning control a truncated slice is re-submitted with.
  *
- * Disabling outright is not portable: `google/gemini-3.8-flash:batch` refuses
- * the whole batch with *"Reasoning is mandatory for this endpoint and cannot be
- * disabled"*, turning a partial result into none at all. Capping works whether
- * or not a provider allows reasoning to be switched off.
- *
- * The failure this prevents is the budget being spent thinking rather than
- * answering. Measured on one run: 5,758 of a 6,000-token budget went to
- * reasoning, leaving ~230 tokens for JSON that truncated mid-structure — and
- * those tokens bill at the full output rate. The shipped default model does the
- * same thing less consistently (reasoning tokens from 0 to 5,757 across 13
- * slices, three of them cut off at `finish_reason: length`), so this is not a
- * multi-model concern.
+ * A truncation on a reasoning-capable model is usually thinking that ate the
+ * answer's budget, and doubling `max_tokens` doubles the thinking where the
+ * provider ignores a token cap (see {@link BROADSIDE_DEFAULT_REASONING}). The
+ * retry therefore asks for low effort as well, replacing a `max_tokens` cap
+ * (OpenRouter refuses a request carrying both) and lowering a higher effort.
+ * An explicit `enabled: false` and an effort already at or below low are left
+ * as they are.
  */
-export function defaultReasoningFor(maxTokens: number): BroadsideReasoning {
-	return { max_tokens: Math.max(BROADSIDE_MIN_REASONING_TOKENS, Math.floor(maxTokens * BROADSIDE_REASONING_BUDGET_FRACTION)) };
+export function retryReasoningFor(original: BroadsideReasoning | undefined): BroadsideReasoning {
+	if (original?.enabled === false) return { ...original };
+	if (original?.effort === "minimal" || original?.effort === "low") return { ...original };
+	const { max_tokens: _cap, effort: _effort, ...rest } = original ?? {};
+	return { ...rest, effort: "low" };
 }
 
 export type BatchRequest = {
@@ -262,6 +280,8 @@ export type BroadsideBatchEntry = {
 	cost?: number;
 	resultCount?: number;
 	error?: unknown;
+	/** Why a `skipped` lens had nothing to submit: the globs that matched no file. */
+	reason?: string;
 	/** Set when this lens used a model other than the run default. */
 	model?: string;
 	/** The completion ceiling of this lens's model; bounds the truncation retry. */
@@ -1793,7 +1813,7 @@ export function buildBatchRequest(
 			max_tokens: maxTokensOverride ?? lens.maxTokens,
 			// Always sent, never inherited: an absent field means the model's
 			// own default, and that default is what truncated the JSON.
-			reasoning: reasoningOverride ?? lens.reasoning ?? defaultReasoningFor(maxTokensOverride ?? lens.maxTokens),
+			reasoning: reasoningOverride ?? lens.reasoning ?? defaultReasoningFor(),
 		},
 	};
 }
@@ -2009,6 +2029,24 @@ export async function loadBroadsideConfig(broadsideDir: string): Promise<Broadsi
 		if (parsed !== null && parsed !== undefined) {
 			if (typeof parsed !== "object" || Array.isArray(parsed)) throw new BroadsideConfigError(configPath, "is not a YAML mapping");
 			raw = parsed as Record<string, unknown>;
+		}
+		// OpenRouter accepts `reasoning.effort` or `reasoning.max_tokens`, not
+		// both: a request carrying both is refused per request *after* the batch
+		// is accepted, so every lens fails at $0 with the reason in each
+		// result's error. Seen live on 0.22.0 with the two keys set together.
+		// Refuse here, where the file can be fixed, rather than submit a run
+		// that cannot produce a result.
+		const reasoning = raw.reasoning;
+		if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+			const value = reasoning as Record<string, unknown>;
+			const hasEffort = typeof value.effort === "string";
+			const hasBudget = typeof value.max_tokens === "number" && value.max_tokens > 0;
+			if (hasEffort && hasBudget) {
+				throw new BroadsideConfigError(
+					configPath,
+					'sets both reasoning.effort and reasoning.max_tokens; OpenRouter accepts one or the other ("Only one of reasoning.effort and reasoning.max_tokens can be specified"), and every lens request would fail after the batch is accepted. Keep one',
+				);
+			}
 		}
 	}
 	return buildBroadsideConfig(raw);
@@ -2725,6 +2763,8 @@ export async function runBroadsideSubmit(
 
 	// Slice offline first so the estimate covers every request we would send.
 	const slicesByLens = new Map<BroadsideLensId, FileSlice[]>();
+	// Why a lens ended up with nothing to submit, for the report (see below).
+	const skipReasons = new Map<BroadsideLensId, string>();
 	let estimatedInputTokens = 0;
 	let estimatedOutputTokens = 0;
 	let estimatedTotalCost = 0;
@@ -2748,12 +2788,24 @@ export async function runBroadsideSubmit(
 			redactedValues += slice.redactedValues ?? 0;
 			for (const file of slice.redactedFiles ?? []) redactedFiles.add(file);
 		}
+		const matchedBeforeIncremental = slices.length;
 		if (changed) {
 			// Repo-info slices (empty files, e.g. architecture) always run;
 			// file-backed slices run only when one of their files changed.
 			slices = slices.filter((s) => s.files.length === 0 || s.files.some((f) => changed!.has(f)));
 		}
 		slicesByLens.set(lensId, slices);
+		if (slices.length === 0) {
+			const globs = lens.globsFor(info).filter(Boolean);
+			skipReasons.set(
+				lensId,
+				globs.length === 0
+					? "the lens has no file patterns for this language"
+					: matchedBeforeIncremental > 0
+						? "incremental: none of this lens's files changed since the previous run"
+						: `no files matched ${globs.join(", ")}${lens.skipTestFiles ? " (test files excluded)" : ""}`,
+			);
+		}
 		const lensModel = modelForLens(lensId);
 		const { pricing: lensPricing, outputCap: lensOutputCap } = resolved.get(lensModel)!;
 		const maxTokens = lensOutputCap ? Math.min(lens.maxTokens, lensOutputCap) : lens.maxTokens;
@@ -2869,7 +2921,14 @@ export async function runBroadsideSubmit(
 		if (requests.length === 0) {
 			// No files matched the lens's globs. That is a coverage gap to
 			// report, not a batch to submit — the API rejects empty batches.
+			// Name the globs: a JavaScript service whose server lives at
+			// src/server.js gets no security review (that lens reads server/**,
+			// **/auth*, **/middleware/**), and "skipped (0 request(s))" alone
+			// read as an empty repository rather than a lens that looked in
+			// the wrong place.
 			entry.status = "skipped";
+			const reason = skipReasons.get(lensId);
+			if (reason) entry.reason = reason;
 			continue;
 		}
 
@@ -2891,6 +2950,11 @@ export async function runBroadsideSubmit(
 		);
 	}
 	await Promise.allSettled(submissions);
+	// A run with no batch behind it has nothing in flight. Every lens was
+	// skipped or refused, so no poll will ever complete it; leaving it
+	// "in-flight" had status listing a refused run above the completed ones
+	// with synthesis and triage "pending" forever.
+	if (!Object.values(run.batches).some((entry) => entry.batchId)) run.status = "failed";
 	await persistBroadsideRun(broadsideDir, run);
 	// What the provider just said about each model's batch endpoint outlives
 	// the run: the `models` action reads it back (#141).
@@ -3283,9 +3347,12 @@ export async function runBroadsideCollect(
 		await persistBroadsideRun(broadsideDir, run);
 	}
 
-	// #133: re-submit truncated slices once with a bumped output cap. Batch
-	// requests are pure, so re-running is always safe; the aim is to recover
-	// coverage the first pass lost to a max_tokens cutoff, not to loop forever.
+	// #133: re-submit truncated slices once with a bumped output cap and low
+	// reasoning effort. Batch requests are pure, so re-running is always safe;
+	// the aim is to recover coverage the first pass lost to a max_tokens
+	// cutoff, not to loop forever. Low effort because the cutoff is usually
+	// thinking, and a doubled budget doubled the thinking where a token cap
+	// was ignored (see retryReasoningFor).
 	//
 	// All bumped requests for one model go out as ONE batch, and the batches
 	// (one per model, since a batch carries a single model) are polled
@@ -3314,7 +3381,10 @@ export async function runBroadsideCollect(
 			if (bumpedMax <= previousMax) continue; // already at the ceiling
 
 			const group = byModel.get(lensModel) ?? { requests: [], slices: new Map() };
-			group.requests.push({ ...original, body: { ...original.body, max_tokens: bumpedMax } });
+			group.requests.push({
+				...original,
+				body: { ...original.body, max_tokens: bumpedMax, reasoning: retryReasoningFor(original.body.reasoning) },
+			});
 			group.slices.set(stored.customId, stored);
 			byModel.set(lensModel, group);
 		}
@@ -3642,7 +3712,7 @@ function parseSynthesisTopFindings(
 
 // ---------- formatting helpers for tool output ----------
 
-function describeIncrementalFallback(reason: BroadsideIncrementalOutcome["reason"]): string {
+export function describeIncrementalFallback(reason: BroadsideIncrementalOutcome["reason"]): string {
 	switch (reason) {
 		case "dirty-worktree":
 			return "the working tree has uncommitted changes, so there is no committed state to diff against";
@@ -3676,8 +3746,13 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		const override = entry.model ? ` on ${entry.model}` : "";
 		// A rejected lens says why: the message is the only way to tell a
 		// catalog id with no batch endpoint from a full job quota, and both
-		// used to read as a bare "rejected".
-		const reason = !entry.batchId && entry.error ? ` — ${explainBatchError(entry.error)}` : "";
+		// used to read as a bare "rejected". A skipped lens names the globs
+		// that matched nothing.
+		const reason = !entry.batchId && entry.error
+			? ` — ${explainBatchError(entry.error)}`
+			: !entry.batchId && entry.reason
+				? ` — ${entry.reason}`
+				: "";
 		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})${override}${reason}`);
 	}
 	if (result.repo) {
@@ -3895,7 +3970,10 @@ export function statusText(state: BroadsideStateFile): string {
 		for (const lensId of BROADSIDE_LENS_IDS) {
 			const entry = run.batches[lensId];
 			if (!entry) continue;
-			lines.push(`  ${lensId}: ${entry.status}${entry.batchId ? ` (${entry.batchId})` : ""}${entry.cost !== undefined ? `, $${entry.cost.toFixed(6)}` : ""}`);
+			lines.push(
+				`  ${lensId}: ${entry.status}${entry.batchId ? ` (${entry.batchId})` : ""}${entry.cost !== undefined ? `, $${entry.cost.toFixed(6)}` : ""}` +
+					(entry.status === "skipped" && entry.reason ? ` — ${entry.reason}` : ""),
+			);
 		}
 		lines.push(`  synthesis: ${run.synthesis.status}`);
 		lines.push(`  triage: ${run.triage?.status ?? "pending"}`);
