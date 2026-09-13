@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.2] — 2026-09-13
+
+One defect from the 0.22.1 live verification, fixed with its own live verification (#324).
+
+### Fixed
+
+- **Two collects on one Broad-Side run submit each post-pass and the truncation retry once.** A client's request timeout fired mid-wait, the client exited, the MCP server kept polling and submitted synthesis and triage on its own, and a second collect on the same run submitted its own pair — four paid post-passes for one run, with `state.json` written by whichever process persisted last (#322). Before a collect spends on a slot of the run it now claims it under the state lock: an unclaimed slot is marked `submitted` before any network call; a slot another collect holds is adopted — polled when it has a batch id, reported as in flight elsewhere when it does not. The retry is recorded on the run (`run.retry`) so the claim covers it too, and a collect that polled nothing reads the saved results back and retries under the claim if the collect that saved them never did. Writes inside collect merge slot by slot, keeping whichever side is further along, instead of replacing the run wholesale.
+
+- **A server whose client is gone stops polling and submits nothing further.** `runBroadsideCollect` takes an `AbortSignal`; the poll loop returns at once when it fires, waking from its interval rather than sleeping it out, and accepted batches keep running for the next collect to claim. The MCP server fires it on transport close and on the end of stdin — the SDK's stdio transport watches `data` and `error` only and never notices a client exiting. Verified live: a server whose client gave up after 30 s exited within 3 s (it used to outlive the client by a quarter of an hour), and the next collect submitted exactly one synthesis and one triage.
+
+- **The collect report names a post-pass still running, held by another collect, or failed with its reason.** A run reported "completed" used to say nothing about a synthesis whose batch was still running when the wait ran out. Both post-passes are now polled together against the shared deadline; polled in turn, the first could spend the whole budget and leave the second a single poll.
+
+- **`wait_seconds` is documented as bounded by the host's tool-call timeout**, with what happens when the host gives up first (tool description, MCP quickstart, README).
+
 ## [0.22.1] — 2026-09-13
 
 What running 0.22.0 against the real OpenRouter Batch API and a real Pi session turned up, in one PR (#320). Five defects, none of which a mocked fetcher had a reason to show; the first changes what every lens request asks a model for.
