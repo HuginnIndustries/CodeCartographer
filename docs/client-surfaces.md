@@ -24,12 +24,12 @@ Observed behavior:
 |---|---|---|
 | Claude Code (desktop) | `structuredContent` when present | `codecarto_next` returned `{phase, forced}` with no prompt on 0.14.0 (#94) |
 | Hermes | `content` | ran a full `lite` architecture phase end to end on the same 0.14.0 build |
-| Codex | **unknown** | its binary deserializes `structuredContent` as part of `CallToolResult`, which proves it parses the field, not that it prefers it. Not yet exercised against a running server. |
+| Codex | the prose payload reaches the model; field not separable | exercised 2026-09-12 on Codex 0.154.0 via `codex exec` with `mcp_servers.<name>.default_tools_approval_mode="approve"` (#218): `codecarto_init` then `codecarto_status` against the 0.21.0 `main` build, and the model echoed each tool's text verbatim. A build ≥ 0.14.1 carries the text in both fields, so which one Codex prefers cannot be told from a working run — and does not need to be, as long as both stay populated. |
 | Pi | n/a | does not go through MCP |
 
 Since 0.14.1, `textResult` carries the rendered text in `structuredContent` under a `text` key, so both conventions receive the payload and the distinction no longer decides whether a client works. Keep that property: **a tool whose payload is prose must expose it in both fields.** `tests/structured-payload.test.mjs` asserts it per tool.
 
-Update the table above whenever a client's behavior is actually observed. An entry here should cite what was run, not what was assumed — the Codex row is what an honest unknown looks like.
+Update the table above whenever a client's behavior is actually observed. An entry here should cite what was run, not what was assumed — the Codex row was an honest unknown for four releases before #218 found the approval key that lets it be exercised headlessly (the recipe is in CONTRIBUTING's surface-verification section).
 
 ## Trust posture: the host is trusted
 
