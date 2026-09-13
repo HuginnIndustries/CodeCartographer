@@ -8,6 +8,7 @@ import { parseDashboardFlags } from "./dashboard-flags.ts";
 import { narrateDashboard } from "./dashboard-narrator.ts";
 import { parseBroadsideFlags, KNOWN_BROADSIDE_TOKENS } from "./broadside-flags.ts";
 import { parseNextFlags } from "./next-flags.ts";
+import { completeLastToken } from "./completions.ts";
 import { buildPiGuideMessage } from "./guide-framing.ts";
 import { isCtxLive, notifyCtx } from "./notify.ts";
 import { phaseCompactionExtension } from "./phase-compaction.ts";
@@ -543,12 +544,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("codecarto-init", {
 		description: "Initialize .codecarto/ in the current repository",
-		getArgumentCompletions: (prefix) => {
-			const items = Object.keys(PIPELINE_ALIASES)
-				.filter((value) => value.startsWith(prefix))
-				.map((value) => ({ value, label: value }));
-			return items.length > 0 ? items : null;
-		},
+		getArgumentCompletions: (prefix) => completeLastToken(prefix, Object.keys(PIPELINE_ALIASES).map((value) => ({ value }))),
 		handler: async (args, ctx) => {
 			const trimmedArgs = args.trim();
 			const pipelineChoice = resolvePipelineChoice(trimmedArgs);
@@ -656,12 +652,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("codecarto-switch-pipeline", {
 		description: "Switch the active pipeline without losing findings or progress: /codecarto-switch-pipeline <variant>",
-		getArgumentCompletions: (prefix) => {
-			const items = Object.keys(PIPELINE_ALIASES)
-				.filter((value) => value.startsWith(prefix))
-				.map((value) => ({ value, label: value }));
-			return items.length > 0 ? items : null;
-		},
+		getArgumentCompletions: (prefix) => completeLastToken(prefix, Object.keys(PIPELINE_ALIASES).map((value) => ({ value }))),
 		handler: async (args, ctx) => {
 			const trimmedArgs = args.trim();
 			if (!trimmedArgs) {
@@ -716,16 +707,17 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			// --strict is offered only once --auto is present, because on its own
 			// it is rejected — suggesting it standalone invites the one error the
 			// parser has.
+			// Each item's value is the whole argument line (see completions.ts):
+			// accepting `--llm-steer` after `--auto ` keeps the `--auto`.
 			const autoAlreadyTyped = prefix.includes("--auto");
-			const items = [
-				{ value: "--auto", label: "--auto", description: "run every remaining phase back to back (recommended with --llm-steer)" },
-				{ value: "--llm-steer", label: "--llm-steer", description: "seed each phase from the previous phase's closeout; no effect on the first phase" },
-				{ value: "--no-llm-steer", label: "--no-llm-steer", description: "force steering off when the workspace config turns it on" },
+			return completeLastToken(prefix, [
+				{ value: "--auto", description: "run every remaining phase back to back (recommended with --llm-steer)" },
+				{ value: "--llm-steer", description: "seed each phase from the previous phase's closeout; no effect on the first phase" },
+				{ value: "--no-llm-steer", description: "force steering off when the workspace config turns it on" },
 				...(autoAlreadyTyped
-					? [{ value: "--strict", label: "--strict", description: "with --auto: stop on PASS WITH GAPS instead of advancing" }]
+					? [{ value: "--strict", description: "with --auto: stop on PASS WITH GAPS instead of advancing" }]
 					: []),
-			].filter((item) => item.value.startsWith(prefix.split(/\s+/).pop() ?? prefix));
-			return items.length > 0 ? items : null;
+			]);
 		},
 		handler: async (args, ctx) => {
 			const flags = parseNextFlags(args);
@@ -1119,10 +1111,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		description: "Read the packaged CodeCartographer agent guide into the session: /codecarto-guide [topic]",
 		getArgumentCompletions: async (prefix) => {
 			const topics = await listGuideTopics().catch(() => ["overview"]);
-			const items = topics
-				.filter((value) => value.startsWith(prefix))
-				.map((value) => ({ value, label: value }));
-			return items.length > 0 ? items : null;
+			return completeLastToken(prefix, topics.map((value) => ({ value })));
 		},
 		handler: async (args, ctx) => {
 			// The guide is packaged with the extension, not copied into a
@@ -1156,12 +1145,9 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("codecarto-broadside", {
 		description: "Batch reconnaissance (Broad-Side): /codecarto-broadside [submit|collect|status|models] [lenses…] [--model=ID] [--lens-model=LENS:ID] [flags]",
-		getArgumentCompletions: (prefix) => {
-			const items = KNOWN_BROADSIDE_TOKENS
-				.filter((value) => value.startsWith(prefix))
-				.map((value) => ({ value, label: value }));
-			return items.length > 0 ? items : null;
-		},
+		// Completes the token under the cursor, so lens names and flags are
+		// offered after the action too, and keeps everything typed before it.
+		getArgumentCompletions: (prefix) => completeLastToken(prefix, KNOWN_BROADSIDE_TOKENS.map((value) => ({ value }))),
 		handler: async (args, ctx) => {
 			const flags = parseBroadsideFlags(args);
 			if (flags.unknown.length > 0) {
@@ -1629,12 +1615,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("codecarto-dashboard", {
 		description: "Regenerate .codecarto/dashboard.html (use --narrate for an LLM executive summary)",
-		getArgumentCompletions: (prefix) => {
-			const items = ["--narrate"]
-				.filter((value) => value.startsWith(prefix))
-				.map((value) => ({ value, label: value }));
-			return items.length > 0 ? items : null;
-		},
+		getArgumentCompletions: (prefix) => completeLastToken(prefix, [{ value: "--narrate" }]),
 		handler: async (args, ctx) => {
 			const flags = parseDashboardFlags(args);
 			if (flags.unknown.length > 0) {
@@ -1710,10 +1691,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 		description: "Apply a post-pipeline amendment from .codecarto/scratch/amendments/, after a preview: /codecarto-amend <name | scratch/amendments/name.yaml>",
 		getArgumentCompletions: async (prefix) => {
 			const names = await listAmendmentNames(join(sessionCwd ?? process.cwd(), ".codecarto"));
-			const items = names
-				.filter((value) => value.startsWith(prefix))
-				.map((value) => ({ value, label: value }));
-			return items.length > 0 ? items : null;
+			return completeLastToken(prefix, names.map((value) => ({ value })));
 		},
 		handler: async (args, ctx) => {
 			const state = await ensureWorkspaceState(ctx);

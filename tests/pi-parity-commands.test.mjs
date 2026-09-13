@@ -439,10 +439,55 @@ test("/codecarto-next offers --strict only once --auto is present", async () => 
 	await withTempRepo(async (cwd) => {
 		const { commands } = createHarness(cwd);
 		const bare = (await commands.get("codecarto-next").getArgumentCompletions("--")) ?? [];
-		assert.equal(bare.some((item) => item.value === "--strict"), false, "--strict alone is an error; do not suggest it");
+		assert.equal(bare.some((item) => item.label === "--strict"), false, "--strict alone is an error; do not suggest it");
 
 		const withAuto = (await commands.get("codecarto-next").getArgumentCompletions("--auto --")) ?? [];
-		assert.equal(withAuto.some((item) => item.value === "--strict"), true, "--strict is valid once --auto is typed");
+		const strict = withAuto.find((item) => item.label === "--strict");
+		assert.ok(strict, "--strict is valid once --auto is typed");
+		assert.equal(strict.value, "--auto --strict", "accepting it must keep the --auto that made it valid");
+	});
+});
+
+test("accepting a /codecarto-next completion keeps the flags typed before it", async () => {
+	// Pi replaces everything after the command name with the accepted item's
+	// value. With the popup open, `/codecarto-next --auto --llm-steer` became
+	// `/codecarto-next --llm-steer` on Enter: the steered phase ran alone and
+	// the auto run never started (reported on 0.22.2).
+	const { parseNextFlags } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/next-flags.ts`).href);
+	await withTempRepo(async (cwd) => {
+		const { commands } = createHarness(cwd);
+		const complete = commands.get("codecarto-next").getArgumentCompletions;
+
+		const partial = (await complete("--auto --llm")) ?? [];
+		assert.deepEqual(partial.map((item) => item.label), ["--llm-steer"], "the last token is what gets completed");
+		assert.equal(partial[0].value, "--auto --llm-steer", "the value is the whole line, not the flag");
+		assert.deepEqual(parseNextFlags(partial[0].value), { auto: true, strict: false, unknown: [], llmSteerOverride: true });
+
+		const afterSpace = (await complete("--llm-steer ")) ?? [];
+		assert.ok(afterSpace.length > 0, "a trailing space offers the remaining flags");
+		for (const item of afterSpace) {
+			assert.ok(item.value.startsWith("--llm-steer "), `${item.value} must keep --llm-steer`);
+			assert.notEqual(item.label, "--llm-steer", "a flag already typed is not offered again");
+		}
+		const auto = afterSpace.find((item) => item.label === "--auto");
+		assert.equal(auto.value, "--llm-steer --auto");
+		assert.equal(parseNextFlags(auto.value).auto, true);
+
+		// A single token still completes to itself.
+		const single = (await complete("--au")) ?? [];
+		assert.deepEqual(single.map((item) => item.value), ["--auto"]);
+	});
+});
+
+test("/codecarto-broadside completes lens names and flags after the action, keeping what was typed", async () => {
+	await withTempRepo(async (cwd) => {
+		const { commands } = createHarness(cwd);
+		const complete = commands.get("codecarto-broadside").getArgumentCompletions;
+		const lenses = (await complete("submit sec")) ?? [];
+		assert.deepEqual(lenses.map((item) => item.value), ["submit security"]);
+		const flags = (await complete("submit security --mo")) ?? [];
+		assert.deepEqual(flags.map((item) => item.value), ["submit security --model="]);
+		assert.equal((await complete("collect --wai"))[0].value, "collect --wait=");
 	});
 });
 
