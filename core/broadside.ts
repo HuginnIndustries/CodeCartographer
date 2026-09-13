@@ -312,7 +312,23 @@ export type BroadsideTriageEntry = {
 	batchId?: string;
 	status: "pending" | "submitted" | "completed" | "failed";
 	cost?: number;
+	error?: string;
 };
+
+/** The truncation retry pass of one run: one batch per model (#206). */
+export type BroadsideRetryEntry = {
+	status: "submitted" | "completed" | "failed";
+	batches: Array<{ model: string; batchId: string }>;
+	/** When the owning collect claimed the pass (#322). */
+	claimedAt: string;
+};
+
+/**
+ * The parts of a run that cost money to submit and that exactly one collect
+ * may own: the two post-passes and the truncation retry (#322).
+ */
+export type BroadsideRunSlot = "synthesis" | "triage" | "retry";
+export const BROADSIDE_RUN_SLOTS: readonly BroadsideRunSlot[] = ["synthesis", "triage", "retry"];
 
 export type BroadsideRun = {
 	id: string;
@@ -324,6 +340,11 @@ export type BroadsideRun = {
 	batches: Partial<Record<BroadsideLensId, BroadsideBatchEntry>>;
 	synthesis: BroadsideSynthesisEntry;
 	triage: BroadsideTriageEntry;
+	/**
+	 * The truncation retry pass (#133), recorded so that two collects on one
+	 * run cannot both submit it (#322). Absent until a collect claims it.
+	 */
+	retry?: BroadsideRetryEntry;
 	totalCost?: number;
 	pricing?: ModelPricing;
 	maxCost?: number;
@@ -541,6 +562,8 @@ export type BroadsideCollectResult = {
 	truncatedCount: number;
 	/** Truncated slices recovered by the automatic re-submit pass (#133). */
 	retriedCount: number;
+	/** Another collect on this run owns the retry pass; its result lands on a later collect (#322). */
+	retryElsewhere?: boolean;
 	lensOutcomes: Partial<
 		Record<BroadsideLensId, { status: string; cost?: number; resultCount?: number; truncated?: number; error?: string }>
 	>;
@@ -2003,6 +2026,100 @@ export async function persistBroadsideRun(broadsideDir: string, run: BroadsideRu
 	});
 }
 
+/** Where a lens batch entry stands, for keeping the more advanced of two. */
+function batchEntryRank(entry: BroadsideBatchEntry | undefined): number {
+	if (!entry) return -1;
+	if (BROADSIDE_TERMINAL_ENTRY_STATUSES.includes(entry.status)) return 2;
+	if (entry.batchId) return 1;
+	return 0;
+}
+
+/** Where a post-pass entry stands: unclaimed, claimed, submitted, settled. */
+function passEntryRank(entry: BroadsideSynthesisEntry | undefined): number {
+	if (!entry || entry.status === "pending") return 0;
+	if (entry.status === "submitted") return entry.batchId ? 2 : 1;
+	return 3;
+}
+
+/** Where the retry pass stands: absent, claimed, submitted, settled. */
+function retryEntryRank(entry: BroadsideRetryEntry | undefined): number {
+	if (!entry) return 0;
+	if (entry.status === "submitted") return entry.batches.length > 0 ? 2 : 1;
+	return 3;
+}
+
+/**
+ * Record a collect's view of its run, keeping whatever is further along on
+ * disk (#322).
+ *
+ * Two collects on one run each hold the run in memory and each used to write
+ * the whole thing back, so the last writer replaced the other's post-pass
+ * entries with its own — and both had submitted their own post-passes, since
+ * each decided from the copy it loaded at entry. This writer merges slot by
+ * slot: a post-pass or retry entry that is further along on disk (claimed
+ * over pending, submitted over claimed, settled over submitted) wins and is
+ * copied into `run`, so the caller reports what is true; a lens entry never
+ * goes backwards from terminal to polling. A tie keeps this collect's copy,
+ * so the collect that settled a pass records its cost. Submitting is guarded
+ * separately by {@link claimRunSlot}.
+ */
+export async function persistBroadsideRunMerging(broadsideDir: string, run: BroadsideRun): Promise<BroadsideStateFile> {
+	return updateBroadsideStateAtomically(broadsideDir, (state) => {
+		const index = state.runs.findIndex((candidate) => candidate.id === run.id);
+		const onDisk = index === -1 ? undefined : state.runs[index];
+		if (onDisk) {
+			if (passEntryRank(onDisk.synthesis) > passEntryRank(run.synthesis)) run.synthesis = onDisk.synthesis;
+			if (passEntryRank(onDisk.triage) > passEntryRank(run.triage)) run.triage = onDisk.triage;
+			if (retryEntryRank(onDisk.retry) > retryEntryRank(run.retry)) run.retry = onDisk.retry;
+			for (const [lensId, theirs] of Object.entries(onDisk.batches) as Array<[BroadsideLensId, BroadsideBatchEntry | undefined]>) {
+				if (theirs && batchEntryRank(theirs) > batchEntryRank(run.batches[lensId])) run.batches[lensId] = theirs;
+			}
+		}
+		if (index === -1) state.runs.push(run);
+		else state.runs[index] = run;
+	});
+}
+
+/**
+ * Claim one spending slot of a run for this collect (#322).
+ *
+ * Read-modify-write under the state lock: if the slot on disk is still
+ * unclaimed (`pending`, or absent for the retry), it is marked `submitted`
+ * with no batch id *before* any network call and `true` comes back — this
+ * collect owns it and may submit. Otherwise another collect got there first:
+ * its entry is copied into `run` and `false` comes back. An adopted entry
+ * with a batch id can be polled (polling is idempotent); one without an id
+ * is a claim whose owner has not recorded the id yet, and is reported as in
+ * flight elsewhere.
+ */
+export async function claimRunSlot(broadsideDir: string, run: BroadsideRun, slot: BroadsideRunSlot): Promise<boolean> {
+	let owned = false;
+	const claimedAt = new Date().toISOString();
+	await updateBroadsideStateAtomically(broadsideDir, (state) => {
+		const index = state.runs.findIndex((candidate) => candidate.id === run.id);
+		const onDisk = index === -1 ? undefined : state.runs[index];
+		const theirs = onDisk?.[slot];
+		const unclaimed = slot === "retry" ? theirs === undefined : (theirs as BroadsideSynthesisEntry | undefined)?.status === "pending";
+		if (onDisk && !unclaimed) {
+			(run as unknown as Record<string, unknown>)[slot] = theirs;
+			owned = false;
+			return;
+		}
+		owned = true;
+		if (slot === "retry") {
+			run.retry = { status: "submitted", batches: [], claimedAt };
+		} else {
+			run[slot] = { ...run[slot], status: "submitted", batchId: undefined };
+		}
+		if (!onDisk) {
+			state.runs.push(run);
+		} else {
+			(onDisk as unknown as Record<string, unknown>)[slot] = run[slot];
+		}
+	});
+	return owned;
+}
+
 /** Read a `reasoning:` block from config.yaml, ignoring anything malformed. */
 function parseReasoningConfig(raw: unknown): BroadsideReasoning | null {
 	if (raw === false) return { enabled: false };
@@ -2555,6 +2672,12 @@ export async function pollBatchUntilTerminal(
 		onStatus?: (status: string, counts: Record<string, unknown>) => void;
 		fetcher?: FetchLike;
 		pollIntervalMs?: number;
+		/**
+		 * Stops polling early with the same synthetic `timeout` a spent budget
+		 * returns: the batch keeps running server-side and a later collect
+		 * claims it. The MCP server aborts when its client disconnects (#322).
+		 */
+		signal?: AbortSignal;
 	} = {},
 ): Promise<Record<string, unknown>> {
 	const deadline = Date.now() + (opts.deadlineMs ?? BROADSIDE_DEFAULT_POLL_BUDGET_MS);
@@ -2572,6 +2695,7 @@ export async function pollBatchUntilTerminal(
 		...(lastError && sawBatch && { last_error: lastError }),
 	});
 	for (;;) {
+		if (opts.signal?.aborted) return { ...timedOut(), aborted: true };
 		let batch: Record<string, unknown>;
 		try {
 			batch = await fetchBatch(batchId, apiKey, fetcher);
@@ -2599,8 +2723,25 @@ export async function pollBatchUntilTerminal(
 		opts.onStatus?.(status, counts);
 		if (status === "completed" || BROADSIDE_DEAD_BATCH_STATUSES.includes(status)) return batch;
 		if (Date.now() >= deadline) return timedOut();
-		await sleep(intervalMs);
+		await sleepUnlessAborted(intervalMs, opts.signal);
 	}
+}
+
+/** Sleep, but wake at once when the signal fires so an abort is not a poll interval late. */
+function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+	if (!signal) return sleep(ms);
+	if (signal.aborted) return Promise.resolve();
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			resolve();
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
 }
 
 /**
@@ -2617,6 +2758,7 @@ export async function pollBatchesConcurrently(
 		deadlineMs?: number;
 		fetcher?: FetchLike;
 		pollIntervalMs?: number;
+		signal?: AbortSignal;
 		onStatus?: (lensId: string, status: string, counts: Record<string, unknown>) => void;
 	} = {},
 ): Promise<Map<string, Record<string, unknown>>> {
@@ -2628,6 +2770,7 @@ export async function pollBatchesConcurrently(
 				deadlineMs,
 				fetcher: opts.fetcher,
 				pollIntervalMs: opts.pollIntervalMs,
+				signal: opts.signal,
 				onStatus: (status, counts) => opts.onStatus?.(lensId, status, counts),
 			});
 			results.set(batchId, batch);
@@ -3244,6 +3387,14 @@ export async function runBroadsideCollect(
 		 * once a newer submit existed (#268). `status` lists the ids.
 		 */
 		runId?: string;
+		/**
+		 * Stops polling and submits nothing further once fired; what was
+		 * already submitted keeps running server-side for a later collect to
+		 * claim. The MCP server fires it when its client disconnects (#322).
+		 */
+		signal?: AbortSignal;
+		/** Poll cadence override; tests drive the loop faster than 15 s. */
+		pollIntervalMs?: number;
 	} = {},
 ): Promise<BroadsideCollectResult> {
 	const broadsideDir = broadsideDirFor(cwd);
@@ -3262,6 +3413,13 @@ export async function runBroadsideCollect(
 
 	const runDir = join(broadsideDir, run.outputDir);
 	await mkdir(runDir, { recursive: true });
+
+	// The spending slots this collect has claimed (#322); only a claimed slot
+	// is ever submitted from here. Every write-back merges with the file, so a
+	// slot another collect has moved further along is never overwritten.
+	const owned = new Set<BroadsideRunSlot>();
+	const persist = () => persistBroadsideRunMerging(broadsideDir, run);
+	const aborted = () => opts.signal?.aborted === true;
 
 	const deadline = Date.now() + (opts.waitMs ?? BROADSIDE_DEFAULT_POLL_BUDGET_MS);
 	let totalCost = 0;
@@ -3293,6 +3451,8 @@ export async function runBroadsideCollect(
 	const polled = await pollBatchesConcurrently(inFlight, apiKey, {
 		deadlineMs: Math.max(0, deadline - Date.now()),
 		fetcher: opts.fetcher,
+		pollIntervalMs: opts.pollIntervalMs,
+		signal: opts.signal,
 		onStatus: opts.onStatus,
 	});
 
@@ -3344,7 +3504,7 @@ export async function runBroadsideCollect(
 			const error = explainBatchError(batch.error);
 			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount, ...(error && { error }) };
 		}
-		await persistBroadsideRun(broadsideDir, run);
+		await persist();
 	}
 
 	// #133: re-submit truncated slices once with a bumped output cap and low
@@ -3363,7 +3523,34 @@ export async function runBroadsideCollect(
 	// lens pass, still present here (#206). Grouping also keeps the retry to
 	// one job per model against OpenRouter's 16-concurrent-job quota.
 	let retriedCount = 0;
-	if (opts.retryTruncated !== false && truncatedCount > 0) {
+	let retryElsewhere = false;
+	// A collect that polled nothing — every lens already terminal — still owes
+	// the retry if the collect that saved the results never got to it (it
+	// died, or its client did: #322). Read the saved results back and let the
+	// claim decide; a recovered slice re-parses clean, so this costs nothing
+	// once the retry has run.
+	if (opts.retryTruncated !== false && allLensResults.length === 0 && !aborted()) {
+		const everyLensTerminal = run.lenses.every((lensId) => {
+			const entry = run.batches[lensId];
+			return entry && BROADSIDE_TERMINAL_ENTRY_STATUSES.includes(entry.status);
+		});
+		if (everyLensTerminal) {
+			const restored = await loadSavedLensResults(runDir, run.lenses);
+			if (restored.some((s) => s.truncated)) {
+				allLensResults.push(...restored);
+				truncatedCount = restored.filter((s) => s.truncated).length;
+			}
+		}
+	}
+	if (opts.retryTruncated !== false && truncatedCount > 0 && !aborted()) {
+		// Claim the pass before spending: a second collect on this run finds the
+		// claim and leaves the retry to the first (#322). A retry another
+		// collect has already settled is not run again — its truncation is
+		// what it is.
+		if (await claimRunSlot(broadsideDir, run, "retry")) owned.add("retry");
+		else if (run.retry?.status === "submitted") retryElsewhere = true;
+	}
+	if (opts.retryTruncated !== false && truncatedCount > 0 && owned.has("retry")) {
 		const requestsByCustomId = await loadStoredRequests(runDir);
 		const byModel = new Map<string, { requests: BatchRequest[]; slices: Map<string, StoredLensResult> }>();
 		for (const stored of allLensResults) {
@@ -3392,6 +3579,7 @@ export async function runBroadsideCollect(
 		// Submit every group, then poll whatever was accepted, together.
 		const submitted: Array<{ model: string; batchId: string }> = [];
 		for (const [model, group] of byModel) {
+			if (aborted()) break;
 			try {
 				const { batchId, error } = await submitBatch(group.requests, apiKey, opts.fetcher, model);
 				if (!error && batchId) submitted.push({ model, batchId });
@@ -3400,6 +3588,15 @@ export async function runBroadsideCollect(
 				// truncated results in place — nothing is lost.
 			}
 		}
+		// Record the ids under the claim so a later collect can see what was
+		// paid for, even if this one never returns. No group at all means every
+		// truncated slice was already at its model's ceiling: nothing to retry.
+		run.retry = {
+			...run.retry!,
+			batches: submitted,
+			status: submitted.length > 0 ? "submitted" : byModel.size === 0 ? "completed" : "failed",
+		};
+		await persist();
 		const polled = await pollBatchesConcurrently(
 			submitted.map(({ model, batchId }) => ({ lensId: `retry:${model}` as BroadsideLensId, batchId })),
 			apiKey,
@@ -3410,6 +3607,8 @@ export async function runBroadsideCollect(
 				// minutes.
 				deadlineMs: Math.max(0, deadline - Date.now()),
 				fetcher: opts.fetcher,
+				pollIntervalMs: opts.pollIntervalMs,
+				signal: opts.signal,
 				onStatus: opts.onStatus,
 			},
 		);
@@ -3435,13 +3634,17 @@ export async function runBroadsideCollect(
 				retriedCount += 1;
 			}
 		}
+		// Every retry batch reached a terminal status, or the poll ran out.
+		if (submitted.length > 0 && submitted.every(({ batchId }) => polled.get(batchId)?.status === "completed")) {
+			run.retry = { ...run.retry!, status: "completed" };
+		}
 		truncatedCount = allLensResults.filter((s) => s.truncated).length;
 		for (const [lensId, outcome] of Object.entries(lensOutcomes)) {
 			if (outcome.truncated !== undefined) {
 				outcome.truncated = allLensResults.filter((s) => s.lensId === lensId && s.truncated).length;
 			}
 		}
-		await persistBroadsideRun(broadsideDir, run);
+		await persist();
 	}
 
 	// Synthesis + triage: cross-lens post-passes, only after every lens batch
@@ -3484,26 +3687,28 @@ export async function runBroadsideCollect(
 			// Both post-passes consume the same findings; they run as two
 			// batches (different response_format schemas cannot share one)
 			// submitted together and polled in turn.
+			// Claim each wanted, still-pending pass before building its request:
+			// a second collect on this run adopts the first one's entry instead
+			// of submitting its own (#322). An abort submits nothing further.
 			const passes: Array<{
 				kind: "synthesis" | "triage";
 				request: BatchRequest;
 				entry: BroadsideSynthesisEntry;
-			}> = [
-				...(wantSynthesis && run.synthesis.status === "pending"
-					? [{
-							kind: "synthesis" as const,
-							request: buildSynthesisRequest(findingsText, truncatedNote, run.model),
-							entry: run.synthesis,
-						}]
-					: []),
-				...(wantTriage && run.triage.status === "pending"
-					? [{
-							kind: "triage" as const,
-							request: buildTriageRequest(findingsText, truncatedNote, run.model),
-							entry: run.triage,
-						}]
-					: []),
-			];
+			}> = [];
+			for (const kind of ["synthesis", "triage"] as const) {
+				const want = kind === "synthesis" ? wantSynthesis : wantTriage;
+				if (!want || aborted()) continue;
+				if ((kind === "synthesis" ? run.synthesis : run.triage).status !== "pending") continue;
+				if (!(await claimRunSlot(broadsideDir, run, kind))) continue;
+				owned.add(kind);
+				passes.push({
+					kind,
+					request: kind === "synthesis"
+						? buildSynthesisRequest(findingsText, truncatedNote, run.model)
+						: buildTriageRequest(findingsText, truncatedNote, run.model),
+					entry: kind === "synthesis" ? run.synthesis : run.triage,
+				});
+			}
 
 			const submitted = new Map<string, { batchId: string; pass: (typeof passes)[number] }>();
 
@@ -3540,17 +3745,27 @@ export async function runBroadsideCollect(
 					}
 				}),
 			);
-			await persistBroadsideRun(broadsideDir, run);
+			await persist();
 
-			for (const { batchId, pass } of submitted.values()) {
-				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
-					// Shares the caller's deadline, as the retry poll above does.
-					// A pass whose poll runs out stays `submitted`, so the batch
-					// is already paid for and a later collect claims its result.
+			// Poll both passes together against the shared deadline. Polled in
+			// turn, the first pass could spend the whole budget and leave the
+			// second a single poll (0.22.1 live run: triage settled, synthesis
+			// left running though it had been submitted at the same moment).
+			// A pass whose poll runs out stays `submitted`, so the batch is
+			// already paid for and a later collect claims its result.
+			const polledPasses = await pollBatchesConcurrently(
+				[...submitted.values()].map(({ batchId, pass }) => ({ lensId: pass.kind as unknown as BroadsideLensId, batchId })),
+				apiKey,
+				{
 					deadlineMs: Math.max(0, deadline - Date.now()),
-					onStatus: (status, counts) => opts.onStatus?.(pass.kind, status, counts),
 					fetcher: opts.fetcher,
-				});
+					pollIntervalMs: opts.pollIntervalMs,
+					signal: opts.signal,
+					onStatus: opts.onStatus,
+				},
+			);
+			for (const { batchId, pass } of submitted.values()) {
+				const batch = polledPasses.get(batchId) ?? { id: batchId, status: "timeout" };
 				if (batch.status === "completed") {
 					const usage = (batch.usage ?? {}) as Record<string, unknown>;
 					const cost = typeof usage.cost === "number" ? usage.cost : undefined;
@@ -3580,7 +3795,7 @@ export async function runBroadsideCollect(
 				// A "timeout" is deliberately left at "submitted": the batch is
 				// still running server-side and has already been paid for, so a
 				// later collect should claim its result rather than discard it.
-				await persistBroadsideRun(broadsideDir, run);
+				await persist();
 			}
 		}
 	}
@@ -3591,7 +3806,7 @@ export async function runBroadsideCollect(
 	});
 	run.status = terminal ? (resultCount > 0 ? "completed" : "failed") : "partial";
 	run.totalCost = totalCost;
-	await persistBroadsideRun(broadsideDir, run);
+	await persist();
 
 	await writeFile(
 		join(runDir, "run-meta.json"),
@@ -3636,6 +3851,7 @@ export async function runBroadsideCollect(
 		resultCount,
 		truncatedCount,
 		retriedCount,
+		...(retryElsewhere && { retryElsewhere: true }),
 		lensOutcomes,
 		synthesis: run.synthesis,
 		triage: run.triage,
@@ -3922,11 +4138,27 @@ export function collectResultText(result: BroadsideCollectResult): string {
 	if (result.retriedCount > 0) {
 		lines.push(`  ↻ ${result.retriedCount} truncated result(s) recovered by re-submission with a doubled output cap.`);
 	}
+	if (result.retryElsewhere) {
+		lines.push("  ↻ The truncation retry is in flight in another collect on this run; collect again for its result.");
+	}
 	if (result.truncatedCount > 0) {
 		lines.push(
 			`  ⚠ ${result.truncatedCount} result(s) still truncated after retry — their modules are unscouted, not clean.`,
 		);
 	}
+	// A pass still in flight or retired must appear: a run reported
+	// "completed" with no synthesis line read as "no synthesis was run",
+	// when the batch was running and a later collect would have claimed it
+	// (0.22.1 live run — the collect's wait ran out during the pass).
+	const passInFlight = (kind: "synthesis" | "triage", entry: BroadsideSynthesisEntry): void => {
+		if (entry.status === "submitted") {
+			lines.push(
+				`  ${kind}: ${entry.batchId ? "still running" : "in flight in another collect"} — collect again for its result.`,
+			);
+		} else if (entry.status === "failed") {
+			lines.push(`  ${kind}: failed${entry.error ? ` — ${explainBatchError(entry.error)}` : ""}`);
+		}
+	};
 	if (result.synthesis.status === "completed") {
 		lines.push(`  synthesis: completed, $${(result.synthesis.cost ?? 0).toFixed(6)}`);
 		if (result.topFindings.length > 0) {
@@ -3935,6 +4167,8 @@ export function collectResultText(result: BroadsideCollectResult): string {
 				lines.push(`  [${f.severity}] ${f.title}`);
 			}
 		}
+	} else {
+		passInFlight("synthesis", result.synthesis);
 	}
 	if (result.triage.status === "completed") {
 		lines.push(`  triage: completed, $${(result.triage.cost ?? 0).toFixed(6)}`);
@@ -3947,8 +4181,8 @@ export function collectResultText(result: BroadsideCollectResult): string {
 				);
 			}
 		}
-	} else if (result.triage.status === "failed") {
-		lines.push("  triage: failed");
+	} else {
+		passInFlight("triage", result.triage);
 	}
 	lines.push("", "Disclaimer: Broad-Side findings are unverified scouting signals from a batch model, not validated claims.");
 	return lines.join("\n");
