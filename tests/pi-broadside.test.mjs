@@ -238,7 +238,14 @@ test("--no-incremental overrides a config-set incremental: true; absence defers 
 			const baseline = createHarness(cwd, { confirm: async () => true });
 			await baseline.commands.get("codecarto-broadside").handler("submit defect", baseline.ctx);
 			assert.equal(posts.length, 1, "the baseline run must actually submit");
-			assert.doesNotMatch(baseline.ui.confirmations[0].body, /Incremental/, "no prior run means nothing to diff against");
+			// Config asked for incremental, so the dialog says it could not apply
+			// and why — the same sentence the MCP report prints — rather than
+			// staying silent as if a full scan had been the request.
+			assert.match(
+				baseline.ui.confirmations[0].body,
+				/Incremental was requested but NOT applied — no earlier run recorded a commit to diff against\. This is a full scan\./,
+				"no prior run means nothing to diff against, said as such",
+			);
 
 			// Change one file and commit. `add -A` also tracks the scout state the
 			// baseline wrote, so the tree reads clean and the diff is trusted.

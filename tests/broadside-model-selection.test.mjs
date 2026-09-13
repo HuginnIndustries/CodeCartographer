@@ -403,3 +403,58 @@ test("a config.yaml that sets both reasoning.effort and reasoning.max_tokens ref
 	assert.doesNotMatch(block, /#   effort: [a-z]+[^\n]*\n#   max_tokens:/, "effort and max_tokens must not be shown together");
 	assert.match(template, /Set `effort` OR `max_tokens`, not both/);
 });
+
+test("a headless /codecarto-broadside submit is approved by the cap and refused over it, never by the missing dialog", async () => {
+	// Under `pi -p` there is no TUI and the confirm stub answers "no", so a
+	// headless submit could never fire: seen live as "Broad-Side cancelled.
+	// Nothing was submitted." on a run that was well under max_cost.
+	await withRepo(async (dir) => {
+		const posted = [];
+		await withGlobalFetch(fetcherRecording(posted), async () => {
+			const { commands, ctx, ui } = createHarness(dir);
+			ctx.hasUI = false;
+			ui.confirm = async () => { throw new Error("the dialog must not be shown headless"); };
+			// Without a TUI, notifications are written to stderr as
+			// "[codecarto] <level>: <message>" lines; capture them.
+			const stderr = [];
+			const originalWrite = process.stderr.write;
+			process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+			try {
+				await commands.get("codecarto-broadside").handler("submit architecture --max-cost=1 --wait=0", ctx);
+				assert.equal(posted.length, 1, "within the cap: submitted without a dialog");
+				assert.ok(stderr.some((m) => /Estimated total/.test(m)), `the breakdown is printed instead of shown: ${JSON.stringify(stderr)}`);
+				assert.ok(!stderr.some((m) => /cancelled|refused/.test(m)), `no refusal within the cap: ${JSON.stringify(stderr)}`);
+
+				stderr.length = 0;
+				await commands.get("codecarto-broadside").handler("submit architecture --max-cost=0.000001 --wait=0", ctx);
+				assert.equal(posted.length, 1, "over the cap: nothing submitted");
+				const refusal = stderr.find((m) => /\[codecarto\] error:/.test(m));
+				assert.ok(refusal, `an error line is expected: ${JSON.stringify(stderr)}`);
+				assert.match(refusal, /exceeds max_cost \$0\.00 and there is no dialog to approve it in a headless run/);
+				assert.doesNotMatch(refusal, /cancelled/);
+			} finally {
+				process.stderr.write = originalWrite;
+			}
+			assert.equal(ui.notifications.length, 0, "nothing went to the absent UI");
+		});
+	});
+});
+
+test("the Pi spend dialog mentions incremental only when it was requested", async () => {
+	// Seen live: a plain submit on a dirty tree printed "Incremental was
+	// requested but the tree is dirty — this is a full scan." Nobody asked.
+	await withRepo(async (dir) => {
+		const posted = [];
+		await withGlobalFetch(fetcherRecording(posted), async () => {
+			const { commands, ctx, ui } = createHarness(dir);
+			await commands.get("codecarto-broadside").handler("submit architecture --max-cost=1 --wait=0", ctx);
+			assert.equal(ui.confirmations.length, 1);
+			assert.doesNotMatch(ui.confirmations[0].body, /Incremental/, "no incremental line on a plain submit");
+
+			// Requested on a non-git directory: no baseline, said as such.
+			await commands.get("codecarto-broadside").handler("submit architecture --incremental --max-cost=1 --wait=0", ctx);
+			assert.equal(ui.confirmations.length, 2);
+			assert.match(ui.confirmations[1].body, /Incremental was requested but NOT applied — .*\. This is a full scan\./);
+		});
+	});
+});

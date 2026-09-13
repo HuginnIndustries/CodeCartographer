@@ -95,11 +95,14 @@ OpenRouter advertises a `:batch` variant for, and many of those variants do not
 exist — submitting one returns `does not have a :batch endpoint`, with nothing in
 the catalog to distinguish it beforehand. A rejected batch costs nothing, so
 probe a candidate on a single lens first. And reasoning competes with the answer for
-`max_tokens`: Broad-Side caps thinking at a quarter of each lens's output budget
-so three quarters remain for the JSON, which is the split the cost estimate
-already assumes. It caps rather than disables because some endpoints refuse to
-be switched off entirely. Override with `reasoning:` in `config.yaml` only
-alongside a raised output budget.
+`max_tokens`: Broad-Side asks every model for low reasoning effort so the output
+budget stays with the JSON, which is the split the cost estimate already
+assumes. An effort level rather than a token cap, because Gemini 3.x ignores a
+cap (measured: 11,518 thinking tokens under a 5,800 cap) and honours the level;
+a level rather than off, because some endpoints refuse to be switched off. A
+slice that still truncates is retried once with a doubled budget at low effort.
+Override with `reasoning:` in `config.yaml` only alongside a raised output
+budget, and set `effort` or `max_tokens`, never both.
 
 Lenses do not all have to run on the same model. `lens_models` in `config.yaml`
 routes individual lenses to their own batch model — the usual reason being that

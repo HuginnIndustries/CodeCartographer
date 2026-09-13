@@ -210,33 +210,51 @@ export type FileSlice = {
 export type BroadsideReasoning = { enabled?: boolean; effort?: "minimal" | "low" | "medium" | "high"; max_tokens?: number };
 
 /**
- * The share of a lens's output budget reasoning may spend.
+ * The reasoning control every lens request carries: low effort.
  *
- * `estimateCost` already budgets output at 75% of `maxTokens`; capping thinking
- * at the remaining quarter makes that assumption true by construction and
- * guarantees the answer has room. A floor keeps the cap sane for a small lens.
+ * It used to be a token cap — `max_tokens` at a quarter of the lens's output
+ * budget, so three quarters stayed for the answer. Measured live on
+ * `google/gemini-3.8-flash:batch` (0.22.0 verification, defect lens, cap
+ * 5,800 of a 6,000 budget): the model reasoned 5,218 tokens on the first
+ * pass and **11,518 under the same cap** on the doubled-budget retry —
+ * thinking scaled with `max_tokens` and the cap changed nothing, both
+ * results truncated, and the retry cost twice the original for no JSON.
+ * The same lens with `effort: "low"` reasoned 0 tokens, finished with
+ * `stop`, returned valid JSON, and cost a twelfth as much. Gemini 3.x
+ * models take a thinking *level*, not a budget, and OpenRouter forwards a
+ * `max_tokens` cap to them as nothing at all; `effort` is what it can
+ * translate for every provider (a level where the provider has levels, a
+ * fraction of the budget where it takes a budget). So the default asks for
+ * little thinking in the one vocabulary that reaches everyone.
+ *
+ * Deliberately not `enabled: false`: `google/gemini-3.8-flash:batch` refuses
+ * the whole batch with *"Reasoning is mandatory for this endpoint and cannot
+ * be disabled"*, turning a partial result into none at all. Low effort works
+ * whether or not a provider allows reasoning to be switched off.
  */
-export const BROADSIDE_REASONING_BUDGET_FRACTION = 0.25;
-export const BROADSIDE_MIN_REASONING_TOKENS = 512;
+export const BROADSIDE_DEFAULT_REASONING: Readonly<BroadsideReasoning> = Object.freeze({ effort: "low" });
+
+/** The reasoning control a lens request carries when config.yaml sets none. */
+export function defaultReasoningFor(): BroadsideReasoning {
+	return { ...BROADSIDE_DEFAULT_REASONING };
+}
 
 /**
- * Cap reasoning for a lens request — deliberately a cap, not an off switch.
+ * The reasoning control a truncated slice is re-submitted with.
  *
- * Disabling outright is not portable: `google/gemini-3.8-flash:batch` refuses
- * the whole batch with *"Reasoning is mandatory for this endpoint and cannot be
- * disabled"*, turning a partial result into none at all. Capping works whether
- * or not a provider allows reasoning to be switched off.
- *
- * The failure this prevents is the budget being spent thinking rather than
- * answering. Measured on one run: 5,758 of a 6,000-token budget went to
- * reasoning, leaving ~230 tokens for JSON that truncated mid-structure — and
- * those tokens bill at the full output rate. The shipped default model does the
- * same thing less consistently (reasoning tokens from 0 to 5,757 across 13
- * slices, three of them cut off at `finish_reason: length`), so this is not a
- * multi-model concern.
+ * A truncation on a reasoning-capable model is usually thinking that ate the
+ * answer's budget, and doubling `max_tokens` doubles the thinking where the
+ * provider ignores a token cap (see {@link BROADSIDE_DEFAULT_REASONING}). The
+ * retry therefore asks for low effort as well, replacing a `max_tokens` cap
+ * (OpenRouter refuses a request carrying both) and lowering a higher effort.
+ * An explicit `enabled: false` and an effort already at or below low are left
+ * as they are.
  */
-export function defaultReasoningFor(maxTokens: number): BroadsideReasoning {
-	return { max_tokens: Math.max(BROADSIDE_MIN_REASONING_TOKENS, Math.floor(maxTokens * BROADSIDE_REASONING_BUDGET_FRACTION)) };
+export function retryReasoningFor(original: BroadsideReasoning | undefined): BroadsideReasoning {
+	if (original?.enabled === false) return { ...original };
+	if (original?.effort === "minimal" || original?.effort === "low") return { ...original };
+	const { max_tokens: _cap, effort: _effort, ...rest } = original ?? {};
+	return { ...rest, effort: "low" };
 }
 
 export type BatchRequest = {
@@ -1795,7 +1813,7 @@ export function buildBatchRequest(
 			max_tokens: maxTokensOverride ?? lens.maxTokens,
 			// Always sent, never inherited: an absent field means the model's
 			// own default, and that default is what truncated the JSON.
-			reasoning: reasoningOverride ?? lens.reasoning ?? defaultReasoningFor(maxTokensOverride ?? lens.maxTokens),
+			reasoning: reasoningOverride ?? lens.reasoning ?? defaultReasoningFor(),
 		},
 	};
 }
@@ -3329,9 +3347,12 @@ export async function runBroadsideCollect(
 		await persistBroadsideRun(broadsideDir, run);
 	}
 
-	// #133: re-submit truncated slices once with a bumped output cap. Batch
-	// requests are pure, so re-running is always safe; the aim is to recover
-	// coverage the first pass lost to a max_tokens cutoff, not to loop forever.
+	// #133: re-submit truncated slices once with a bumped output cap and low
+	// reasoning effort. Batch requests are pure, so re-running is always safe;
+	// the aim is to recover coverage the first pass lost to a max_tokens
+	// cutoff, not to loop forever. Low effort because the cutoff is usually
+	// thinking, and a doubled budget doubled the thinking where a token cap
+	// was ignored (see retryReasoningFor).
 	//
 	// All bumped requests for one model go out as ONE batch, and the batches
 	// (one per model, since a batch carries a single model) are polled
@@ -3360,7 +3381,10 @@ export async function runBroadsideCollect(
 			if (bumpedMax <= previousMax) continue; // already at the ceiling
 
 			const group = byModel.get(lensModel) ?? { requests: [], slices: new Map() };
-			group.requests.push({ ...original, body: { ...original.body, max_tokens: bumpedMax } });
+			group.requests.push({
+				...original,
+				body: { ...original.body, max_tokens: bumpedMax, reasoning: retryReasoningFor(original.body.reasoning) },
+			});
 			group.slices.set(stored.customId, stored);
 			byModel.set(lensModel, group);
 		}
@@ -3688,7 +3712,7 @@ function parseSynthesisTopFindings(
 
 // ---------- formatting helpers for tool output ----------
 
-function describeIncrementalFallback(reason: BroadsideIncrementalOutcome["reason"]): string {
+export function describeIncrementalFallback(reason: BroadsideIncrementalOutcome["reason"]): string {
 	switch (reason) {
 		case "dirty-worktree":
 			return "the working tree has uncommitted changes, so there is no committed state to diff against";

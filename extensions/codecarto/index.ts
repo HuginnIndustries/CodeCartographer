@@ -67,6 +67,7 @@ import {
 	runBroadsideSubmit,
 	statusText,
 	describeConfigProblems,
+	describeIncrementalFallback,
 	loadCodecartoConfig,
 	loadUsage,
 	loadYamlFile,
@@ -242,10 +243,16 @@ function describeBroadsideEstimate(estimate: BroadsideEstimate): string {
 				: `Within the configured max_cost of $${estimate.maxCost.toFixed(2)}.`,
 		);
 	}
-	if (estimate.baseHead) {
-		lines.push(`Incremental: only modules changed since ${estimate.baseHead.slice(0, 8)} are included.`);
-	} else if (estimate.sourceDirty) {
-		lines.push("Incremental was requested but the tree is dirty — this is a full scan.");
+	// Only a requested incremental run has anything to say here. The dialog
+	// used to print "Incremental was requested but the tree is dirty" on every
+	// dirty tree, requested or not — a full scan that nobody asked to shrink
+	// read as a fallback.
+	if (estimate.incremental?.requested) {
+		lines.push(
+			estimate.incremental.applied
+				? `Incremental: only modules changed since ${(estimate.baseHead ?? "").slice(0, 8)} are included.`
+				: `Incremental was requested but NOT applied — ${describeIncrementalFallback(estimate.incremental.reason)}. This is a full scan.`,
+		);
 	}
 	lines.push("", "The estimate is a pre-flight prediction from file sizes; OpenRouter bills actual usage.");
 	return lines.join("\n");
@@ -1277,6 +1284,9 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				const lenses = flags.lenses.length > 0 ? flags.lenses : config.defaultLenses;
 				renderProgress("Slicing the repository and pricing the run…");
 				let submit;
+				// Set when a headless run was refused over max_cost, so the cancel
+				// message says so instead of reading as a user's "no".
+				let headlessRefusal: string | null = null;
 				try {
 					submit = await runBroadsideSubmit(ctx.cwd, apiKey, {
 						lenses,
@@ -1291,16 +1301,33 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 						incremental: flags.incremental ?? config.incremental,
 						// Pi can ask, so it asks instead of refusing over max_cost the
 						// way MCP has to. An approval here IS the force flag.
-						confirm: (estimate) =>
-							ctx.ui.confirm(
-								`Broad-Side will spend about $${estimate.totalCost.toFixed(4)}`,
-								describeBroadsideEstimate(estimate),
-							),
+						confirm: (estimate) => {
+							if (ctx.hasUI) {
+								return ctx.ui.confirm(
+									`Broad-Side will spend about $${estimate.totalCost.toFixed(4)}`,
+									describeBroadsideEstimate(estimate),
+								);
+							}
+							// No dialog under `pi -p`: the stub answered "no" to every
+							// estimate, so a headless submit could never fire. Behave as
+							// the MCP surface does — an estimate within max_cost is
+							// approved by the cap itself; one over it is refused, since
+							// nobody is here to say yes — and print the breakdown either
+							// way, because the dialog was the only place it showed.
+							notifyCtx(ctx, describeBroadsideEstimate(estimate), "info");
+							if (estimate.exceedsLimit) {
+								headlessRefusal =
+									`Broad-Side refused: the estimate ~$${estimate.totalCost.toFixed(4)} exceeds max_cost $${estimate.maxCost.toFixed(2)} ` +
+									"and there is no dialog to approve it in a headless run. Raise --max-cost (0 for no limit) or run interactively.";
+								return false;
+							}
+							return true;
+						},
 					});
 				} catch (error) {
 					if (ctx.hasUI) ctx.ui.setWidget(BROADSIDE_WIDGET_ID, undefined);
 					if (error instanceof BroadsideCancelledError) {
-						notifyCtx(ctx, "Broad-Side cancelled. Nothing was submitted.", "info");
+						notifyCtx(ctx, headlessRefusal ?? "Broad-Side cancelled. Nothing was submitted.", headlessRefusal ? "error" : "info");
 						return;
 					}
 					notifyCtx(ctx, `Broad-Side submit failed: ${error instanceof Error ? error.message : String(error)}`, "error");

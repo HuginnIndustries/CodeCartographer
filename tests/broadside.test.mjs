@@ -48,9 +48,9 @@ const {
 	runBroadsideStatus,
 	runBroadsideSubmit,
 	BROADSIDE_DEAD_BATCH_STATUSES,
-	BROADSIDE_REASONING_BUDGET_FRACTION,
-	BROADSIDE_MIN_REASONING_TOKENS,
+	BROADSIDE_DEFAULT_REASONING,
 	defaultReasoningFor,
+	retryReasoningFor,
 	estimateSubmitText,
 	persistBroadsideRun,
 	saveBroadsideState,
@@ -2169,15 +2169,19 @@ test("a run that never asked for incremental says nothing about it", async () =>
 	}
 });
 
-// ---------- reasoning tokens must not eat the output budget ----------
+// ---------- reasoning must not eat the output budget ----------
 //
 // Sending no `reasoning` field means each model applies its own default. A
 // reasoning-capable model then spent 5,758 of a 6,000-token output budget
 // thinking and left ~230 tokens for the JSON, which truncated mid-structure —
 // on 11 of 13 slices, with the thinking billed at the full output rate. The
-// field is now always present.
+// field is now always present, and it asks for low effort rather than a
+// token cap: measured live on google/gemini-3.8-flash:batch, a max_tokens
+// cap of 5,800 was ignored (5,218 reasoning tokens, then 11,518 on the
+// doubled-budget retry, both truncated) while effort "low" reasoned 0
+// tokens and returned valid JSON at a twelfth of the cost.
 
-test("every lens request caps reasoning explicitly", async () => {
+test("every lens request asks for low reasoning effort explicitly", async () => {
 	const dir = await makeFixture();
 	try {
 		const info = await collectRepoInfo(dir);
@@ -2190,16 +2194,15 @@ test("every lens request caps reasoning explicitly", async () => {
 				Object.prototype.hasOwnProperty.call(request.body, "reasoning"),
 				`${lensId} must send reasoning explicitly rather than inheriting the model's default`,
 			);
-			const cap = request.body.reasoning.max_tokens;
-			assert.ok(cap > 0, `${lensId} must carry a reasoning cap`);
-			assert.ok(cap < request.body.max_tokens, `${lensId}'s cap must leave room for the answer`);
+			assert.deepEqual(request.body.reasoning, { effort: "low" }, `${lensId} must ask for low effort`);
+			assert.equal(request.body.reasoning.max_tokens, undefined, "a token cap is not honoured everywhere and cannot be sent with effort");
 		}
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
 });
 
-test("the cap is a cap, never an off switch", async () => {
+test("low effort is a level, never an off switch", async () => {
 	// Disabling is not portable: google/gemini-3.8-flash:batch refuses the whole
 	// batch with "Reasoning is mandatory for this endpoint and cannot be
 	// disabled", which turns a partial result into none at all. Verified live —
@@ -2212,40 +2215,77 @@ test("the cap is a cap, never an off switch", async () => {
 		const slices = await gatherSlices(dir, lens, info);
 		const reasoning = buildBatchRequest(lens, info, slices[0], 0, slices.length).body.reasoning;
 		assert.equal(reasoning.enabled, undefined, "the default must not try to switch reasoning off");
-		assert.equal(typeof reasoning.max_tokens, "number");
+		assert.equal(reasoning.effort, "low");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
 });
 
-test("the reasoning cap leaves exactly the share estimateCost budgets for output", () => {
-	// estimateCost budgets output at 75% of maxTokens. Capping thinking at the
-	// remaining quarter makes that assumption true rather than hopeful.
-	assert.equal(BROADSIDE_REASONING_BUDGET_FRACTION, 0.25);
-	assert.equal(defaultReasoningFor(6000).max_tokens, 1500);
-	assert.equal(defaultReasoningFor(8000).max_tokens, 2000);
-	// A small lens still gets a usable floor rather than a nonsense cap.
-	assert.equal(defaultReasoningFor(100).max_tokens, BROADSIDE_MIN_REASONING_TOKENS);
+test("the default reasoning control is low effort, and a copy each time", () => {
+	assert.deepEqual(BROADSIDE_DEFAULT_REASONING, { effort: "low" });
+	const a = defaultReasoningFor();
+	a.effort = "high";
+	assert.equal(defaultReasoningFor().effort, "low", "callers get their own object");
 });
 
-test("a retry's extra budget goes to the answer, not to more thinking", async () => {
-	// #133 doubles maxTokens on a truncated slice, and the retry clones the
-	// stored request rather than rebuilding it — so the reasoning cap carries
-	// over unchanged while the answer budget doubles. That is the right way
-	// round: the slice was retried *because* the answer was cut off, so the
-	// extra budget belongs to the answer.
+test("a truncated slice is retried at low effort, replacing a token cap and lowering a higher effort", () => {
+	// The retry doubles max_tokens; where a provider ignores a token cap the
+	// thinking doubles with it (measured: 11,518 reasoning tokens under a
+	// 5,800 cap on the retry). Low effort is the one control that reaches
+	// every provider, and OpenRouter refuses effort next to max_tokens.
+	assert.deepEqual(retryReasoningFor({ max_tokens: 5800 }), { effort: "low" });
+	assert.deepEqual(retryReasoningFor({ effort: "high" }), { effort: "low" });
+	assert.deepEqual(retryReasoningFor({ effort: "medium", enabled: true }), { enabled: true, effort: "low" });
+	assert.deepEqual(retryReasoningFor(undefined), { effort: "low" });
+	// Already low or lower, or explicitly off: left alone.
+	assert.deepEqual(retryReasoningFor({ effort: "low" }), { effort: "low" });
+	assert.deepEqual(retryReasoningFor({ effort: "minimal" }), { effort: "minimal" });
+	assert.deepEqual(retryReasoningFor({ enabled: false }), { enabled: false });
+});
+
+test("a retry's extra budget goes to the answer: max_tokens doubles and thinking drops to low effort", async () => {
+	// #133 doubles maxTokens on a truncated slice. The retry used to clone the
+	// stored request with only max_tokens changed, so a reasoning token cap
+	// carried over unchanged — and where the provider ignored the cap, the
+	// thinking doubled with the budget (measured live: 11,518 reasoning
+	// tokens under a 5,800 cap). The retry now also asks for low effort,
+	// replacing a configured cap since the two cannot be sent together.
 	const dir = await makeFixture();
 	try {
-		const info = await collectRepoInfo(dir);
-		const lens = getLens("defect");
-		const slices = await gatherSlices(dir, lens, info);
-		const original = buildBatchRequest(lens, info, slices[0], 0, slices.length);
-		const bumped = { ...original, body: { ...original.body, max_tokens: original.body.max_tokens * 2 } };
-
-		assert.equal(bumped.body.reasoning.max_tokens, original.body.reasoning.max_tokens, "the thinking cap must not grow");
-		const answerBefore = original.body.max_tokens - original.body.reasoning.max_tokens;
-		const answerAfter = bumped.body.max_tokens - bumped.body.reasoning.max_tokens;
-		assert.ok(answerAfter > answerBefore * 2, "all of the extra budget must reach the answer");
+		await mkdir(join(dir, ".codecarto", "broadside"), { recursive: true });
+		await writeFile(join(dir, ".codecarto", "broadside", "config.yaml"), "reasoning:\n  max_tokens: 5800\n");
+		const truncated = '{"module": "server", "findings": [';
+		const recovered = JSON.stringify({ module: "server", findings: [], patterns_checked: [], files_scanned: 0 });
+		const posted = [];
+		let phase = "submit";
+		const postedPhase = [];
+		const fetcher = async (url, init) => {
+			if (init.method === "POST") {
+				posted.push(JSON.parse(init.body));
+				postedPhase.push(phase);
+				return fakeResponse(202, { id: `batch-${posted.length}`, status: "validating" });
+			}
+			if (String(url).includes("/models")) return fakeResponse(200, modelsCatalog([]));
+			const index = Number(String(url).split("/").pop().replace(/^batch-/, "")) - 1;
+			return fakeResponse(200, {
+				id: `batch-${index + 1}`,
+				status: "completed",
+				results: posted[index].requests.map((r) => ({
+					custom_id: r.custom_id,
+					response: { status_code: 200, body: { choices: [{ message: { content: postedPhase[index] === "collect" ? recovered : truncated } }] } },
+					error: null,
+				})),
+				usage: { cost: 0.001 },
+			});
+		};
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["defect"], fetcher });
+		assert.deepEqual(posted[0].requests[0].body.reasoning, { max_tokens: 5800 }, "the configured cap goes out on the first pass");
+		phase = "collect";
+		const collect = await runBroadsideCollect(dir, "sk-fake", { fetcher, includeSynthesis: false, includeTriage: false });
+		assert.equal(collect.retriedCount, 1);
+		const retry = posted[1].requests[0];
+		assert.equal(retry.body.max_tokens, posted[0].requests[0].body.max_tokens * 2, "the answer budget doubles");
+		assert.deepEqual(retry.body.reasoning, { effort: "low" }, "the retry asks for low effort instead of the ignored cap");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
