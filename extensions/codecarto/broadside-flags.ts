@@ -14,6 +14,11 @@
 //   --max-cost=N           --no-retry-truncated
 //   --wait=SECONDS         --benchmarks (models only)
 //   --run=ID (collect only: an older run, as listed by status)
+//   --model=ID (submit only: the run's batch model, as listed by models)
+//   --lens-model=LENS:ID (submit only, repeatable: one lens on its own model)
+//
+// A model id itself contains a colon (`vendor/name:batch`), so --lens-model
+// splits on the first colon only: `security:deepseek/deepseek-v4-pro:batch`.
 //
 // --incremental has a spelled-out negative because the value is tri-state:
 // absent defers to config.yaml, so a repository that set `incremental: true`
@@ -45,6 +50,10 @@ export interface BroadsideFlags {
 	waitSeconds?: number;
 	/** For collect: the run to collect instead of the most recent (#268). */
 	runId?: string;
+	/** For submit: the run's batch model, replacing config.yaml's (#141). */
+	model?: string;
+	/** For submit: per-lens model overrides, layered over config.yaml's (#141). */
+	lensModels?: Partial<Record<BroadsideLensId, string>>;
 	benchmarks: boolean;
 	unknown: string[];
 	/** Set on an invalid combination. The caller surfaces it as an error. */
@@ -65,6 +74,8 @@ export const KNOWN_BROADSIDE_TOKENS = [
 	"--max-cost=",
 	"--wait=",
 	"--run=",
+	"--model=",
+	"--lens-model=",
 	"--no-synthesis",
 	"--no-triage",
 	"--no-retry-truncated",
@@ -127,6 +138,29 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 			result.runId = value || undefined;
 			continue;
 		}
+		if (token.startsWith("--model=")) {
+			const value = token.slice("--model=".length).trim();
+			// An empty value is a mistyped selection, not "use the default":
+			// the command is about to spend money on whichever model wins.
+			if (!value) result.error ??= "--model= needs an OpenRouter batch model id (see /codecarto-broadside models).";
+			result.model = value || undefined;
+			continue;
+		}
+		if (token.startsWith("--lens-model=")) {
+			const value = token.slice("--lens-model=".length).trim();
+			const colon = value.indexOf(":");
+			const lensId = colon > 0 ? value.slice(0, colon).trim() : "";
+			const modelId = colon > 0 ? value.slice(colon + 1).trim() : "";
+			if (!lensId || !modelId) {
+				result.error ??= `--lens-model needs LENS:MODEL, e.g. --lens-model=security:vendor/name:batch (got "${value}").`;
+			} else if (!BROADSIDE_LENS_IDS.includes(lensId as BroadsideLensId)) {
+				result.error ??= `--lens-model: unknown lens "${lensId}". Lenses: ${BROADSIDE_LENS_IDS.join(", ")}.`;
+			} else {
+				result.lensModels ??= {};
+				result.lensModels[lensId as BroadsideLensId] = modelId;
+			}
+			continue;
+		}
 		result.unknown.push(token);
 	}
 
@@ -149,6 +183,12 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 	}
 	if (result.runId !== undefined && result.action !== "collect") {
 		result.error ??= `--run is only meaningful for collect (got action "${result.action}").`;
+	}
+	if (result.model !== undefined && result.action !== "submit") {
+		result.error ??= `--model is only meaningful for submit (got action "${result.action}").`;
+	}
+	if (result.lensModels !== undefined && result.action !== "submit") {
+		result.error ??= `--lens-model is only meaningful for submit (got action "${result.action}").`;
 	}
 
 	return result;

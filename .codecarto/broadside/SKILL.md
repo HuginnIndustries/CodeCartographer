@@ -108,7 +108,14 @@ architecture map. Each override is priced, capability-checked, and clamped like
 the default, the submit estimate breaks cost out per lens, and `run-meta.json`
 records which lens ran on what. No stronger default is shipped: which model is
 worth the money depends on the repository and the budget, so compare with the
-`models` action and decide.
+`models` action and decide — for one run with the `model` and `lens_models`
+parameters (Pi: `--model=ID`, `--lens-model=LENS:ID`), or here for the
+repository. The `models` listing is advisory: OpenRouter's catalog returns a
+`:batch` id for some models its Batch API refuses (`does not have a :batch
+endpoint`), at no cost, and nothing in the catalog tells them apart. The
+listing tags the ids this repository's own submits have seen accepted or
+refused (`broadside/batch-endpoints.json`), and a refused lens says why in the
+submit report.
 
 Every run knob — `incremental`, `retry_truncated`, `include_synthesis`,
 `include_triage`, `wait_seconds` — also has a repository default under the same

@@ -82,6 +82,16 @@ Two more economies worth knowing:
   conventions is usually a better trade than raising the model for everything.
   Overrides are priced and capability-checked individually, and the estimate
   breaks cost out per lens.
+- `model` and `lens_models` are also submit parameters (Pi: `--model=ID`,
+  `--lens-model=LENS:ID`), for one run without editing the file. Choose from
+  `action: "models"`, and read that listing as advisory: OpenRouter's catalog
+  returns a `:batch` id for some models its Batch API then refuses (`does not
+  have a :batch endpoint`) — free, reported on the lens with the reason, and
+  remembered, so the listing tags ids this repository has seen accepted or
+  refused. Probe an untried model on one lens before a six-lens run. A
+  `job-submission-count` refusal is the account's concurrent-job quota (one
+  job per lens fills it fast across runs); collect or wait out what is in
+  flight, then re-submit.
 
 ## Reading a run
 
