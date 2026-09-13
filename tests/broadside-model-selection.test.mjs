@@ -342,8 +342,10 @@ test("a skipped lens names the globs that matched nothing, and a run with no bat
 	try {
 		await writeFile(join(dir, "package.json"), '{"name":"notesd","type":"module"}\n');
 		await mkdir(join(dir, "src"), { recursive: true });
-		await writeFile(join(dir, "src", "server.js"), "export function start() {}\n");
-		await writeFile(join(dir, "src", "store.js"), "export class Store {}\n");
+		// Only test files: the security lens skips tests, so its targeted globs
+		// and its fallback over every source (#319) both find nothing.
+		await writeFile(join(dir, "src", "server.test.js"), "export function start() {}\n");
+		await writeFile(join(dir, "src", "store.spec.js"), "export class Store {}\n");
 		const posted = [];
 		const result = await runBroadsideSubmit(dir, "sk-fake", {
 			lenses: ["security"],
@@ -352,7 +354,7 @@ test("a skipped lens names the globs that matched nothing, and a run with no bat
 		});
 		assert.equal(posted.length, 0, "nothing to submit");
 		assert.equal(result.batches.security.status, "skipped");
-		assert.match(result.batches.security.reason, /^no files matched server\/\*\*, \*\*\/auth\*, \*\*\/middleware\/\*\*, SECURITY\.md \(test files excluded\)$/);
+		assert.match(result.batches.security.reason, /^no files matched server\/\*\*, \*\*\/auth\*, \*\*\/middleware\/\*\*, SECURITY\.md or the fallback \*\*\/\*\.js \(test files excluded\)$/);
 		const text = estimateSubmitText(result, [getLens("security")]);
 		assert.match(text, /Security review: skipped \(0 request\(s\), ~\$0\.0000\) — no files matched server\/\*\*/);
 
