@@ -240,3 +240,46 @@ test("a merging write never moves a pass, a retry, or a lens backwards", async (
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+test("the collect report names a post-pass still running or held elsewhere, and both passes are polled together", async () => {
+	const { collectResultText } = core;
+	const base = { runId: "r", status: "completed", totalCost: 0, resultCount: 1, truncatedCount: 0, retriedCount: 0, lensOutcomes: {}, topFindings: [], topTriageItems: [] };
+	const running = collectResultText({ ...base, synthesis: { status: "submitted", batchId: "batch-9" }, triage: { status: "completed", cost: 0.003 } });
+	assert.match(running, /synthesis: still running — collect again for its result\./);
+	assert.match(running, /triage: completed/);
+	const elsewhere = collectResultText({ ...base, synthesis: { status: "submitted" }, triage: { status: "failed", error: "expired" } });
+	assert.match(elsewhere, /synthesis: in flight in another collect — collect again/);
+	assert.match(elsewhere, /triage: failed — expired/);
+
+	// Both passes polled against the shared deadline at once: with a budget
+	// that allows about two polls, a pass polled second used to get one.
+	await withRepo(async (dir) => {
+		const polls = { synthesis: 0, triage: 0 };
+		const posted = [];
+		const fetcher = async (url, init) => {
+			if (init?.method === "POST") {
+				posted.push(JSON.parse(init.body));
+				return response(202, { id: `batch-${posted.length}`, status: "validating" });
+			}
+			if (String(url).includes("/models")) return response(200, { data: [] });
+			const index = Number(String(url).split("/").pop().replace(/^batch-/, "")) - 1;
+			const kind = posted[index].requests[0].custom_id;
+			if (kind === "synthesis" || kind === "triage") {
+				polls[kind] += 1;
+				return response(200, { id: `batch-${index + 1}`, status: "in_progress", request_counts: {} });
+			}
+			return response(200, {
+				id: `batch-${index + 1}`,
+				status: "completed",
+				results: [{ custom_id: kind, response: { status_code: 200, body: { choices: [{ message: { content: LENS_JSON } }] } }, error: null }],
+				usage: { cost: 0.001 },
+			});
+		};
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher, maxCost: 0 });
+		const result = await runBroadsideCollect(dir, "sk-fake", { fetcher, pollIntervalMs: 30, waitMs: 100 });
+		assert.equal(result.synthesis.status, "submitted");
+		assert.equal(result.triage.status, "submitted");
+		assert.ok(polls.synthesis >= 2 && polls.triage >= 2, `both passes polled through the budget: ${JSON.stringify(polls)}`);
+		assert.ok(Math.abs(polls.synthesis - polls.triage) <= 1, `polled together, not in turn: ${JSON.stringify(polls)}`);
+	});
+});

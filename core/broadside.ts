@@ -3747,17 +3747,25 @@ export async function runBroadsideCollect(
 			);
 			await persist();
 
-			for (const { batchId, pass } of submitted.values()) {
-				const batch = await pollBatchUntilTerminal(batchId, apiKey, {
-					// Shares the caller's deadline, as the retry poll above does.
-					// A pass whose poll runs out stays `submitted`, so the batch
-					// is already paid for and a later collect claims its result.
+			// Poll both passes together against the shared deadline. Polled in
+			// turn, the first pass could spend the whole budget and leave the
+			// second a single poll (0.22.1 live run: triage settled, synthesis
+			// left running though it had been submitted at the same moment).
+			// A pass whose poll runs out stays `submitted`, so the batch is
+			// already paid for and a later collect claims its result.
+			const polledPasses = await pollBatchesConcurrently(
+				[...submitted.values()].map(({ batchId, pass }) => ({ lensId: pass.kind as unknown as BroadsideLensId, batchId })),
+				apiKey,
+				{
 					deadlineMs: Math.max(0, deadline - Date.now()),
-					onStatus: (status, counts) => opts.onStatus?.(pass.kind, status, counts),
 					fetcher: opts.fetcher,
 					pollIntervalMs: opts.pollIntervalMs,
 					signal: opts.signal,
-				});
+					onStatus: opts.onStatus,
+				},
+			);
+			for (const { batchId, pass } of submitted.values()) {
+				const batch = polledPasses.get(batchId) ?? { id: batchId, status: "timeout" };
 				if (batch.status === "completed") {
 					const usage = (batch.usage ?? {}) as Record<string, unknown>;
 					const cost = typeof usage.cost === "number" ? usage.cost : undefined;
@@ -4138,6 +4146,19 @@ export function collectResultText(result: BroadsideCollectResult): string {
 			`  ⚠ ${result.truncatedCount} result(s) still truncated after retry — their modules are unscouted, not clean.`,
 		);
 	}
+	// A pass still in flight or retired must appear: a run reported
+	// "completed" with no synthesis line read as "no synthesis was run",
+	// when the batch was running and a later collect would have claimed it
+	// (0.22.1 live run — the collect's wait ran out during the pass).
+	const passInFlight = (kind: "synthesis" | "triage", entry: BroadsideSynthesisEntry): void => {
+		if (entry.status === "submitted") {
+			lines.push(
+				`  ${kind}: ${entry.batchId ? "still running" : "in flight in another collect"} — collect again for its result.`,
+			);
+		} else if (entry.status === "failed") {
+			lines.push(`  ${kind}: failed${entry.error ? ` — ${explainBatchError(entry.error)}` : ""}`);
+		}
+	};
 	if (result.synthesis.status === "completed") {
 		lines.push(`  synthesis: completed, $${(result.synthesis.cost ?? 0).toFixed(6)}`);
 		if (result.topFindings.length > 0) {
@@ -4146,6 +4167,8 @@ export function collectResultText(result: BroadsideCollectResult): string {
 				lines.push(`  [${f.severity}] ${f.title}`);
 			}
 		}
+	} else {
+		passInFlight("synthesis", result.synthesis);
 	}
 	if (result.triage.status === "completed") {
 		lines.push(`  triage: completed, $${(result.triage.cost ?? 0).toFixed(6)}`);
@@ -4158,8 +4181,8 @@ export function collectResultText(result: BroadsideCollectResult): string {
 				);
 			}
 		}
-	} else if (result.triage.status === "failed") {
-		lines.push("  triage: failed");
+	} else {
+		passInFlight("triage", result.triage);
 	}
 	lines.push("", "Disclaimer: Broad-Side findings are unverified scouting signals from a batch model, not validated claims.");
 	return lines.join("\n");
