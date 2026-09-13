@@ -72,6 +72,13 @@ export const BROADSIDE_MODELS_URL = "https://openrouter.ai/api/v1/models";
 export const BROADSIDE_BENCHMARKS_URL = "https://openrouter.ai/api/v1/benchmarks";
 
 export const BROADSIDE_CATALOG_CACHE_FILE = "model-catalog.json";
+/**
+ * What this repository's own submits learned about batch endpoints: which
+ * `:batch` ids OpenRouter accepted a job for and which it refused with
+ * "does not have a :batch endpoint". The catalog cannot tell the two apart
+ * (#141), so the `models` action annotates its rows from this file.
+ */
+export const BROADSIDE_ENDPOINTS_FILE = "batch-endpoints.json";
 export const BROADSIDE_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const BROADSIDE_LENS_IDS = [
@@ -2102,6 +2109,76 @@ async function writeCatalogCache(broadsideDir: string, cache: CatalogCacheFile):
 	await writeFile(join(broadsideDir, BROADSIDE_CATALOG_CACHE_FILE), `${JSON.stringify(cache, null, "\t")}\n`, "utf8");
 }
 
+/** One model's most recent submit outcome, as remembered in {@link BROADSIDE_ENDPOINTS_FILE}. */
+export type BatchEndpointRecord = {
+	status: "accepted" | "rejected";
+	/** ISO timestamp of the submit that produced this record. */
+	at: string;
+	/** The provider's refusal, for a rejected endpoint. */
+	error?: string;
+};
+
+type EndpointsFile = { schema_version: number; models: Record<string, BatchEndpointRecord> };
+const BROADSIDE_ENDPOINTS_SCHEMA = 1;
+
+export async function readBatchEndpoints(broadsideDir: string): Promise<Record<string, BatchEndpointRecord>> {
+	const path = join(broadsideDir, BROADSIDE_ENDPOINTS_FILE);
+	if (!(await pathExists(path))) return {};
+	try {
+		const parsed = JSON.parse(await readFile(path, "utf8")) as EndpointsFile;
+		if (!parsed || typeof parsed !== "object" || parsed.schema_version !== BROADSIDE_ENDPOINTS_SCHEMA) return {};
+		if (!parsed.models || typeof parsed.models !== "object") return {};
+		const out: Record<string, BatchEndpointRecord> = {};
+		for (const [model, record] of Object.entries(parsed.models)) {
+			if (!record || typeof record !== "object") continue;
+			if (record.status !== "accepted" && record.status !== "rejected") continue;
+			if (typeof record.at !== "string") continue;
+			out[model] = { status: record.status, at: record.at, ...(typeof record.error === "string" && { error: record.error }) };
+		}
+		return out;
+	} catch {
+		// An unreadable memory is an empty one: it only annotates a listing.
+		return {};
+	}
+}
+
+/**
+ * The refusal OpenRouter returns for a catalog id that has no batch endpoint
+ * behind it. Matched loosely: the message is the only signal there is.
+ */
+const NO_BATCH_ENDPOINT_RE = /does not have a :batch endpoint/i;
+/** The refusal for a full per-account concurrent batch-job quota. */
+const BATCH_QUOTA_RE = /job-submission-count/i;
+
+/**
+ * Remember what a submit learned about each model it posted to. An accepted
+ * job proves the endpoint exists; a "does not have a :batch endpoint"
+ * refusal proves it does not. Any other rejection (quota, malformed request,
+ * auth) says nothing about the endpoint and leaves the record alone.
+ */
+export async function recordBatchEndpoints(
+	broadsideDir: string,
+	outcomes: Array<{ model: string; batchId: string; error?: unknown }>,
+): Promise<void> {
+	const at = new Date().toISOString();
+	const updates: Record<string, BatchEndpointRecord> = {};
+	for (const { model, batchId, error } of outcomes) {
+		if (batchId) {
+			updates[model] = { status: "accepted", at };
+			continue;
+		}
+		const message = describeBatchError(error);
+		if (message && NO_BATCH_ENDPOINT_RE.test(message)) {
+			updates[model] = { status: "rejected", at, error: message };
+		}
+	}
+	if (Object.keys(updates).length === 0) return;
+	const models = { ...(await readBatchEndpoints(broadsideDir)), ...updates };
+	await mkdir(broadsideDir, { recursive: true });
+	const file: EndpointsFile = { schema_version: BROADSIDE_ENDPOINTS_SCHEMA, models };
+	await atomicWriteFile(join(broadsideDir, BROADSIDE_ENDPOINTS_FILE), `${JSON.stringify(file, null, "\t")}\n`);
+}
+
 function parseCatalogEntry(raw: Record<string, unknown>): CatalogEntry | null {
 	const id = String(raw.id ?? "");
 	if (!id) return null;
@@ -2319,7 +2396,14 @@ export async function listBatchModels(
 	config: BroadsideConfig,
 	apiKey: string,
 	opts: { includeBenchmarks?: boolean; fetcher?: FetchLike } = {},
-): Promise<{ entries: CatalogEntry[]; source: string; benchmarks: CodingBenchmarks | null; defaultModel: string }> {
+): Promise<{
+	entries: CatalogEntry[];
+	source: string;
+	benchmarks: CodingBenchmarks | null;
+	defaultModel: string;
+	/** This repository's remembered submit outcomes per model, from {@link BROADSIDE_ENDPOINTS_FILE}. */
+	endpoints: Record<string, BatchEndpointRecord>;
+}> {
 	const fetcher = opts.fetcher ?? (fetch as FetchLike);
 	const resp = await fetcher(BROADSIDE_MODELS_URL, {
 		method: "GET",
@@ -2345,7 +2429,8 @@ export async function listBatchModels(
 	await writeCatalogCache(broadsideDir, cache);
 
 	const benchmarks = opts.includeBenchmarks ? await fetchCodingBenchmarks(apiKey, fetcher) : null;
-	return { entries, source: "live", benchmarks, defaultModel: config.model };
+	const endpoints = await readBatchEndpoints(broadsideDir);
+	return { entries, source: "live", benchmarks, defaultModel: config.model, endpoints };
 }
 
 // ---------- batch client ----------
@@ -2522,6 +2607,12 @@ export async function runBroadsideSubmit(
 		lenses?: BroadsideLensId[];
 		fetcher?: FetchLike;
 		model?: string;
+		/**
+		 * Per-lens model overrides for this run, layered over config.yaml's
+		 * `lens_models`: a lens named here runs on this model, a lens named only
+		 * in the file runs on the file's, and the rest run on `model` (#141).
+		 */
+		lensModels?: Partial<Record<BroadsideLensId, string>>;
 		/** Approximate run expense limit in USD; 0 means no limit. */
 		maxCost?: number;
 		/** Submit even when the estimate exceeds maxCost. */
@@ -2566,7 +2657,8 @@ export async function runBroadsideSubmit(
 			`the lenses look for ${info.sourceExts.join(", ")}). Nothing was submitted.`,
 		);
 	}
-	const modelForLens = (lensId: BroadsideLensId): string => config.lensModels[lensId] ?? model;
+	const lensModels: Partial<Record<BroadsideLensId, string>> = { ...config.lensModels, ...opts.lensModels };
+	const modelForLens = (lensId: BroadsideLensId): string => lensModels[lensId] ?? model;
 	const resolved = new Map<
 		string,
 		{ pricing: ModelPricing; outputCap?: number; entry: CatalogEntry; supportsStructuredOutputs: boolean }
@@ -2800,6 +2892,15 @@ export async function runBroadsideSubmit(
 	}
 	await Promise.allSettled(submissions);
 	await persistBroadsideRun(broadsideDir, run);
+	// What the provider just said about each model's batch endpoint outlives
+	// the run: the `models` action reads it back (#141).
+	await recordBatchEndpoints(
+		broadsideDir,
+		lensIds
+			.map((lensId) => run.batches[lensId])
+			.filter((entry): entry is BroadsideBatchEntry => Boolean(entry) && entry.status !== "skipped")
+			.map((entry) => ({ model: entry.model ?? model, batchId: entry.batchId, error: entry.error })),
+	);
 
 	// Persist the exact request bodies so collect can re-submit a truncated
 	// slice (bumped output cap) without re-walking the repo (#133). The run
@@ -3155,7 +3256,18 @@ export async function runBroadsideCollect(
 				`${JSON.stringify(batch, null, "\t")}\n`,
 				"utf8",
 			);
-			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount, truncated };
+			// A batch can complete with every request failed — the account's
+			// concurrent-job quota filling after acceptance does exactly this.
+			// The per-request errors are on disk as `<id>.error.json`, but a
+			// lens reporting "completed, 0 result(s)" with the reason buried
+			// there read as an empty repository rather than a refused run.
+			const results = Array.isArray(batch.results) ? (batch.results as Array<Record<string, unknown>>) : [];
+			const failed = results.filter((r) => r.error && extractContent(r) === null);
+			const allFailed = stored.length === 0 && failed.length > 0
+				? `all ${failed.length} request(s) failed: ${explainBatchError(failed[0].error)}`
+				: null;
+			if (allFailed) entry.error = allFailed;
+			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount, truncated, ...(allFailed && { error: allFailed }) };
 		} else {
 			// Every non-completed outcome still has to reach the report.
 			// `lensOutcomes` is what the caller renders, and this branch used to
@@ -3165,7 +3277,7 @@ export async function runBroadsideCollect(
 			// A lens that never came back was therefore omitted entirely,
 			// indistinguishable in the output from one that was never requested.
 			if (batch.error) entry.error = batch.error;
-			const error = describeBatchError(batch.error);
+			const error = explainBatchError(batch.error);
 			lensOutcomes[lensId] = { status, cost: entry.cost, resultCount: entry.resultCount, ...(error && { error }) };
 		}
 		await persistBroadsideRun(broadsideDir, run);
@@ -3562,7 +3674,11 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 		if (!entry) continue;
 		const status = entry.batchId ? `batch ${entry.batchId}` : entry.status;
 		const override = entry.model ? ` on ${entry.model}` : "";
-		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})${override}`);
+		// A rejected lens says why: the message is the only way to tell a
+		// catalog id with no batch endpoint from a full job quota, and both
+		// used to read as a bare "rejected".
+		const reason = !entry.batchId && entry.error ? ` — ${explainBatchError(entry.error)}` : "";
+		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})${override}${reason}`);
 	}
 	if (result.repo) {
 		const head = result.repo.sourceHead ? ` at ${result.repo.sourceHead.slice(0, 8)}${result.repo.sourceDirty ? " (dirty)" : ""}` : "";
@@ -3609,10 +3725,17 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 
 export function modelsText(
 	entries: CatalogEntry[],
-	opts: { benchmarks: CodingBenchmarks | null; defaultModel: string },
+	opts: { benchmarks: CodingBenchmarks | null; defaultModel: string; endpoints?: Record<string, BatchEndpointRecord> },
 ): string {
+	const endpoints = opts.endpoints ?? {};
 	const lines = [
 		`Batch models on OpenRouter (${entries.length}, cheapest first).`,
+		// The catalog over-reports: it returns a `:batch` id for models whose
+		// Batch API refuses the job, with nothing in the entry to tell them
+		// apart (#141). Say so before the table, not after it.
+		"Advisory: this is the catalog's list of :batch ids, not a list of working batch endpoints. Some ids are refused at submit " +
+			"(\"does not have a :batch endpoint\"), at no cost. Rows tagged [no batch endpoint …] or [batch OK …] carry what this " +
+			"repository's own submits found; an untagged row has not been tried here.",
 		"",
 		"id | $/M in | $/M out | ctx | max out | structured | coding idx",
 	];
@@ -3632,14 +3755,26 @@ export function modelsText(
 		const out = entry.maxCompletionTokens ? `${(entry.maxCompletionTokens / 1024).toFixed(0)}k` : "?";
 		const tag = entry.id === opts.defaultModel ? "  (default)" : "";
 		const exp = entry.expirationDate ? "  [deprecated]" : "";
+		const record = endpoints[entry.id];
+		const seen = record
+			? record.status === "rejected"
+				? `  [no batch endpoint, refused ${record.at.slice(0, 10)}]`
+				: `  [batch OK ${record.at.slice(0, 10)}]`
+			: "";
 		lines.push(
-			`${entry.id}${tag}${exp} | ${entry.inputPerM.toFixed(3)} | ${entry.outputPerM.toFixed(3)} | ${ctx} | ${out} | ${structured} | ${coding}`,
+			`${entry.id}${tag}${exp}${seen} | ${entry.inputPerM.toFixed(3)} | ${entry.outputPerM.toFixed(3)} | ${ctx} | ${out} | ${structured} | ${coding}`,
 		);
 	}
 	if (opts.benchmarks?.meta.as_of) {
 		lines.push("", `Benchmarks: Artificial Analysis coding index (as of ${String(opts.benchmarks.meta.as_of)}).`);
 	}
-	lines.push("", "Set the batch model in .codecarto/broadside/config.yaml (model key). Higher coding index ≠ better scout: precision, context, and structured-output support matter most here.");
+	lines.push(
+		"",
+		"Choose with the model parameter (--model= on Pi) for one run, lens_models (--lens-model=LENS:ID) per lens, or the model key in " +
+			".codecarto/broadside/config.yaml for the repository. Higher coding index ≠ better scout: precision, context, structured-output " +
+			"support, and whether the model spends its output budget reasoning (see reasoning: in config.yaml) matter most here. " +
+			"A refused submit costs nothing, so probe an untried model on one lens first.",
+	);
 	return lines.join("\n");
 }
 
@@ -3650,6 +3785,13 @@ function describeBatchError(error: unknown): string | null {
 	if (typeof error === "object") {
 		const message = (error as { message?: unknown }).message;
 		if (typeof message === "string" && message) return message.slice(0, 300);
+		// OpenRouter wraps a submit refusal as `{ error: { message } }`.
+		const nested = (error as { error?: unknown }).error;
+		if (nested && typeof nested === "object") {
+			const inner = (nested as { message?: unknown }).message;
+			if (typeof inner === "string" && inner) return inner.slice(0, 300);
+		}
+		if (typeof nested === "string" && nested) return nested.slice(0, 300);
 		try {
 			return JSON.stringify(error).slice(0, 300);
 		} catch {
@@ -3657,6 +3799,30 @@ function describeBatchError(error: unknown): string | null {
 		}
 	}
 	return String(error);
+}
+
+/**
+ * A provider refusal plus what to do about it, for the two refusals a batch
+ * run meets in practice and cannot fix by itself (#141):
+ *
+ * - `Model '<id>' does not have a :batch endpoint.` — the catalog advertises a
+ *   `:batch` id that OpenRouter runs no batch endpoint for. Nothing in the
+ *   catalog distinguishes these; the `models` action marks ids this
+ *   repository has seen refused.
+ * - `job-submission-count … in use: 16, quota: 16` — the per-account limit
+ *   on concurrent batch jobs. Broad-Side submits one job per lens, so a few
+ *   runs in flight on the same key fill it; the refusal costs nothing.
+ */
+export function explainBatchError(error: unknown): string | null {
+	const message = describeBatchError(error);
+	if (!message) return null;
+	if (NO_BATCH_ENDPOINT_RE.test(message)) {
+		return `${message} — the catalog lists this id, but OpenRouter runs no batch endpoint for it. Nothing was charged; pick another model (the models action marks ids this repository has seen refused).`;
+	}
+	if (BATCH_QUOTA_RE.test(message)) {
+		return `${message} — OpenRouter's per-account limit on concurrent batch jobs is full. Broad-Side submits one job per lens, so a few runs in flight on this key (in any repository) fill it. Nothing was charged; collect or wait out the runs in flight, then re-submit.`;
+	}
+	return message;
 }
 
 export function collectResultText(result: BroadsideCollectResult): string {

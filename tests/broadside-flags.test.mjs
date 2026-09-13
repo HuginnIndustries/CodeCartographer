@@ -127,10 +127,42 @@ test("every completion token the command offers is one the parser accepts", () =
 	for (const token of KNOWN_BROADSIDE_TOKENS) {
 		// Value-taking flags are offered as a prefix ("--max-cost="); complete
 		// them with a value before parsing.
-		const arg = token.endsWith("=") ? `${token}1` : token;
+		const arg = token === "--lens-model=" ? `${token}security:vendor/name:batch` : token.endsWith("=") ? `${token}1` : token;
 		const context = token === "--benchmarks" ? "models " : token === "--wait=" || token === "--run=" ? "collect " : "";
 		const r = parseBroadsideFlags(`${context}${arg}`);
 		assert.deepEqual(r.unknown, [], `completion token ${token} parses as unknown`);
 		assert.equal(r.error, undefined, `completion token ${token} errors: ${r.error}`);
 	}
+});
+
+// ---------- model selection (#141) ----------
+
+test("--model= selects the run's batch model for submit and nothing else", () => {
+	const r = parseBroadsideFlags("submit security --model=deepseek/deepseek-v4-pro-0813:batch");
+	assert.equal(r.model, "deepseek/deepseek-v4-pro-0813:batch");
+	assert.deepEqual(r.lenses, ["security"]);
+	assert.equal(r.error, undefined);
+	// The action defaults to submit, so the flag works without naming it.
+	assert.equal(parseBroadsideFlags("--model=vendor/name:batch").model, "vendor/name:batch");
+	// An empty value is an error, not a fallback to the config default.
+	assert.match(parseBroadsideFlags("--model=").error, /--model= needs/);
+	// And it means nothing on the other actions.
+	assert.match(parseBroadsideFlags("collect --model=vendor/name:batch").error, /only meaningful for submit/);
+	assert.match(parseBroadsideFlags("models --model=vendor/name:batch").error, /only meaningful for submit/);
+});
+
+test("--lens-model=LENS:ID splits on the first colon and is repeatable", () => {
+	const r = parseBroadsideFlags("--lens-model=security:deepseek/deepseek-v4-pro-0813:batch --lens-model=defect:vendor/strong:batch");
+	assert.deepEqual(r.lensModels, {
+		security: "deepseek/deepseek-v4-pro-0813:batch",
+		defect: "vendor/strong:batch",
+	});
+	assert.equal(r.error, undefined);
+	// A lens named twice takes the last value: the second is the correction.
+	assert.equal(parseBroadsideFlags("--lens-model=security:a:batch --lens-model=security:b:batch").lensModels.security, "b:batch");
+	assert.match(parseBroadsideFlags("--lens-model=nonsense:vendor/name:batch").error, /unknown lens "nonsense"/);
+	assert.match(parseBroadsideFlags("--lens-model=security").error, /needs LENS:MODEL/);
+	assert.match(parseBroadsideFlags("--lens-model=security:").error, /needs LENS:MODEL/);
+	assert.match(parseBroadsideFlags("--lens-model=").error, /needs LENS:MODEL/);
+	assert.match(parseBroadsideFlags("collect --lens-model=security:vendor/name:batch").error, /only meaningful for submit/);
 });

@@ -69,7 +69,7 @@ codecarto_broadside {cwd: "/path/to/repo", action: "submit"}   # MCP
 codecarto_broadside {cwd: "/path/to/repo", action: "collect"}
 ```
 
-Results land in `.codecarto/broadside/<run>/`; read `synthesis.md` and `triage.md` first. Submit prices the run before it fires: Pi shows the breakdown and asks, MCP refuses anything over `max_cost` until you pass `force`. Either way there is no silent spend.
+Results land in `.codecarto/broadside/<run>/`; read `synthesis.md` and `triage.md` first. Submit prices the run before it fires: Pi shows the breakdown and asks, MCP refuses anything over `max_cost` until you pass `force`. Either way there is no silent spend. The batch model is the shipped default unless you choose one: `models` lists the catalog (advisory — some listed `:batch` ids have no batch endpoint and are refused at submit, free; the listing tags what this repository has already tried), `--model=ID` / `model` picks one for a run, `--lens-model=LENS:ID` / `lens_models` routes one lens to its own, and `config.yaml` sets the repository's defaults.
 
 **These findings are leads, not evidence.** Each lens is one shot with no cross-file traversal and no runtime verification. Every finding is a `file:line` pointer for the real analysis to confirm — never cite a Broad-Side report as a source in a phase artifact. See [README.md](README.md#broad-side-batch-reconnaissance) and `.codecarto/broadside/SKILL.md`.
 

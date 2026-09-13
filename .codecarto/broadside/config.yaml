@@ -54,9 +54,17 @@
 #      Nothing in the catalog distinguishes them. Every Anthropic and OpenAI
 #      batch id tried so far is rejected this way; Google and DeepSeek work.
 #      A rejected batch costs nothing, so probe a candidate on one lens before
-#      relying on it.
+#      relying on it: `codecarto_broadside {action: "submit", lenses:
+#      ["architecture"], model: "<id>"}` (Pi: `/codecarto-broadside architecture
+#      --model=<id>`). Submits remember the answer in batch-endpoints.json next
+#      to this file, and the `models` listing tags each id accordingly.
 #   2. A reasoning-capable model spends its output budget thinking, and the
 #      thinking is billed at the full output rate. See `reasoning:` below.
+#
+# The same two keys are submit parameters for one run — `model` and
+# `lens_models` on codecarto_broadside, `--model=ID` and `--lens-model=LENS:ID`
+# on /codecarto-broadside — and a lens set both there and here takes the
+# parameter's.
 #
 # lens_models:
 #   security: deepseek/deepseek-v4-pro-0813:batch

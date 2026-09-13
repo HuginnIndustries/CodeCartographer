@@ -1148,7 +1148,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("codecarto-broadside", {
-		description: "Batch reconnaissance (Broad-Side): /codecarto-broadside [submit|collect|status|models] [lenses…] [flags]",
+		description: "Batch reconnaissance (Broad-Side): /codecarto-broadside [submit|collect|status|models] [lenses…] [--model=ID] [--lens-model=LENS:ID] [flags]",
 		getArgumentCompletions: (prefix) => {
 			const items = KNOWN_BROADSIDE_TOKENS
 				.filter((value) => value.startsWith(prefix))
@@ -1236,11 +1236,11 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 			if (flags.action === "models") {
 				notifyCtx(ctx, "Fetching the OpenRouter batch-model catalog…", "info");
 				try {
-					const { entries, benchmarks } = await listBatchModels(broadsideDir, config, apiKey, {
+					const { entries, benchmarks, endpoints } = await listBatchModels(broadsideDir, config, apiKey, {
 						includeBenchmarks: flags.benchmarks,
 					});
 					finish(
-						modelsText(entries, { benchmarks, defaultModel: config.model }).split("\n"),
+						modelsText(entries, { benchmarks, defaultModel: config.model, endpoints }).split("\n"),
 						`Broad-Side: ${entries.length} batch model${entries.length === 1 ? "" : "s"} listed`,
 					);
 				} catch (error) {
@@ -1280,7 +1280,11 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				try {
 					submit = await runBroadsideSubmit(ctx.cwd, apiKey, {
 						lenses,
-						model: config.model,
+						// --model= and --lens-model= select for this run; the file's
+						// values are the fallback, and core pre-flights either the
+						// same way (#141).
+						model: flags.model ?? config.model,
+						lensModels: flags.lensModels,
 						maxCost: flags.maxCost ?? config.maxCost,
 						// `??`, not `||`: --no-incremental parses to false and must beat a
 						// config-set true, exactly as MCP's `incremental: false` does (#163).

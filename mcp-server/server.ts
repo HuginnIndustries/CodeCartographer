@@ -1281,6 +1281,8 @@ export async function handleBroadside(args: {
 	force?: boolean;
 	include_benchmarks?: boolean;
 	incremental?: boolean;
+	model?: string;
+	lens_models?: Record<string, string>;
 }) {
 	const cwd = await validateCwd(args.cwd);
 	const action = args.action ?? "submit";
@@ -1328,15 +1330,19 @@ export async function handleBroadside(args: {
 	const incremental = args.incremental ?? config.incremental;
 
 	if (action === "models") {
-		const { entries, benchmarks } = await listBatchModels(broadsideDirFor(cwd), config, apiKey, {
+		const { entries, benchmarks, endpoints } = await listBatchModels(broadsideDirFor(cwd), config, apiKey, {
 			includeBenchmarks: args.include_benchmarks === true,
 		}).catch((error) => {
 			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
-		return textResult(modelsText(entries, { benchmarks, defaultModel: config.model }), {
+		return textResult(modelsText(entries, { benchmarks, defaultModel: config.model, endpoints }), {
 			models: entries,
 			defaultModel: config.model,
 			benchmarkMeta: benchmarks?.meta ?? null,
+			// The catalog is advisory (#141): what this repository's submits
+			// learned about each id's batch endpoint rides alongside it.
+			catalogAdvisory: true,
+			endpoints,
 		});
 	}
 
@@ -1356,9 +1362,35 @@ export async function handleBroadside(args: {
 		// whose own default is BROADSIDE_DEFAULT_MAX_COST.
 		const maxCost = typeof args.max_cost === "number" && args.max_cost >= 0 ? args.max_cost : config.maxCost;
 
+		// Model selection for one run (#141): `model` replaces the run default,
+		// `lens_models` layers per-lens overrides over config.yaml's. Both are
+		// pre-flighted by core exactly like the file's values — priced from the
+		// catalog, refused without structured-output support, clamped to the
+		// model's ceiling — so a wrong id fails before anything is submitted.
+		const model = typeof args.model === "string" && args.model.trim() ? args.model.trim() : config.model;
+		if (args.model !== undefined && !(typeof args.model === "string" && args.model.trim())) {
+			throw new McpError(ErrorCode.InvalidParams, "model must be a non-empty OpenRouter batch model id (see action 'models').");
+		}
+		const lensModels: Partial<Record<BroadsideLensId, string>> = {};
+		if (args.lens_models !== undefined) {
+			if (!args.lens_models || typeof args.lens_models !== "object" || Array.isArray(args.lens_models)) {
+				throw new McpError(ErrorCode.InvalidParams, "lens_models must be an object mapping lens ids to batch model ids.");
+			}
+			for (const [lensId, value] of Object.entries(args.lens_models)) {
+				if (!BROADSIDE_LENS_IDS.includes(lensId as BroadsideLensId)) {
+					throw new McpError(ErrorCode.InvalidParams, `lens_models: unknown lens "${lensId}". Valid: ${BROADSIDE_LENS_IDS.join(", ")}`);
+				}
+				if (typeof value !== "string" || !value.trim()) {
+					throw new McpError(ErrorCode.InvalidParams, `lens_models.${lensId} must be a non-empty OpenRouter batch model id.`);
+				}
+				lensModels[lensId as BroadsideLensId] = value.trim();
+			}
+		}
+
 		const result = await runBroadsideSubmit(cwd, apiKey, {
 			lenses,
-			model: config.model,
+			model,
+			lensModels,
 			maxCost,
 			force: args.force === true,
 			incremental,
@@ -1797,6 +1829,17 @@ const TOOLS = [
 				include_benchmarks: {
 					type: "boolean",
 					description: "For action 'models': annotate each model with its Artificial Analysis coding index (extra API call; default false).",
+				},
+				model: {
+					type: "string",
+					description:
+						"For submit: the OpenRouter batch model for this run (an id ending in :batch, as listed by action 'models'). Falls back to model in .codecarto/broadside/config.yaml, then the shipped default. Pre-flighted like the configured model: priced from the live catalog, refused without structured-output support, clamped to its completion ceiling. The models listing is advisory — some catalog ids have no batch endpoint and are refused at submit, at no cost; the listing tags ids this repository has already seen accepted or refused.",
+				},
+				lens_models: {
+					type: "object",
+					additionalProperties: { type: "string" },
+					description:
+						"For submit: per-lens model overrides for this run, e.g. {\"security\": \"deepseek/deepseek-v4-pro-0813:batch\"}. Keys are lens ids; a lens named here runs on that model, others on `model`. Layered over lens_models in .codecarto/broadside/config.yaml (a lens set in both takes the parameter's). Each override is priced, capability-checked, and clamped individually, and the estimate breaks cost out per lens.",
 				},
 			},
 			required: ["cwd", "action"],

@@ -162,7 +162,7 @@ codecarto_broadside {cwd: "/abs/path/to/repo", action: "submit"}
 codecarto_broadside {cwd: "/abs/path/to/repo", action: "collect"}
 ```
 
-It needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY`, or `.codecarto/broadside/config.yaml`) and works on any git repository, with or without a workspace. Submit prices the run first and refuses anything over `max_cost`. Its findings are **unverified leads, not evidence** — see the [Broad-Side section](../README.md#broad-side-batch-reconnaissance) in the README.
+It needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY`, or `.codecarto/broadside/config.yaml`) and works on any git repository, with or without a workspace. Submit prices the run first and refuses anything over `max_cost`. `action: "models"` lists the batch catalog — advisory, since some listed ids are refused at submit for having no batch endpoint (free, and the listing tags what this repository has tried) — and `model` / `lens_models` on submit pick one for the run or per lens. Its findings are **unverified leads, not evidence** — see the [Broad-Side section](../README.md#broad-side-batch-reconnaissance) in the README.
 
 ## No agent? Use the drop-in template
 
