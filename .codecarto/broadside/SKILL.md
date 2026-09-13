@@ -86,6 +86,21 @@ Submits pre-flight the chosen model: pricing comes from the live catalog
 model that does not advertise structured-output support is refused outright,
 because every lens depends on `json_schema` response_format.
 
+Each lens reads a scope of the repository. Architecture reads the manifest,
+entry point, README, and file tree; defect, conventions, and porting read
+every source file; the **security** and **API** lenses target where the
+trust boundary usually lives — `server/**`, `**/auth*`, `**/middleware/**`,
+`SECURITY.md` (security) and `server/**`, `api/**`, `src/server/**`,
+`src/api/**`, `**/*routes*`, `**/*router*`, `**/*handler*`, `**/*endpoint*`
+(API). A repository whose server is `src/server.js` matches none of those, so
+when the targeted patterns find nothing those two lenses **fall back to every
+source file** — priced as such, chunked at the lens's slice size rather than
+truncated, and said so on the lens line of the estimate, the submit report,
+`status`, and the prompt the model receives. A lens whose targeted patterns
+and fallback both find nothing (only test files, say) is skipped with a line
+naming both. `max_cost` is the guard against a fallback scan on a large
+repository being more than you meant to spend.
+
 Collect runs two cross-lens post-passes by default: **synthesis** (the
 executive report) and **triage** (the prioritized work order). Pass
 `include_synthesis: false` or `include_triage: false` on collect to skip one.

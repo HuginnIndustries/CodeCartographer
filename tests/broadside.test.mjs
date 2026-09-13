@@ -209,7 +209,9 @@ test("submit marks a lens with no matching files as skipped, never submitting an
 	const dir = await mkdtemp(join(tmpdir(), "broadside-empty-"));
 	try {
 		await writeFile(join(dir, "go.mod"), "module x\n");
-		await writeFile(join(dir, "main.go"), "package main\n");
+		// Only a test file: the api lens skips tests, so neither its targeted
+		// globs nor its fallback (every Go source, #319) finds anything.
+		await writeFile(join(dir, "main_test.go"), "package main\n");
 		const posted = [];
 		const fetcher = async (url, init) => {
 			if (init.method === "POST") {
@@ -218,7 +220,6 @@ test("submit marks a lens with no matching files as skipped, never submitting an
 			}
 			return fakeResponse(200, { id: "x", status: "completed" });
 		};
-		// api lens globs target server/ and api/ — neither exists here.
 		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture", "api"], fetcher });
 		assert.equal(result.batches.api.status, "skipped");
 		assert.equal(posted.length, 1, "only the architecture batch may be submitted");
@@ -1998,10 +1999,11 @@ test("the submit header counts batches sent, not lenses considered", async () =>
 	// "submitted 6 batch(es)" over a list of four batches and two skips.
 	const dir = await mkdtemp(join(tmpdir(), "broadside-noserver-"));
 	try {
-		// No server/, no auth*, no middleware/, no SECURITY.md — so the security
-		// lens gathers nothing, while architecture always has the repo info.
+		// Only a test file: the security lens skips tests, so neither its
+		// targeted globs nor its fallback (every Go source, #319) gathers
+		// anything, while architecture always has the repo info.
 		await writeFile(join(dir, "go.mod"), "module example.com/cli\n\ngo 1.26.0\n");
-		await writeFile(join(dir, "main.go"), "package main\n\nfunc main() {}\n");
+		await writeFile(join(dir, "main_test.go"), "package main\n\nfunc TestMain(t *testing.T) {}\n");
 
 		const fetcher = async (url, init) =>
 			init.method === "POST"

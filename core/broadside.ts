@@ -196,6 +196,12 @@ export type FileSlice = {
 	redactedValues?: number;
 	/** The files in this slice that had at least one value redacted. */
 	redactedFiles?: string[];
+	/**
+	 * Set when the lens's targeted globs matched nothing and the slice was
+	 * built from its fallback globs instead (#319). The estimate, the batch
+	 * entry, and the prompt all say so.
+	 */
+	fallback?: string;
 };
 
 /**
@@ -282,6 +288,12 @@ export type BroadsideBatchEntry = {
 	error?: unknown;
 	/** Why a `skipped` lens had nothing to submit: the globs that matched no file. */
 	reason?: string;
+	/**
+	 * Set when the lens scanned its fallback scope because its targeted globs
+	 * matched nothing (#319): "no files matched …; scanned all javascript
+	 * sources instead". Absent for a targeted scan.
+	 */
+	fallback?: string;
 	/** Set when this lens used a model other than the run default. */
 	model?: string;
 	/** The completion ceiling of this lens's model; bounds the truncation retry. */
@@ -425,6 +437,8 @@ export type BroadsideEstimate = {
 		/** The model this lens would use — `model` unless a per-lens override applies. */
 		model: string;
 		pricing: ModelPricing;
+		/** Set when this lens is priced on its fallback scope (#319); see BroadsideBatchEntry.fallback. */
+		fallback?: string;
 	}>;
 	/** True when at least one lens uses a model other than the run default. */
 	mixedModels: boolean;
@@ -1060,6 +1074,15 @@ type LensDefinition = {
 	skipTestFiles?: boolean;
 	// Globs are matched against repo-relative forward-slash paths.
 	globsFor: (info: RepoInfo) => string[];
+	/**
+	 * Where to look when `globsFor` matches nothing (#319). The security and
+	 * api lenses target server/, auth, and middleware paths because that is
+	 * where the trust boundary usually lives; a service whose server is
+	 * `src/server.js` matched none of them and got no security review at all.
+	 * The fallback is the language's whole source set — priced as such, and
+	 * said so in the estimate, the run record, and the prompt.
+	 */
+	fallbackGlobsFor?: (info: RepoInfo) => string[];
 	systemPrompt: (info: RepoInfo) => string;
 	userPrompt: (info: RepoInfo, source: string, moduleName: string) => string;
 };
@@ -1120,6 +1143,7 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 						"**/*handler*",
 						"**/*endpoint*",
 					],
+		fallbackGlobsFor: (info) => [info.sourceGlob],
 		systemPrompt: () =>
 			"You are a senior API auditor. Given source files from an HTTP server, " +
 			"extract every HTTP endpoint (method, path, handler function, auth requirement) " +
@@ -1143,6 +1167,7 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 			info.language === "go"
 				? ["server/**/*.go", "server/*.go", "**/auth*.go", "**/middleware/**/*.go", "SECURITY.md"]
 				: ["server/**", "**/auth*", "**/middleware/**", "SECURITY.md"],
+		fallbackGlobsFor: (info) => [info.sourceGlob],
 		systemPrompt: () =>
 			"You are a security engineer performing a first-pass review of a codebase. " +
 			"Given source files, identify potential security issues — focusing on " +
@@ -1690,8 +1715,7 @@ function resolveSliceMode(lens: LensDefinition, files: CollectedFile[], totalCha
 	return totalChars > lens.maxChars ? "directory" : "none";
 }
 
-function collectLensFiles(allFiles: string[], lens: LensDefinition, info: RepoInfo): CollectedFile[] {
-	const globs = lens.globsFor(info).filter(Boolean);
+function collectFilesMatching(allFiles: string[], lens: LensDefinition, globs: string[]): CollectedFile[] {
 	if (globs.length === 0) return [];
 	const out: CollectedFile[] = [];
 	for (const f of allFiles) {
@@ -1701,6 +1725,35 @@ function collectLensFiles(allFiles: string[], lens: LensDefinition, info: RepoIn
 		out.push({ relPath: f, moduleName: topLevelModule(f) });
 	}
 	return out;
+}
+
+/**
+ * The files a lens will read: its targeted globs, or — when those match
+ * nothing and the lens declares a fallback — the fallback globs, with a
+ * sentence saying so (#319). The sentence travels to the estimate, the
+ * batch entry, and the prompt, so a fallback scan is never a silent one.
+ */
+export function selectLensFiles(
+	allFiles: string[],
+	lens: LensDefinition,
+	info: RepoInfo,
+): { files: CollectedFile[]; fallback?: string } {
+	const globs = lens.globsFor(info).filter(Boolean);
+	const targeted = collectFilesMatching(allFiles, lens, globs);
+	if (targeted.length > 0 || globs.length === 0 || !lens.fallbackGlobsFor) return { files: targeted };
+	const fallbackGlobs = lens.fallbackGlobsFor(info).filter(Boolean);
+	const files = collectFilesMatching(allFiles, lens, fallbackGlobs);
+	if (files.length === 0) return { files };
+	return {
+		files,
+		fallback:
+			`no files matched ${globs.join(", ")}${lens.skipTestFiles ? " (test files excluded)" : ""}; ` +
+			`scanned all ${info.language} sources (${fallbackGlobs.join(", ")}) instead`,
+	};
+}
+
+function collectLensFiles(allFiles: string[], lens: LensDefinition, info: RepoInfo): CollectedFile[] {
+	return selectLensFiles(allFiles, lens, info).files;
 }
 
 async function slurpFileList(
@@ -1786,16 +1839,16 @@ export async function gatherSlices(targetDir: string, lens: LensDefinition, info
 		return [{ moduleName: "root", content: "", fileCount: 0, chars: 0, files: [] }];
 	}
 	const { files: allFiles } = await listRepoFiles(targetDir);
-	const files = collectLensFiles(allFiles, lens, info);
+	const { files, fallback } = selectLensFiles(allFiles, lens, info);
 	const totalChars = await sumFileSizes(targetDir, files);
 	const mode = resolveSliceMode(lens, files, totalChars);
-	if (mode === "none") {
+	const slices = mode === "none"
 		// Whole-repo slice: one module named after the repo, so a small
 		// repo produces a single request instead of one per directory.
-		const single = files.map((f) => ({ ...f, moduleName: info.name }));
-		return slurpFileList(targetDir, single, lens.maxChars, redact);
-	}
-	return slurpFileList(targetDir, files, lens.maxChars, redact);
+		? await slurpFileList(targetDir, files.map((f) => ({ ...f, moduleName: info.name })), lens.maxChars, redact)
+		: await slurpFileList(targetDir, files, lens.maxChars, redact);
+	if (fallback) for (const slice of slices) slice.fallback = fallback;
+	return slices;
 }
 
 async function sumFileSizes(targetDir: string, files: CollectedFile[]): Promise<number> {
@@ -1830,7 +1883,17 @@ export function buildBatchRequest(
 			model,
 			messages: [
 				{ role: "system", content: lens.systemPrompt(info) },
-				{ role: "user", content: lens.userPrompt(info, slice.content, slice.moduleName) },
+				{
+					role: "user",
+					content:
+						// A fallback scan is not "server source files": say what it is,
+						// so the model judges the trust boundary wherever it appears
+						// and does not report the missing server/ as a finding (#319).
+						(slice.fallback
+							? `NOTE: this repository has no files under the paths this lens usually reads (${slice.fallback}). ` +
+								"What follows is every source file it has; locate the trust boundary and the request-handling code wherever they live.\n\n"
+							: "") + lens.userPrompt(info, slice.content, slice.moduleName),
+				},
 			],
 			response_format: { type: "json_schema", json_schema: SCHEMAS[lens.schemaName] },
 			max_tokens: maxTokensOverride ?? lens.maxTokens,
@@ -2940,13 +3003,16 @@ export async function runBroadsideSubmit(
 		slicesByLens.set(lensId, slices);
 		if (slices.length === 0) {
 			const globs = lens.globsFor(info).filter(Boolean);
+			const fallbackGlobs = lens.fallbackGlobsFor?.(info).filter(Boolean) ?? [];
 			skipReasons.set(
 				lensId,
 				globs.length === 0
 					? "the lens has no file patterns for this language"
 					: matchedBeforeIncremental > 0
 						? "incremental: none of this lens's files changed since the previous run"
-						: `no files matched ${globs.join(", ")}${lens.skipTestFiles ? " (test files excluded)" : ""}`,
+						: `no files matched ${globs.join(", ")}` +
+							(fallbackGlobs.length > 0 ? ` or the fallback ${fallbackGlobs.join(", ")}` : "") +
+							(lens.skipTestFiles ? " (test files excluded)" : ""),
 			);
 		}
 		const lensModel = modelForLens(lensId);
@@ -2972,15 +3038,19 @@ export async function runBroadsideSubmit(
 		const approved = await opts.confirm({
 			model,
 			pricing,
-			lenses: perLensEstimate.map(({ lens, cost, maxTokens, lensModel, lensPricing }) => ({
-				lensId: lens.id,
-				name: lens.name,
-				slices: (slicesByLens.get(lens.id) ?? []).length,
-				maxTokens,
-				cost,
-				model: lensModel,
-				pricing: lensPricing,
-			})),
+			lenses: perLensEstimate.map(({ lens, cost, maxTokens, lensModel, lensPricing }) => {
+				const fallback = (slicesByLens.get(lens.id) ?? []).find((slice) => slice.fallback)?.fallback;
+				return {
+					lensId: lens.id,
+					name: lens.name,
+					slices: (slicesByLens.get(lens.id) ?? []).length,
+					maxTokens,
+					cost,
+					model: lensModel,
+					pricing: lensPricing,
+					...(fallback && { fallback }),
+				};
+			}),
 			mixedModels: perLensEstimate.some(({ lensModel }) => lensModel !== model),
 			totalCost: estimatedTotalCost,
 			inputTokens: estimatedInputTokens,
@@ -3048,12 +3118,15 @@ export async function runBroadsideSubmit(
 		const requests = slices.map((sl, i) => buildBatchRequest(lens, info, sl, i, slices.length, lensModel, maxTokens, config.reasoning ?? undefined));
 		for (const request of requests) requestsByCustomId[request.custom_id] = request;
 
+		const fallback = slices.find((slice) => slice.fallback)?.fallback;
 		const entry: BroadsideBatchEntry = {
 			batchId: "",
 			requests: requests.length,
 			status: "submitting",
 			submittedAt: new Date().toISOString(),
 			estimatedCost: priced.cost,
+			// A scan of the fallback scope is recorded as such (#319).
+			...(fallback && { fallback }),
 			// Recorded per lens so collect's truncation retry re-submits against
 			// the model and ceiling this lens actually used, not the run default.
 			...(lensModel !== model && { model: lensModel }),
@@ -3968,7 +4041,9 @@ export function estimateSubmitText(result: BroadsideSubmitResult, lenses: LensDe
 			? ` — ${explainBatchError(entry.error)}`
 			: !entry.batchId && entry.reason
 				? ` — ${entry.reason}`
-				: "";
+				: entry.fallback
+					? ` — ${entry.fallback}`
+					: "";
 		lines.push(`  ${lens.name}: ${status} (${entry.requests} request(s), ~$${entry.estimatedCost.toFixed(4)})${override}${reason}`);
 	}
 	if (result.repo) {
@@ -4222,7 +4297,7 @@ export function statusText(state: BroadsideStateFile): string {
 			if (!entry) continue;
 			lines.push(
 				`  ${lensId}: ${entry.status}${entry.batchId ? ` (${entry.batchId})` : ""}${entry.cost !== undefined ? `, $${entry.cost.toFixed(6)}` : ""}` +
-					(entry.status === "skipped" && entry.reason ? ` — ${entry.reason}` : ""),
+					(entry.status === "skipped" && entry.reason ? ` — ${entry.reason}` : entry.fallback ? ` — ${entry.fallback}` : ""),
 			);
 		}
 		lines.push(`  synthesis: ${run.synthesis.status}`);

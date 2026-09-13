@@ -227,11 +227,14 @@ function describeBroadsideEstimate(estimate: BroadsideEstimate): string {
 		`Rates: $${estimate.pricing.inputPerM.toFixed(4)}/M in · $${estimate.pricing.outputPerM.toFixed(4)}/M out`,
 		"",
 		"Per lens:",
-		...estimate.lenses.map(({ name, slices, cost, model }) => {
+		...estimate.lenses.map(({ name, slices, cost, model, fallback }) => {
 			// Naming the model only when it differs keeps the common case quiet
 			// and makes a mixed-model run impossible to approve without noticing.
 			const override = estimate.mixedModels && model !== estimate.model ? ` on ${model}` : "";
-			return `  ${name}: ${slices} slice${slices === 1 ? "" : "s"} — ~$${cost.toFixed(4)}${override}`;
+			// A lens priced on its fallback scope says so here, where the
+			// spend is approved — every source file, not a server directory (#319).
+			const scope = fallback ? `\n    ↳ ${fallback}` : "";
+			return `  ${name}: ${slices} slice${slices === 1 ? "" : "s"} — ~$${cost.toFixed(4)}${override}${scope}`;
 		}),
 		"",
 		`Estimated total: ~$${estimate.totalCost.toFixed(4)} ` +
