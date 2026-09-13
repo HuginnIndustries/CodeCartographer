@@ -51,13 +51,31 @@ test("no orchestrator file carries the framework's own project history", async (
 	});
 });
 
-test("the seeded backlog is the project template, not the framework's deferral list", async () => {
-	const framework = await readFile(join(CODECARTO, "BACKLOG.md"), "utf8");
-	assert.match(framework, /^## B\d+\./m, "the repository's own backlog should still hold its entries");
+test("the repository's own workspace files are the pristine templates, and a new workspace is seeded from them", async () => {
+	// #276: the tracked BACKLOG.md, THREAD_LOG.md, and closeouts/ used to carry
+	// a 2026-05-02 framework session. Init never copied them (they are seeded
+	// from templates), but a fresh clone still reported an existing workspace,
+	// the GUIDE's first-time heuristic was wrong from the first call, and a
+	// self-audit appended to that session's thread log. The framework's own
+	// history now lives in docs/history/; what sits in .codecarto/ is the
+	// template state a user's first init produces.
+	for (const { file, template } of core.ORCHESTRATOR_FILES) {
+		if (file === "CONVENTIONS.md" || file === "DECISIONS.md") continue; // not tracked here
+		const tracked = await readFile(join(CODECARTO, file), "utf8");
+		const pristine = await readFile(join(CODECARTO, "templates", template), "utf8");
+		assert.equal(tracked, pristine, `.codecarto/${file} must be byte-identical to templates/${template}`);
+	}
+	assert.doesNotMatch(
+		await readFile(join(CODECARTO, "BACKLOG.md"), "utf8"),
+		/^## B\d+\./m,
+		"the framework's deferral list belongs in docs/history/, not the template workspace",
+	);
+	const closeouts = (await readdir(join(CODECARTO, "closeouts"))).filter((name) => name !== ".gitkeep");
+	assert.deepEqual(closeouts, [], `the template workspace ships closeouts: ${closeouts.join(", ")}`);
 
 	await freshWorkspace(async (ws) => {
 		const seeded = await readFile(join(ws, "BACKLOG.md"), "utf8");
-		assert.notEqual(seeded, framework, "a new workspace must not inherit the framework's backlog");
+		assert.equal(seeded, await readFile(join(CODECARTO, "templates", "backlog-project.md"), "utf8"));
 		assert.match(seeded, /DECISIONS\.md.*decided to \*\*do\*\*/s, "the template must state the BACKLOG/DECISIONS split");
 		assert.match(seeded, /Preconditions:/, "entries must ask what has to land first");
 		assert.match(seeded, /Smallest viable form:/, "entries must record the smallest viable form");
