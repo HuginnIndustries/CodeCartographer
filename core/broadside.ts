@@ -1218,7 +1218,19 @@ const LENSES: Record<BroadsideLensId, LensDefinition> = {
 				"Return a JSON object following the defect_scan_report schema. " +
 				"Cite file:line for every finding. List which patterns you checked. " +
 				"If the code looks clean for a pattern, say so rather than staying silent. " +
-				"Prefer precision over volume — 3 solid findings beat 15 vague ones."
+				"Prefer precision over volume — 3 solid findings beat 15 vague ones.\n\n" +
+				// The verification pass (#143) confirmed 2 of the 12 top findings a
+				// scan produced with the paragraph above alone; the other ten were
+				// casts and assertions every caller satisfied, guards that lived one
+				// call away, or environments the project does not target. The rubric
+				// the verifier applies is asked of the scan itself, up front.
+				"A finding is a reachable failure: name in the description the concrete input, call site, or sequence " +
+				"that reaches it and what then goes wrong. A cast, assertion, `any`, or non-null `!` that every caller " +
+				"you can see satisfies, a hypothetical about a runtime or environment the project does not target, or a " +
+				"style or type-hygiene observation is not a defect — leave it out, or if it is worth a note, report it " +
+				"at severity low under the pattern name `type-hygiene` so it ranks apart from reachable failures. " +
+				"When the guard you looked for may live in another module, say which check you could not find " +
+				"rather than asserting it is absent; severity high or medium is for failures you traced to a trigger."
 			);
 		},
 		userPrompt: (info, source, moduleName) =>
