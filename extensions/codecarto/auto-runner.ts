@@ -201,8 +201,9 @@ export async function runSinglePhase(
 
 		return { status: "error", activity, error: message };
 	} finally {
-		// Linger 30s so /codecarto-status can show that the phase ran.
-		setTimeout(() => clearPhase(phase.id), 30_000);
+		// Linger 30s so /codecarto-status can show that the phase ran. Tied
+		// to this run's entry: a re-run inside the window keeps its own (#343).
+		setTimeout(() => clearPhase(phase.id, activity), 30_000).unref?.();
 	}
 }
 

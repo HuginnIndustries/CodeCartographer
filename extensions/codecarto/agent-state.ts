@@ -69,7 +69,14 @@ export function finishPhase(
  * Clear a phase from the activity map. The widget (M2) will linger finished
  * phases for a turn or two before calling this; for now (M1) we clear after
  * a fixed timeout so the orchestrator notification stays meaningful.
+ *
+ * With `activity`, clear only while the map still holds that very entry.
+ * The runner's linger timer fires 30 s after a phase ends; a re-run of the
+ * same phase inside that window used to lose its live entry to the earlier
+ * run's timer — the widget dropped it and the re-entry guard let a second
+ * sub-agent start on the phase (#343).
  */
-export function clearPhase(phaseId: string): void {
+export function clearPhase(phaseId: string, activity?: PhaseActivity): void {
+	if (activity && phaseActivity.get(phaseId) !== activity) return;
 	phaseActivity.delete(phaseId);
 }
