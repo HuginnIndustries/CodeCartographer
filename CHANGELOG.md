@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Pi: the end-of-run notification says why an auto run stopped.** `Auto pipeline stopped: 0/1 phases.` was all a headless run (`pi -p`, a log, CI) ever saw; the reason lived in the auto-summary message and the widget, neither of which renders there. The notification now reads `Auto pipeline stopped: 0/1 phases — Auto-complete failed on architecture: YAML line 37: Duplicate YAML key: post_pipeline`; a completed run keeps the short form. #347.
+
 ## [0.24.1] — 2026-09-14
 
 Five fixes and one measured prompt change, all from the verification loop turned on this repository: the security lens had been reading `SECURITY.md` alone, and the defect sweeps' confirmed findings were fixed rather than filed.
