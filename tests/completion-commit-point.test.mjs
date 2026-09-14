@@ -15,6 +15,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { getWorkspaceState, updateStatusAtomically } = await import(pathToFileURL(`${REPO_ROOT}/core/workspace.ts`).href);
 const { completeValidatedPhase } = await import(pathToFileURL(`${REPO_ROOT}/core/completion.ts`).href);
 const { applyAmendment } = await import(pathToFileURL(`${REPO_ROOT}/core/amendment.ts`).href);
+const { acquireLock } = await import(pathToFileURL(`${REPO_ROOT}/core/status.ts`).href);
 const { validatePhaseOutput } = await import(pathToFileURL(`${REPO_ROOT}/core/pipeline.ts`).href);
 const { handleInit } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 
@@ -189,6 +190,42 @@ test("amendment: the closure is committed before its closeout and index line", {
 		assert.equal(countLines(await readFile(join(codecarto, "THREAD_LOG.md"), "utf8"), "amendment-close-q.md)"), 1);
 	} finally {
 		await chmod(closeoutsDir, 0o755).catch(() => undefined);
+		await cleanup();
+	}
+});
+
+test("amendment: the pipeline-complete check is made on the state read under the lock", async () => {
+	const { cwd, codecarto, cleanup } = await completableWorkspace();
+	const statusPath = join(codecarto, "workflow", "status.yaml");
+	try {
+		const incomplete = await readFile(statusPath, "utf8");
+		const validation = await validatePhaseOutput(await getWorkspaceState(cwd), "architecture");
+		await completeValidatedPhase(cwd, validation, "test");
+		await mkdir(join(codecarto, "scratch", "amendments"), { recursive: true });
+		await writeFile(join(codecarto, "scratch", "amendments", "close-q.yaml"), [
+			"schema_version: 1",
+			"open_question_closures:",
+			"  - arch-OQ1",
+			"post_pipeline_closures: []",
+			"notes: []",
+			"closeout_summary: Question settled.",
+			"",
+		].join("\n"), "utf8");
+
+		// Another writer holds the status lock while the amendment is asked
+		// for, and what it writes reopens the pipeline: the status.yaml from
+		// before the phase completed. The amendment saw a complete pipeline
+		// when it started; it must not amend over the reopened one.
+		const held = await acquireLock(`${statusPath}.lock`);
+		const applying = applyAmendment(cwd, "close-q");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		await writeFile(statusPath, incomplete, "utf8");
+		await held.release();
+
+		await assert.rejects(applying, /Cannot amend: the pipeline is not complete \(next phase: architecture\)/);
+		assert.equal(await readFile(statusPath, "utf8"), incomplete, "status.yaml is exactly what the other writer left");
+		assert.equal((await readdir(join(codecarto, "closeouts"))).some((name) => name.includes("amendment-close-q")), false, "no closeout for a refused amendment");
+	} finally {
 		await cleanup();
 	}
 });
