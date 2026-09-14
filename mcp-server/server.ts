@@ -1015,6 +1015,14 @@ export async function handleLibraryInit(args: { library_path: string; name?: str
 
 	const libraryPath = args.library_path;
 	const namespaced = !!args.namespace;
+	// The rule codecarto_publish applies to the namespace later, applied
+	// before it is written into the config.
+	if (namespaced && !isValidSlug(args.namespace!)) {
+		throw new McpError(
+			ErrorCode.InvalidParams,
+			`Invalid namespace "${args.namespace}" (lowercase ASCII, starts with a letter, max 64 chars).`,
+		);
+	}
 
 	const result = await initLibrary(libraryPath, {
 		name: args.name,

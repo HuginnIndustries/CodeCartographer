@@ -105,7 +105,7 @@ import {
 	writeLibraryConfig,
 	writeDashboard,
 } from "../../core/index.ts";
-import { initLibrary } from "../../core/library.ts";
+import { initLibrary, isValidSlug } from "../../core/library.ts";
 import { resolveUserConfigPath, USER_CONFIG_DIR } from "../../core/orchestrator-config.ts";
 
 const STATUS_WIDGET_ID = "codecarto-widget";
@@ -1532,13 +1532,41 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	pi.registerCommand("codecarto-library-init", {
 		description: "Initialize a CodeCartographer library and configure it: /codecarto-library-init <path> [--namespace <name>]",
 		handler: async (args, ctx) => {
-			const parts = args.trim().split(/\s+/);
-			const pathArg = parts[0];
+			const usage = "Usage: /codecarto-library-init <path> [--namespace <name>]";
+			const parts = args.trim() === "" ? [] : args.trim().split(/\s+/);
+			// `--namespace` with nothing after it used to read as "no namespace"
+			// and initialize an unnamespaced library without a word (Broad-Side
+			// verify, 2026-09-13 run): the flag is either complete or refused.
 			const namespaceIdx = parts.indexOf("--namespace");
-			const namespace = namespaceIdx >= 0 ? parts[namespaceIdx + 1] : null;
-
+			let namespace: string | null = null;
+			if (namespaceIdx >= 0) {
+				const value = parts[namespaceIdx + 1];
+				if (value === undefined || value.startsWith("--")) {
+					notifyCtx(ctx, `--namespace needs a name. ${usage}`, "warning");
+					return;
+				}
+				// The rule publish applies to it later, applied before it is
+				// written into the config: lowercase ASCII, starts with a
+				// letter, at most 64 characters.
+				if (!isValidSlug(value)) {
+					notifyCtx(ctx, `Invalid namespace "${value}" (lowercase ASCII, starts with a letter, max 64 chars). ${usage}`, "warning");
+					return;
+				}
+				namespace = value;
+				parts.splice(namespaceIdx, 2);
+			}
+			const stray = parts.find((part) => part.startsWith("--"));
+			if (stray) {
+				notifyCtx(ctx, `Unknown flag ${stray}. ${usage}`, "warning");
+				return;
+			}
+			const [pathArg, ...extra] = parts;
 			if (!pathArg) {
-				notifyCtx(ctx, "Usage: /codecarto-library-init <path> [--namespace <name>]", "warning");
+				notifyCtx(ctx, usage, "warning");
+				return;
+			}
+			if (extra.length > 0) {
+				notifyCtx(ctx, `One path, please — got ${parts.length}. ${usage}`, "warning");
 				return;
 			}
 

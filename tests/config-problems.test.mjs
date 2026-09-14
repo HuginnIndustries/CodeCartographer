@@ -12,6 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -248,6 +249,18 @@ test("codecarto_library_init does not switch the publish gate on, and says what 
 
 		const namespaced = await server.handleLibraryInit({ library_path: join(dir, "ns-library"), namespace: "team" });
 		assert.match(namespaced.content[0].text, /Wrote library\.path and library\.namespace to /);
+
+		// A namespace publish would refuse is refused before it is written.
+		await assert.rejects(
+			server.handleLibraryInit({ library_path: join(dir, "bad-library"), namespace: "Team Alpha" }),
+			(error) => {
+				assert.ok(error instanceof McpError);
+				assert.equal(error.code, ErrorCode.InvalidParams);
+				assert.match(error.message, /Invalid namespace "Team Alpha" \(lowercase ASCII, starts with a letter, max 64 chars\)/);
+				return true;
+			},
+		);
+		assert.equal(existsSync(join(dir, "bad-library")), false);
 	});
 });
 
@@ -325,6 +338,38 @@ test("/codecarto-config shows the same problem lines and /codecarto-publish refu
 		assert.match(ui.notifications.at(-1).message, /^Publish refused: the configuration has problems/);
 		assert.equal(ui.confirmations.length, 0, "refused before any preview dialog");
 		assert.deepEqual(await core.listEntries(libraryPath), []);
+	});
+});
+
+test("/codecarto-library-init refuses a --namespace with no name instead of dropping it", async () => {
+	await withTemp(async ({ dir, userConfigPath }) => {
+		const cwd = join(dir, "repo");
+		await mkdir(cwd, { recursive: true });
+		const { commands, ctx, ui } = createHarness(cwd);
+		const libraryPath = join(dir, "pi-library");
+		const refusals = [
+			[`${libraryPath} --namespace`, /^--namespace needs a name\. Usage:/],
+			[`--namespace ${libraryPath}`, /^Invalid namespace "\/.*pi-library" \(lowercase ASCII, starts with a letter, max 64 chars\)\. Usage:/],
+			[`${libraryPath} --namespace Team`, /^Invalid namespace "Team"/],
+			[`${libraryPath} --namespace --force`, /^--namespace needs a name\. Usage:/],
+			[`${libraryPath} --namespaced team`, /^Unknown flag --namespaced\. Usage:/],
+			[`--namespace team`, /^Usage: \/codecarto-library-init <path>/],
+			[`${libraryPath} extra --namespace team`, /^One path, please — got 2\. Usage:/],
+		];
+		for (const [args, pattern] of refusals) {
+			await commands.get("codecarto-library-init").handler(args, ctx);
+			assert.match(ui.notifications.at(-1).message, pattern, args);
+			assert.equal(ui.notifications.at(-1).level, "warning", args);
+		}
+		assert.equal(existsSync(libraryPath), false, "nothing was created by a refused command");
+		assert.equal(existsSync(userConfigPath), false, "nothing was written by a refused command");
+
+		// The flag works in either position when it is complete.
+		await commands.get("codecarto-library-init").handler(`--namespace team ${libraryPath}`, ctx);
+		assert.equal(ui.notifications.at(-1).message, `Wrote library.path and library.namespace to ${userConfigPath}; other keys untouched`);
+		assert.equal(await readFile(userConfigPath, "utf8"), `library:\n  path: ${libraryPath}\n  namespace: team\n`);
+		const marker = JSON.parse(await readFile(join(libraryPath, ".codecarto-library"), "utf8"));
+		assert.equal(marker.namespaced, true);
 	});
 });
 
