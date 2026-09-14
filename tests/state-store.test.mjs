@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
-const { acquireLock, atomicWriteFile, uniqueTempSuffix, STALE_LOCK_MS } = core;
+const { acquireLock, atomicWriteFile, uniqueTempSuffix, BREAK_LOCK_STALE_MS, STALE_LOCK_MS } = core;
 const { appendUsageRun, loadUsage, USAGE_RELATIVE_PATH } = await import(pathToFileURL(`${REPO_ROOT}/core/usage.ts`).href);
 const { publishEntry, writeMarker } = core;
 
@@ -72,6 +72,109 @@ test("release after a stale break leaves the new holder's lock in place", async 
 
 		await b.release();
 		assert.deepEqual(await readdir(dir), [], "B's release removes B's lock");
+	} finally {
+		await cleanup();
+	}
+});
+
+// ---------- #342: every removal happens under the removal lock ----------
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const settled = (promise) => Promise.race([promise.then(() => true, () => true), wait(0).then(() => false)]);
+
+async function staleLock(lockPath, token = "1.dead") {
+	await writeFile(lockPath, `1\n2026-01-01T00:00:00.000Z\n${token}\n`, "utf8");
+	const old = new Date(Date.now() - STALE_LOCK_MS - 5_000);
+	await utimes(lockPath, old, old);
+}
+
+test("a waiter that finds a stale lock already being broken does not remove it", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-break-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		await staleLock(lockPath);
+		// Another process is mid-break: it holds the removal lock.
+		await writeFile(`${lockPath}.break`, "", "utf8");
+		const waiting = acquireLock(lockPath);
+		await wait(400);
+		assert.equal(await settled(waiting), false, "B waits instead of breaking");
+		assert.match(await readFile(lockPath, "utf8"), /1\.dead/, "B has not removed the stale lock");
+
+		// The other process finishes its break and takes the lock itself…
+		await rm(lockPath);
+		await writeFile(lockPath, `1\n${new Date().toISOString()}\nA.fresh\n`, "utf8");
+		await rm(`${lockPath}.break`);
+		await wait(300);
+		assert.equal(await settled(waiting), false, "B sees a fresh lock and keeps waiting");
+		assert.match(await readFile(lockPath, "utf8"), /A\.fresh/, "B has not removed the fresh lock either");
+
+		// …and releases it: now B gets it, having broken nothing.
+		await rm(lockPath);
+		const b = await waiting;
+		assert.equal(b.brokeStale, undefined);
+		await b.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("release waits for a break in progress rather than removing alongside it", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-release-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		const a = await acquireLock(lockPath);
+		await writeFile(`${lockPath}.break`, "", "utf8");
+		const releasing = a.release();
+		await wait(300);
+		assert.equal(await settled(releasing), false);
+		assert.ok((await readdir(dir)).includes("status.yaml.lock"), "the lock stays until the removal lock is free");
+		await rm(`${lockPath}.break`);
+		await releasing;
+		assert.deepEqual(await readdir(dir), [], "then it is removed, and the removal lock with it");
+	} finally {
+		await cleanup();
+	}
+});
+
+test("a removal lock left behind by a crashed process is cleared", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-break-stale-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		await staleLock(lockPath);
+		await writeFile(`${lockPath}.break`, "", "utf8");
+		const old = new Date(Date.now() - BREAK_LOCK_STALE_MS - 5_000);
+		await utimes(`${lockPath}.break`, old, old);
+		const b = await acquireLock(lockPath);
+		assert.equal(b.brokeStale?.pid, 1, "the stale lock was broken through the abandoned removal lock");
+		await b.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("many waiters on one stale lock: one breaks it, and never two hold it", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-many-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		await staleLock(lockPath);
+		let holders = 0;
+		let overlap = 0;
+		const handles = await Promise.all(
+			Array.from({ length: 8 }, async () => {
+				const handle = await acquireLock(lockPath);
+				holders += 1;
+				if (holders > 1) overlap += 1;
+				await wait(15);
+				holders -= 1;
+				await handle.release();
+				return handle;
+			}),
+		);
+		assert.equal(overlap, 0, "two holders at once");
+		assert.equal(handles.filter((h) => h.brokeStale).length, 1, "exactly one waiter broke the stale lock");
+		assert.deepEqual(await readdir(dir), []);
 	} finally {
 		await cleanup();
 	}

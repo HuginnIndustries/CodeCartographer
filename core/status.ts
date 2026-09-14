@@ -23,6 +23,12 @@ import { loadYamlFile } from "./yaml.ts";
 export const LOCK_RETRY_MS = 125;
 export const LOCK_TIMEOUT_MS = 5000;
 export const STALE_LOCK_MS = 60_000;
+/**
+ * How old the removal lock (`<lock>.break`, see {@link withRemovalLock}) may
+ * be before it is treated as left behind by a crashed process. It is held
+ * across one stat and one rm, so anything this old was abandoned.
+ */
+export const BREAK_LOCK_STALE_MS = LOCK_TIMEOUT_MS;
 
 export function assertSafePhaseId(phaseId: string): void {
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(phaseId)) {
@@ -452,6 +458,14 @@ export interface LockHandle {
  * the token, release removed whoever's lock was there: after a stale break
  * the previous holder's release deleted the new holder's lock, and a third
  * writer walked straight in (#227).
+ *
+ * Every removal — a release or a stale break — happens under the removal
+ * lock (`<lock>.break`) and re-checks what it is about to remove there.
+ * Two waiters that both saw a stale lock used to both `rm` it: the second
+ * `rm` landed after the first waiter had re-created the file, so both held
+ * the lock (#342). A file can only be created while the path is free, and
+ * only a removal-lock holder removes, so what a holder verified is what it
+ * removes.
  */
 export async function acquireLock(lockPath: string): Promise<LockHandle> {
 	const startedAt = Date.now();
@@ -481,9 +495,13 @@ export async function acquireLock(lockPath: string): Promise<LockHandle> {
 			try {
 				const lockStat = await stat(lockPath);
 				if (Date.now() - lockStat.mtimeMs > STALE_LOCK_MS) {
-					brokeStale = await describeLockHolder(lockPath);
-					await rm(lockPath, { force: true }).catch(() => undefined);
-					continue;
+					const broken = await breakStaleLock(lockPath);
+					if (broken) {
+						brokeStale = broken;
+						continue;
+					}
+					// Another waiter is breaking it, or already has: fall
+					// through to a wait and try the open again.
 				}
 			} catch {
 				continue;
@@ -499,20 +517,87 @@ export async function acquireLock(lockPath: string): Promise<LockHandle> {
 }
 
 /**
+ * Run `remove` while holding `<lockPath>.break`, the lock that serializes
+ * removals of `lockPath`. Waits up to {@link LOCK_TIMEOUT_MS}; a removal lock
+ * older than {@link BREAK_LOCK_STALE_MS} is a crashed remover's and is
+ * cleared. Resolves to `undefined` when the removal lock could not be had
+ * in time — the caller decides what that means.
+ */
+async function withRemovalLock<T>(lockPath: string, remove: () => Promise<T>): Promise<T | undefined> {
+	const breakPath = `${lockPath}.break`;
+	const startedAt = Date.now();
+	while (true) {
+		try {
+			const handle = await open(breakPath, "wx");
+			await handle.close();
+			break;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			try {
+				const breakStat = await stat(breakPath);
+				if (Date.now() - breakStat.mtimeMs > BREAK_LOCK_STALE_MS) {
+					await rm(breakPath, { force: true }).catch(() => undefined);
+					continue;
+				}
+			} catch {
+				continue;
+			}
+			if (Date.now() - startedAt > LOCK_TIMEOUT_MS) return undefined;
+			await sleep(LOCK_RETRY_MS);
+		}
+	}
+	try {
+		return await remove();
+	} finally {
+		await rm(breakPath, { force: true }).catch(() => undefined);
+	}
+}
+
+/**
+ * Remove a lock older than {@link STALE_LOCK_MS}, under the removal lock and
+ * only if it is still that old there: the holder may have released and a
+ * new one acquired between the caller's stat and this one. Resolves to the
+ * broken lock's holder, or null when nothing was removed.
+ */
+async function breakStaleLock(lockPath: string): Promise<LockHandle["brokeStale"] | null> {
+	const broken = await withRemovalLock(lockPath, async () => {
+		let lockStat;
+		try {
+			lockStat = await stat(lockPath);
+		} catch {
+			return null;
+		}
+		if (Date.now() - lockStat.mtimeMs <= STALE_LOCK_MS) return null;
+		const holder = await describeLockHolder(lockPath);
+		await rm(lockPath, { force: true }).catch(() => undefined);
+		return holder;
+	});
+	return broken ?? null;
+}
+
+/**
  * Remove the lock at `lockPath` only if it is still ours. A lock that vanished
  * (someone broke it as stale) or that now carries another holder's token is
  * left alone; one whose content cannot be read is left to go stale rather
  * than removed unverified.
  */
 async function releaseOwnedLock(lockPath: string, token: string): Promise<void> {
-	let content: string;
-	try {
-		content = await readFile(lockPath, "utf8");
-	} catch {
-		return;
-	}
-	if (content.split(/\r?\n/)[2] !== token) return;
-	await rm(lockPath, { force: true }).catch(() => undefined);
+	const removeIfOwned = async (): Promise<true> => {
+		let content: string;
+		try {
+			content = await readFile(lockPath, "utf8");
+		} catch {
+			return true;
+		}
+		if (content.split(/\r?\n/)[2] !== token) return true;
+		await rm(lockPath, { force: true }).catch(() => undefined);
+		return true;
+	};
+	// Serialized with stale breaks so a break in progress cannot land on a
+	// lock this release has already replaced (#342). A removal lock that
+	// cannot be had in time falls back to the token-checked removal alone —
+	// the guarantee before #342, never less.
+	if ((await withRemovalLock(lockPath, removeIfOwned)) === undefined) await removeIfOwned();
 }
 
 async function describeLockHolder(lockPath: string): Promise<NonNullable<LockHandle["brokeStale"]>> {
