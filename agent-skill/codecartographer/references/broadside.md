@@ -99,7 +99,11 @@ Results land in `.codecarto/broadside/<run>/`. If `verified.md` is there, read
 it before anything else: `action: "verify"` has read the top defect and
 security findings against the source with read-only tools and given each a
 verdict (confirmed with its trigger, not-a-defect, discarded with the guard
-that shows it, unclear). Then, in this order:
+that shows it, unclear). The post-passes rank on those verdicts when they
+exist; a run collected before it was verified has a work order built from
+batch severities alone (`status` says `(no verdicts)`), and
+`action: "collect", regenerate_post_passes: true` rebuilds both passes from
+the verdicts for another post-pass pair's cost. Then, in this order:
 
 1. `synthesis.md` — executive summary, severity counts, top cross-lens
    findings, per-module risk.

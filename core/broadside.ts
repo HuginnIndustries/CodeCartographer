@@ -306,6 +306,12 @@ export type BroadsideSynthesisEntry = {
 	cost?: number;
 	/** Why the pass was retired, when the batch reported one. */
 	error?: string;
+	/**
+	 * How many verification verdicts the pass was built from (#338): the
+	 * `verified.json` a `verify` pass wrote before this pass was submitted.
+	 * Absent when the pass was built from the lens findings alone.
+	 */
+	verdicts?: number;
 };
 
 /** One triage item — a scouting lead turned into a work-order entry. */
@@ -320,12 +326,8 @@ export type TriageItem = {
 	rationale: string;
 };
 
-export type BroadsideTriageEntry = {
-	batchId?: string;
-	status: "pending" | "submitted" | "completed" | "failed";
-	cost?: number;
-	error?: string;
-};
+/** The triage post-pass entry: the same shape as synthesis's. */
+export type BroadsideTriageEntry = BroadsideSynthesisEntry;
 
 /** Recorded on the run once a verification pass has run (#143); see core/broadside-verify.ts. */
 export type BroadsideVerifyEntry = {
@@ -345,6 +347,8 @@ export type BroadsideRetryEntry = {
 	batches: Array<{ model: string; batchId: string }>;
 	/** When the owning collect claimed the pass (#322). */
 	claimedAt: string;
+	/** What the retry batches cost, once polled to completion. */
+	cost?: number;
 };
 
 /**
@@ -371,6 +375,11 @@ export type BroadsideRun = {
 	retry?: BroadsideRetryEntry;
 	/** The verification pass over the top findings, when one has run (#143). */
 	verify?: BroadsideVerifyEntry;
+	/**
+	 * What post-pass results that were later regenerated had cost (#338):
+	 * money the run spent that no current entry accounts for.
+	 */
+	retiredCost?: number;
 	totalCost?: number;
 	pricing?: ModelPricing;
 	maxCost?: number;
@@ -599,6 +608,8 @@ export type BroadsideCollectResult = {
 	triage: BroadsideTriageEntry;
 	topFindings: { title: string; severity: string; sourceLens: string; summary: string }[];
 	topTriageItems: TriageItem[];
+	/** The post-passes this collect reset and re-ran on request (#338). */
+	regenerated?: Array<"synthesis" | "triage">;
 };
 
 // ---------- JSON schemas (one per lens, plus synthesis) ----------
@@ -2243,6 +2254,41 @@ export async function claimRunSlot(broadsideDir: string, run: BroadsideRun, slot
 	return owned;
 }
 
+/**
+ * Put a run's settled post-passes back to `pending` on disk so the next
+ * claim re-runs them (#338). A pass another collect has in flight is left
+ * alone — its result is still coming. The replaced results' cost moves to
+ * `retiredCost`, so the run's total keeps counting money it spent. Returns
+ * the passes that were reset, in the order they will be re-run.
+ */
+export async function resetRunPostPasses(
+	broadsideDir: string,
+	run: BroadsideRun,
+	wanted: { synthesis: boolean; triage: boolean },
+): Promise<Array<"synthesis" | "triage">> {
+	const reset: Array<"synthesis" | "triage"> = [];
+	await updateBroadsideStateAtomically(broadsideDir, (state) => {
+		const index = state.runs.findIndex((candidate) => candidate.id === run.id);
+		const onDisk = index === -1 ? run : state.runs[index];
+		for (const kind of ["synthesis", "triage"] as const) {
+			if (!wanted[kind]) continue;
+			const theirs: BroadsideSynthesisEntry = onDisk[kind] ?? { status: "pending" };
+			if (theirs.status !== "completed" && theirs.status !== "failed") {
+				// pending: nothing to reset; submitted: in flight elsewhere.
+				run[kind] = theirs;
+				continue;
+			}
+			if (theirs.cost) onDisk.retiredCost = (onDisk.retiredCost ?? 0) + theirs.cost;
+			onDisk[kind] = { status: "pending" };
+			run[kind] = onDisk[kind];
+			run.retiredCost = onDisk.retiredCost;
+			reset.push(kind);
+		}
+		if (index === -1) state.runs.push(run);
+	});
+	return reset;
+}
+
 /** Read a `reasoning:` block from config.yaml, ignoring anything malformed. */
 function parseReasoningConfig(raw: unknown): BroadsideReasoning | null {
 	if (raw === false) return { enabled: false };
@@ -3413,7 +3459,107 @@ async function loadStoredRequests(runDir: string): Promise<Record<string, BatchR
 
 // ---------- post-lens passes: synthesis + triage ----------
 
-function buildSynthesisRequest(findingsText: string, truncatedNote: string, model: string): BatchRequest {
+/**
+ * One verdict from a run's `verified.json` (written by the verify pass in
+ * `broadside-verify.ts`), reduced to what the post-passes are told.
+ */
+export type PostPassVerdict = {
+	lensId: string;
+	customId: string;
+	severity: string;
+	title: string;
+	location: string;
+	verdict: string;
+	confidence: string;
+	evidence: Array<{ file: string; lines: string; note: string }>;
+	reasoning: string;
+};
+
+/**
+ * The verdicts a verify pass left in the run directory, or null when none
+ * has run (#338). A file that does not parse is treated as absent: the
+ * post-passes then run from the findings alone, which is what they did
+ * before verdicts existed, and `status` shows the pass carried no verdicts.
+ */
+export async function loadPostPassVerdicts(runDir: string): Promise<PostPassVerdict[] | null> {
+	const path = join(runDir, "verified.json");
+	if (!(await pathExists(path))) return null;
+	try {
+		const parsed = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+		const findings = Array.isArray(parsed.findings) ? (parsed.findings as Array<Record<string, unknown>>) : [];
+		const verdicts = findings
+			.filter((f) => typeof f.title === "string" && typeof f.verdict === "string")
+			.map((f) => ({
+				lensId: String(f.lensId ?? ""),
+				customId: String(f.customId ?? ""),
+				severity: String(f.severity ?? ""),
+				title: String(f.title),
+				location: String(f.location ?? ""),
+				verdict: String(f.verdict),
+				confidence: String(f.confidence ?? ""),
+				evidence: Array.isArray(f.evidence)
+					? (f.evidence as Array<Record<string, unknown>>).map((e) => ({ file: String(e.file ?? ""), lines: String(e.lines ?? ""), note: String(e.note ?? "") }))
+					: [],
+				reasoning: String(f.reasoning ?? ""),
+			}));
+		return verdicts.length > 0 ? verdicts : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The verdicts as a section of the post-pass user message: one line per
+ * finding with the verdict, the evidence the verifier cited, and its
+ * reasoning, so the pass can rank on them rather than on the batch model's
+ * own severities (#338).
+ */
+export function renderPostPassVerdicts(verdicts: PostPassVerdict[]): string {
+	const counts = new Map<string, number>();
+	for (const v of verdicts) counts.set(v.verdict, (counts.get(v.verdict) ?? 0) + 1);
+	const tally = [...counts.entries()].map(([verdict, n]) => `${n} ${verdict}`).join(", ");
+	const lines = [
+		"",
+		`## Verification verdicts (${verdicts.length} finding(s) read against the source by a read-only-tools pass: ${tally})`,
+		"",
+		"A verdict outranks the batch severity of the finding it names. `confirmed` means the verifier found a reachable " +
+		"failure and named its trigger; `not-a-defect` means the claim is literally true of the code but nothing reaches the " +
+		"failure it describes; `discarded` means the claim is wrong about the code; `unclear` means the code alone could not " +
+		"settle it; `error` means the pass could not read it — treat that finding as unverified. Findings not listed here " +
+		"were not read and stay unverified leads.",
+		"",
+	];
+	for (const v of verdicts) {
+		const evidence = v.evidence.map((e) => `${e.file}${e.lines ? `:${e.lines}` : ""}${e.note ? ` (${e.note})` : ""}`).join("; ");
+		lines.push(
+			`- [${v.verdict}${v.confidence ? `, ${v.confidence} confidence` : ""}] ${v.lensId}/${v.customId} — [${v.severity}] ${v.title}` +
+			`${v.location ? ` @ ${v.location}` : ""}` +
+			`${v.reasoning ? `\n  Reasoning: ${v.reasoning.replace(/\s+/g, " ").trim()}` : ""}` +
+			`${evidence ? `\n  Evidence: ${evidence}` : ""}`,
+		);
+	}
+	lines.push("");
+	return lines.join("\n");
+}
+
+const SYNTHESIS_VERDICT_INSTRUCTIONS =
+	" A verification pass has read some of the findings against the source; its verdicts follow the reports. " +
+	"Lead top_findings with the confirmed findings and begin each such summary with 'verified: confirmed — ' and the " +
+	"trigger the verifier named; keep an unclear one with 'verified: unclear — '. A discarded or not-a-defect finding " +
+	"does not appear in top_findings and is not counted in severity_summary. Say in the executive summary how many " +
+	"findings were verified and how the verdicts split; findings the pass did not read remain unverified, and the " +
+	"summary says so of them, not of the confirmed ones.";
+
+const TRIAGE_VERDICT_INSTRUCTIONS =
+	" A verification pass has read some of the findings against the source; its verdicts follow the findings. " +
+	"A confirmed finding ranks above every unverified finding of the same or lower severity: put the confirmed " +
+	"findings at the top of the queue and begin each one's rationale with 'verified: confirmed — ' and the trigger " +
+	"the verifier named. Keep an unclear finding in the queue with 'verified: unclear — ' in its rationale. Do not " +
+	"queue a discarded or not-a-defect finding: list each in omitted, beginning with 'verified: discarded — ' or " +
+	"'verified: not a defect — ' and the reason the pass gave. Findings the pass did not read stay unverified leads, " +
+	"and the summary says how many verdicts the queue was built from.";
+
+function buildSynthesisRequest(findingsText: string, truncatedNote: string, model: string, verdicts: PostPassVerdict[] | null = null): BatchRequest {
 	return {
 		custom_id: "synthesis",
 		body: {
@@ -3430,7 +3576,8 @@ function buildSynthesisRequest(findingsText: string, truncatedNote: string, mode
 						"synthesis_report schema. Prioritize the most actionable findings. " +
 						"Be honest about gaps — if a lens found nothing, say 'no issues found' rather than " +
 						"inventing problems. These are scouting signals from a batch model, not verified " +
-						"claims; note that in the summary.",
+						"claims; note that in the summary." +
+						(verdicts ? SYNTHESIS_VERDICT_INSTRUCTIONS : ""),
 				},
 				{
 					role: "user",
@@ -3438,6 +3585,7 @@ function buildSynthesisRequest(findingsText: string, truncatedNote: string, mode
 						"Synthesize these analysis reports into a single summary.\n\n" +
 						findingsText +
 						truncatedNote +
+						(verdicts ? renderPostPassVerdicts(verdicts) : "") +
 						"\nReturn the synthesis_report JSON schema.",
 				},
 			],
@@ -3447,7 +3595,7 @@ function buildSynthesisRequest(findingsText: string, truncatedNote: string, mode
 	};
 }
 
-function buildTriageRequest(findingsText: string, truncatedNote: string, model: string): BatchRequest {
+function buildTriageRequest(findingsText: string, truncatedNote: string, model: string, verdicts: PostPassVerdict[] | null = null): BatchRequest {
 	return {
 		custom_id: "triage",
 		body: {
@@ -3465,7 +3613,8 @@ function buildTriageRequest(findingsText: string, truncatedNote: string, model: 
 						"too vague to act on and record each drop in omitted with the reason. These findings " +
 						"are UNVERIFIED scouting signals from a cheap batch model: the queue is a starting " +
 						"point for re-verification, not a commitment — say so in the summary, and never " +
-						"inflate a severity you cannot see evidence for.",
+						"inflate a severity you cannot see evidence for." +
+						(verdicts ? TRIAGE_VERDICT_INSTRUCTIONS : ""),
 				},
 				{
 					role: "user",
@@ -3473,6 +3622,7 @@ function buildTriageRequest(findingsText: string, truncatedNote: string, model: 
 						"Triage these scouting findings into a prioritized work order.\n\n" +
 						findingsText +
 						truncatedNote +
+						(verdicts ? renderPostPassVerdicts(verdicts) : "") +
 						"\nReturn the triage_report JSON schema.",
 				},
 			],
@@ -3528,6 +3678,13 @@ export async function runBroadsideCollect(
 		signal?: AbortSignal;
 		/** Poll cadence override; tests drive the loop faster than 15 s. */
 		pollIntervalMs?: number;
+		/**
+		 * Reset the wanted post-passes of a collected run and run them again
+		 * (#338) — after a `verify`, so the executive report and the work order
+		 * are built from the verdicts. A pass still in flight is left to finish;
+		 * a run whose lens batches are still running is refused.
+		 */
+		regeneratePostPasses?: boolean;
 	} = {},
 ): Promise<BroadsideCollectResult> {
 	const broadsideDir = broadsideDirFor(cwd);
@@ -3751,7 +3908,9 @@ export async function runBroadsideCollect(
 			if (!batch || batch.status !== "completed") continue;
 			const group = byModel.get(model)!;
 			const usage = (batch.usage ?? {}) as Record<string, unknown>;
-			totalCost += typeof usage.cost === "number" ? usage.cost : 0;
+			// Kept on the entry, not just added to this collect's running total:
+			// a later collect on the run used to report a total without it.
+			if (typeof usage.cost === "number") run.retry = { ...run.retry!, cost: (run.retry?.cost ?? 0) + usage.cost };
 			const results = Array.isArray(batch.results) ? (batch.results as Array<Record<string, unknown>>) : [];
 			for (const result of results) {
 				const stored = group.slices.get(String(result.custom_id ?? ""));
@@ -3787,6 +3946,23 @@ export async function runBroadsideCollect(
 	let topTriageItems: BroadsideCollectResult["topTriageItems"] = [];
 	const wantSynthesis = opts.includeSynthesis !== false;
 	const wantTriage = opts.includeTriage !== false;
+	// A regenerate resets the wanted, settled passes to pending on disk first —
+	// the merging persist keeps whatever is further along on disk, so an
+	// in-memory reset alone would be undone by the next persist (#338).
+	let regenerated: Array<"synthesis" | "triage"> = [];
+	if (opts.regeneratePostPasses) {
+		if (!wantSynthesis && !wantTriage) {
+			throw new Error("Nothing to regenerate: both post-passes are disabled for this collect.");
+		}
+		const lensesSettled = run.lenses.every((lensId) => {
+			const entry = run.batches[lensId];
+			return entry && BROADSIDE_TERMINAL_ENTRY_STATUSES.includes(entry.status);
+		});
+		if (!lensesSettled) {
+			throw new Error(`Cannot regenerate the post-passes of run ${run.id}: its lens batches are still running — collect them first.`);
+		}
+		regenerated = await resetRunPostPasses(broadsideDir, run, { synthesis: wantSynthesis, triage: wantTriage });
+	}
 	// A resumed collect polls nothing — every lens is already terminal — so the
 	// findings the post-passes need have to come back off disk, or a run whose
 	// first collect was interrupted could never produce its executive report
@@ -3810,6 +3986,9 @@ export async function runBroadsideCollect(
 			const findingsText = allLensResults
 				.map((r) => `## ${r.lensId} — ${r.customId}\n\n${r.content}\n`)
 				.join("\n");
+			// A verify pass that ran before this point leaves its verdicts in the
+			// run directory; the post-passes rank on them when present (#338).
+			const verdicts = await loadPostPassVerdicts(runDir);
 			const truncatedNote =
 				truncatedCount > 0
 					? `\n\nNOTE: ${truncatedCount} lens result(s) were truncated at the output token limit and are ` +
@@ -3834,12 +4013,15 @@ export async function runBroadsideCollect(
 				if ((kind === "synthesis" ? run.synthesis : run.triage).status !== "pending") continue;
 				if (!(await claimRunSlot(broadsideDir, run, kind))) continue;
 				owned.add(kind);
+				const entry = kind === "synthesis" ? run.synthesis : run.triage;
+				if (verdicts) entry.verdicts = verdicts.length;
+				else delete entry.verdicts;
 				passes.push({
 					kind,
 					request: kind === "synthesis"
-						? buildSynthesisRequest(findingsText, truncatedNote, run.model)
-						: buildTriageRequest(findingsText, truncatedNote, run.model),
-					entry: kind === "synthesis" ? run.synthesis : run.triage,
+						? buildSynthesisRequest(findingsText, truncatedNote, run.model, verdicts)
+						: buildTriageRequest(findingsText, truncatedNote, run.model, verdicts),
+					entry,
 				});
 			}
 
@@ -3904,7 +4086,6 @@ export async function runBroadsideCollect(
 					const cost = typeof usage.cost === "number" ? usage.cost : undefined;
 					pass.entry.status = "completed";
 					pass.entry.cost = cost;
-					totalCost += cost ?? 0;
 					const results = Array.isArray(batch.results) ? (batch.results as Array<Record<string, unknown>>) : [];
 					const content = results.length > 0 ? extractContent(results[0]) : null;
 					if (content !== null) {
@@ -3938,6 +4119,11 @@ export async function runBroadsideCollect(
 		return entry && BROADSIDE_TERMINAL_ENTRY_STATUSES.includes(entry.status);
 	});
 	run.status = terminal ? (resultCount > 0 ? "completed" : "failed") : "partial";
+	// The run's total is the sum of what its entries record, not of what this
+	// collect happened to poll: a repeat collect used to report — and persist
+	// — a total without the post-passes and the retry an earlier collect had
+	// settled, so the recorded cost of a run went down each time it was read.
+	totalCost += (run.retry?.cost ?? 0) + (run.synthesis.cost ?? 0) + (run.triage.cost ?? 0) + (run.retiredCost ?? 0);
 	run.totalCost = totalCost;
 	await persist();
 
@@ -3990,6 +4176,7 @@ export async function runBroadsideCollect(
 		triage: run.triage,
 		topFindings,
 		topTriageItems,
+		...(regenerated.length > 0 && { regenerated }),
 	};
 }
 
@@ -4294,10 +4481,18 @@ export function collectResultText(result: BroadsideCollectResult): string {
 			lines.push(`  ${kind}: failed${entry.error ? ` — ${explainBatchError(entry.error)}` : ""}`);
 		}
 	};
+	// Whether a pass was built from a verify pass's verdicts is part of what
+	// it is: a work order that ranked on batch severities alone is the one
+	// that put two dismissed casts above the confirmed finding (#338).
+	const builtFrom = (entry: BroadsideSynthesisEntry): string =>
+		entry.verdicts ? ` (built from ${entry.verdicts} verdict${entry.verdicts === 1 ? "" : "s"})` : " (no verdicts)";
+	if (result.regenerated && result.regenerated.length > 0) {
+		lines.push(`  regenerated: ${result.regenerated.join(", ")}`);
+	}
 	if (result.synthesis.status === "completed") {
-		lines.push(`  synthesis: completed, $${(result.synthesis.cost ?? 0).toFixed(6)}`);
+		lines.push(`  synthesis: completed, $${(result.synthesis.cost ?? 0).toFixed(6)}${builtFrom(result.synthesis)}`);
 		if (result.topFindings.length > 0) {
-			lines.push("", "Top findings (unverified leads):");
+			lines.push("", result.synthesis.verdicts ? "Top findings (verdicts applied; unread ones are unverified leads):" : "Top findings (unverified leads):");
 			for (const f of result.topFindings.slice(0, 10)) {
 				lines.push(`  [${f.severity}] ${f.title}`);
 			}
@@ -4306,9 +4501,14 @@ export function collectResultText(result: BroadsideCollectResult): string {
 		passInFlight("synthesis", result.synthesis);
 	}
 	if (result.triage.status === "completed") {
-		lines.push(`  triage: completed, $${(result.triage.cost ?? 0).toFixed(6)}`);
+		lines.push(`  triage: completed, $${(result.triage.cost ?? 0).toFixed(6)}${builtFrom(result.triage)}`);
 		if (result.topTriageItems.length > 0) {
-			lines.push("", "Triage — prioritized work order (re-verify before acting):");
+			lines.push(
+				"",
+				result.triage.verdicts
+					? "Triage — prioritized work order (confirmed findings first; re-verify the unread ones before acting):"
+					: "Triage — prioritized work order (re-verify before acting):",
+			);
 			for (const item of result.topTriageItems.slice(0, 10)) {
 				lines.push(
 					`  ${item.priority} [${item.severity}/${item.module}] ${item.title}` +
@@ -4318,6 +4518,10 @@ export function collectResultText(result: BroadsideCollectResult): string {
 		}
 	} else {
 		passInFlight("triage", result.triage);
+	}
+	if (result.status === "completed" && !result.synthesis.verdicts && !result.triage.verdicts
+		&& (result.synthesis.status === "completed" || result.triage.status === "completed")) {
+		lines.push("", "Run verify, then collect --regenerate, to rebuild the report and the work order from verdicts.");
 	}
 	lines.push("", "Disclaimer: Broad-Side findings are unverified scouting signals from a batch model, not validated claims.");
 	return lines.join("\n");
@@ -4360,8 +4564,10 @@ export function statusText(state: BroadsideStateFile): string {
 					(entry.status === "skipped" && entry.reason ? ` — ${entry.reason}` : entry.fallback ? ` — ${entry.fallback}` : ""),
 			);
 		}
-		lines.push(`  synthesis: ${run.synthesis.status}`);
-		lines.push(`  triage: ${run.triage?.status ?? "pending"}`);
+		const builtFrom = (entry: BroadsideSynthesisEntry | undefined): string =>
+			entry?.status === "completed" ? (entry.verdicts ? ` (built from ${entry.verdicts} verdict${entry.verdicts === 1 ? "" : "s"})` : " (no verdicts)") : "";
+		lines.push(`  synthesis: ${run.synthesis.status}${builtFrom(run.synthesis)}`);
+		lines.push(`  triage: ${run.triage?.status ?? "pending"}${builtFrom(run.triage)}`);
 		if (run.verify) {
 			lines.push(`  verify: ${run.verify.status} — ${run.verify.confirmed} confirmed of ${run.verify.verified} read on ${run.verify.model}, $${run.verify.cost.toFixed(4)}`);
 		}

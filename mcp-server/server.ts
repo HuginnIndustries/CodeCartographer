@@ -1295,6 +1295,7 @@ export async function handleBroadside(args: {
 	model?: string;
 	lens_models?: Record<string, string>;
 	top?: number;
+	regenerate_post_passes?: boolean;
 }) {
 	const cwd = await validateCwd(args.cwd);
 	const action = args.action ?? "submit";
@@ -1477,6 +1478,12 @@ export async function handleBroadside(args: {
 	}
 
 	// action === "collect"
+	if (args.regenerate_post_passes !== undefined && typeof args.regenerate_post_passes !== "boolean") {
+		throw new McpError(ErrorCode.InvalidParams, "regenerate_post_passes must be a boolean.");
+	}
+	if (args.regenerate_post_passes && !includeSynthesis && !includeTriage) {
+		throw new McpError(ErrorCode.InvalidParams, "regenerate_post_passes needs at least one of include_synthesis and include_triage.");
+	}
 	const collect = await runBroadsideCollect(cwd, apiKey, {
 		waitMs,
 		includeSynthesis,
@@ -1484,6 +1491,7 @@ export async function handleBroadside(args: {
 		retryTruncated,
 		signal: serverLifetime?.signal,
 		...(runId && { runId }),
+		...(args.regenerate_post_passes && { regeneratePostPasses: true }),
 	}).catch((error) => {
 		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
@@ -1497,6 +1505,7 @@ export async function handleBroadside(args: {
 		lensOutcomes: collect.lensOutcomes,
 		synthesis: collect.synthesis,
 		triage: collect.triage,
+		...(collect.regenerated && { regenerated: collect.regenerated }),
 		topFindings: collect.topFindings,
 		topTriageItems: collect.topTriageItems,
 	});
@@ -1829,7 +1838,7 @@ const TOOLS = [
 				action: {
 					type: "string",
 					enum: ["submit", "collect", "status", "models", "verify"],
-					description: "submit fires all lens batches and returns batch ids; collect polls submitted batches, saves results, and optionally runs the synthesis pass; status shows recorded runs; models lists batch-capable models with pricing and capabilities; verify reads a collected run's top defect and security findings against the repository with read-only tools (one sync-priced call each, about a cent on the default model) and writes verified.md/verified.json beside triage.md with a verdict per finding: confirmed (a reachable failure, with the trigger), not-a-defect, discarded, or unclear.",
+					description: "submit fires all lens batches and returns batch ids; collect polls submitted batches, saves results, and optionally runs the synthesis and triage passes — built from verified.json when a verify pass has already written it, so run verify first or collect again with regenerate_post_passes afterwards; status shows recorded runs; models lists batch-capable models with pricing and capabilities; verify reads a collected run's top defect and security findings against the repository with read-only tools (one sync-priced call each, about a cent on the default model) and writes verified.md/verified.json beside triage.md with a verdict per finding: confirmed (a reachable failure, with the trigger), not-a-defect, discarded, or unclear.",
 				},
 				lenses: {
 					type: "array",
@@ -1865,6 +1874,11 @@ const TOOLS = [
 					type: "boolean",
 					description:
 						"Re-submit lens results that came back truncated at the output token limit, once, with a doubled output cap. Falls back to retry_truncated in .codecarto/broadside/config.yaml (default true).",
+				},
+				regenerate_post_passes: {
+					type: "boolean",
+					description:
+						"collect only: reset the run's settled synthesis and triage passes and run them again, so a verify pass's verdicts (verified.json) are built into the executive report and the work order — confirmed findings first, discarded ones dropped, not-a-defect ones listed apart. Costs another post-pass pair (a few cents); a pass still in flight is left to finish; a run whose lens batches are still running is refused.",
 				},
 				max_cost: {
 					type: "number",
