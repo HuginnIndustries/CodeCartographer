@@ -94,7 +94,7 @@ So before pushing a tag, drive one real phase through each surface in [`docs/cli
 | Claude Code | `codecarto_init` then `codecarto_next` via MCP | the first line of the tool result |
 | Codex | same, via `codex mcp add codecartographer -- codecarto-mcp`; headless needs the per-server approval key (below) | the first line of the tool result |
 | Hermes | same | the first line of the tool result |
-| Broad-Side (when `core/broadside.ts` or the wrappers' broadside paths changed) | a live submit → collect on a small real repository with a scoped OpenRouter key (below) | the submit report and the collect report, plus OpenRouter's batch list for the run |
+| Broad-Side (when `core/broadside.ts` or the wrappers' broadside paths changed) | a live submit → collect on a small real repository with a scoped OpenRouter key (below) — and, when the post-pass code changed, a `verify` followed by `collect --regenerate` | the submit report and the collect report, plus OpenRouter's batch list for the run; after a regenerate, whether `triage.md` leads with the confirmed findings and lists the dismissed ones under `omitted` |
 
 Paste the actual returns into the release PR. **A checked box is not evidence; a prompt is.** A result that is empty, truncated, or a bare object rather than the prompt text is the failure this step exists to catch, and it is invisible in a summary.
 

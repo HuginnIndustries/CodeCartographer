@@ -1,10 +1,12 @@
-# Closeout — 2026-09-14 — the verification loop turned on the repository, and 0.24.1
+# Closeout — 2026-09-14 — the verification loop turned on the repository: 0.24.1 and 0.25.0
 
 The session after the live-verification day. It used the last hours of the
 same day-scoped OpenRouter key ($0.83 of it) to turn Broad-Side's new `verify`
 pass on CodeCartographer itself, fixed what the verified findings named
 rather than filing them, measured a prompt change before adopting it, and
-shipped one release — 0.24.1 — instead of one per fix.
+shipped one release — 0.24.1 — instead of one per fix. A second batch the
+same day, 0.25.0, closed the loop the other way: the work order is built
+from the verdicts.
 
 ## What shipped
 
@@ -17,6 +19,9 @@ shipped one release — 0.24.1 — instead of one per fix.
 | #344 | every lock removal happens under a removal lock (`<lock>.break`) and re-verifies what it removes there, so two waiters breaking one stale lock cannot both take it (#342 — found by the measurement's own runs) |
 | #345 | the 30 s phase linger timer clears only the run it was scheduled for (#343 — likewise) |
 | #346 | release 0.24.1 |
+| #349 | the end-of-run notification says why an auto run stopped (#347) — under `pi -p` the reason had lived only in the auto-summary message and the widget |
+| #350 | synthesis and triage are built from `verified.json` when it exists — confirmed first with the trigger in the rationale, unclear kept and marked, discarded and not-a-defect listed in `omitted`; each pass records how many verdicts it was built from; `collect --regenerate` / `regenerate_post_passes` re-runs a collected run's settled passes with the verdicts (#338). Also: a repeat collect no longer persists a run total without the post-passes and retry an earlier collect settled |
+| #351 | release 0.25.0 |
 
 ## The measurement
 
@@ -63,10 +68,22 @@ linger timer (#343 → #345). The live check of #335 read 40 source files where
   exclusive, so what a remover verified is what it removes.
 - **The fallback trigger is "no source file", not "no file"**: a policy
   document under a targeted path satisfies the globs and starves the lens.
-- Filed, not fixed: #338 (triage and synthesis consume `verified.json`),
-  #339 (split `core/broadside.ts`), #340 (the full self-review on the
-  maintainer's own model, seeded with the security-lens leads), #347 (the auto
-  loop's stop reason is invisible under `pi -p`). #185 stays parked.
+- **A post-pass reset happens on disk first.** `persistBroadsideRunMerging`
+  keeps whatever is further along on disk (#322), so resetting a settled pass
+  to `pending` in memory alone is undone by the next persist. `resetRunPostPasses`
+  writes the reset under the state lock and the normal claim path re-runs
+  the pass; a pass in flight is never reset.
+- **A run's total is the sum of what its entries record**, not of what one
+  collect polled — the retry records its cost, and a regenerate moves the
+  replaced results' cost to `retiredCost` so money spent stays counted.
+- Filed, not fixed: #339 (split `core/broadside.ts`), #340 (the full
+  self-review on the maintainer's own model, seeded with the security-lens
+  leads). #338 and #347 were fixed the same day (0.25.0). #185 stays parked.
+- **Owed when a key is next available:** a live `verify` → `collect
+  --regenerate` on a real run, reading whether `triage.md` actually leads
+  with the confirmed findings and files the dismissed ones under `omitted`.
+  0.25.0 shipped that on unit tests alone; the request change is additive
+  and fires only when `verified.json` exists.
 
 ## Verification recipes established
 
@@ -87,7 +104,10 @@ linger timer (#343 → #345). The live check of #335 read 40 source files where
 
 ## Files
 
-CONTRIBUTING.md (the Pi row and the measurement recipe), ROADMAP.md (Tier 1
-rows for #341, #338, #339 and the #319 extension; the #143 row marked shipped
-as the hybrid), CHANGELOG.md (the 0.24.1 block), `.codecarto/broadside/SKILL.md`
-(the no-source fallback and the `type-hygiene` reading note).
+CONTRIBUTING.md (the Pi row, the measurement recipe, the Broad-Side row's
+regenerate check), ROADMAP.md (Tier 1 rows for #341, #338, #339 and the #319
+extension; the #143 row marked shipped as the hybrid), CHANGELOG.md (the
+0.24.1 and 0.25.0 blocks), `.codecarto/broadside/SKILL.md` (the no-source
+fallback, the `type-hygiene` reading note, verdict-built post-passes and
+`collect --regenerate` in the reading guide), README, docs/mcp-quickstart.md,
+and the agent-skill Broad-Side reference (the regenerate step).
