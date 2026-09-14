@@ -2,7 +2,7 @@ import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { autoCompletePhase, buildAutoSummary, isPhaseRunning, runAuto, runSinglePhase } from "./auto-runner.ts";
+import { autoCompletePhase, buildAutoSummary, describeAutoOutcome, isPhaseRunning, runAuto, runSinglePhase } from "./auto-runner.ts";
 import { disposeAgentsWidget } from "./agent-widget.ts";
 import { parseDashboardFlags } from "./dashboard-flags.ts";
 import { narrateDashboard } from "./dashboard-narrator.ts";
@@ -761,7 +761,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				});
 				lastFeedbackLines = [`Auto pipeline ${result.outcome}: ${result.reason}`];
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);
-				notifyCtx(ctx, `Auto pipeline ${result.outcome}: ${result.phasesRun.length}/${result.totalPhases} phases.`, result.outcome === "complete" ? "info" : "warning");
+				notifyCtx(ctx, describeAutoOutcome(result), result.outcome === "complete" ? "info" : "warning");
 				return;
 			}
 

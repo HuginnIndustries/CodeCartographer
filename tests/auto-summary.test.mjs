@@ -9,7 +9,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { buildAutoSummary } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/auto-runner.ts`).href);
+const { buildAutoSummary, describeAutoOutcome } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/auto-runner.ts`).href);
 
 const baseComplete = {
 	outcome: "complete",
@@ -97,4 +97,17 @@ test("stats line uses tabular tokens + duration formatting consistently", () => 
 	});
 	assert.match(out, /2\.10M tokens/);
 	assert.match(out, /1m15s/);
+});
+
+// ---------- #347: the notification carries the stop reason ----------
+
+test("the end-of-run notification carries the reason when the run stopped short", () => {
+	assert.equal(describeAutoOutcome(baseComplete), "Auto pipeline complete: 3/3 phases.");
+	assert.equal(describeAutoOutcome(baseStopped), "Auto pipeline stopped: 1/3 phases — Validation FAIL on contracts.");
+	assert.equal(describeAutoOutcome(baseAborted), "Auto pipeline aborted: 2/3 phases — Aborted during protocols.");
+	assert.equal(
+		describeAutoOutcome({ ...baseStopped, phasesRun: [], totalPhases: 1, reason: "Auto-complete failed on architecture: YAML line 37: Duplicate YAML key: post_pipeline" }),
+		"Auto pipeline stopped: 0/1 phases — Auto-complete failed on architecture: YAML line 37: Duplicate YAML key: post_pipeline",
+	);
+	assert.equal(describeAutoOutcome({ ...baseStopped, reason: "  " }), "Auto pipeline stopped: 1/3 phases.");
 });

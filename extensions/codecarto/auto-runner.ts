@@ -455,6 +455,19 @@ export async function runAuto(
 // buildAutoSummary — the codecarto-auto-summary message body
 // ----------------------------------------------------------------------------
 
+/**
+ * The one-line notification for an auto run's end. A run that stopped short
+ * carries its reason: the auto-summary message and the widget carry it too,
+ * but under `pi -p` neither is rendered, and "stopped: 0/1 phases" alone
+ * sent a reader back to the code to find out why (#347).
+ */
+export function describeAutoOutcome(result: AutoRunResult): string {
+	const line = `Auto pipeline ${result.outcome}: ${result.phasesRun.length}/${result.totalPhases} phases.`;
+	if (result.outcome === "complete") return line;
+	const reason = result.reason.trim();
+	return reason ? `${line.replace(/\.$/, "")} — ${reason}` : line;
+}
+
 export function buildAutoSummary(result: AutoRunResult, availableSkills: string[] = []): string {
 	const totalTokens = result.totalTokens.input + result.totalTokens.output;
 	const wallTime = formatMillis(result.endedAt - result.startedAt);
