@@ -128,17 +128,12 @@ function renderAmendmentCloseout(amendment: Amendment, applied: AmendmentApplica
 }
 
 /**
- * Apply one amendment to canonical state under the completion lock. Refuses
- * while the pipeline is incomplete — mid-pipeline resolutions belong in the
- * phase handoff, and allowing both channels at once would race them.
- * Idempotent: ids that no longer match anything are reported, not fatal.
+ * The refusal an amendment gets while the pipeline is incomplete —
+ * mid-pipeline resolutions belong in the phase handoff, and allowing both
+ * channels at once would race them.
  */
-export async function applyAmendment(cwd: string, name: string): Promise<AmendmentResult> {
-	const initialState = await getWorkspaceState(cwd);
-	if (!initialState) throw new Error("CodeCartographer workspace not found. Run /codecarto-init first.");
-	const amendment = await loadAmendmentFile(name, initialState.workspaceDir);
-
-	const outcome = resolvePipelineOutcome(initialState);
+function refuseUnlessComplete(state: WorkspaceState): void {
+	const outcome = resolvePipelineOutcome(state);
 	if (outcome.kind === "eligible") {
 		throw new Error(
 			`Cannot amend: the pipeline is not complete (next phase: ${outcome.phase.id}). `
@@ -150,12 +145,28 @@ export async function applyAmendment(cwd: string, name: string): Promise<Amendme
 		// finish is not there yet (#228).
 		throw new Error(`Cannot amend: the pipeline is not complete. ${describeStuckPipeline(outcome.blocked)}`);
 	}
+}
+
+/**
+ * Apply one amendment to canonical state under the completion lock. Refuses
+ * while the pipeline is incomplete, judged on the state read under the lock:
+ * the check used to run on a read taken before the lock, so a status change
+ * that landed in between — a pipeline switch, a re-init, a rolled-back
+ * completion — was amended over as if the pipeline were still complete
+ * (Broad-Side verify, 2026-09-13 run). Idempotent: ids that no longer match
+ * anything are reported, not fatal.
+ */
+export async function applyAmendment(cwd: string, name: string): Promise<AmendmentResult> {
+	const initialState = await getWorkspaceState(cwd);
+	if (!initialState) throw new Error("CodeCartographer workspace not found. Run /codecarto-init first.");
+	const amendment = await loadAmendmentFile(name, initialState.workspaceDir);
 
 	const timestamp = new Date().toISOString();
 	const applied: AmendmentApplication = { openQuestionsClosed: [], postPipelineClosed: [], unknownIds: [] };
 	let closeoutNotice = "";
 
 	const updatedState = await updateStatusAtomically(cwd, async (lockedState) => {
+		refuseUnlessComplete(lockedState);
 		const nextStatus = normalizeStatus(lockedState.status, lockedState.pipeline, lockedState.status.pipeline, lockedState.cwd);
 
 		for (const closureId of amendment.open_question_closures) {
