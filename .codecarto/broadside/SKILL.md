@@ -50,7 +50,11 @@ not replace any phase; it tells phases where to look.
    - `architecture-*.json` → the architecture phase's seed of prior knowledge
    - `api-*.json` → endpoints and data types (contracts/protocols phases)
    - `security-*.json` → auth, trust boundaries (defect-scan-semantic pass 5)
-   - `defect-*.json` → mechanical defect leads (defect-scan-mechanical)
+   - `defect-*.json` → mechanical defect leads (defect-scan-mechanical). The
+     scan is asked to name the input, call site, or sequence that reaches
+     each failure, and to file a cast, assertion, or style observation that
+     every caller satisfies at severity low under the pattern `type-hygiene`
+     — read those as notes, not defects.
    - `conventions-*.json` → naming/idiom candidates for CONVENTIONS.md
    - `porting-*.json` → platform coupling (porting phase)
 4. `run-meta.json` records scope: which lenses ran, at what cost, with what

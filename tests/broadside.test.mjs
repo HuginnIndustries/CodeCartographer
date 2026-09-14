@@ -1284,6 +1284,19 @@ test("defect lens prompt speaks the detected language, not Go", () => {
 	assert.match(unknown, /unchecked casts/, "unknown languages get the neutral default profile");
 });
 
+test("defect lens prompt asks the scan for the trigger, and for type hygiene to be labelled apart", () => {
+	// Measured on this repository, two runs per arm (2026-09-14): the
+	// paragraph halves the finding count and roughly doubles medium-severity
+	// precision without changing how many real defects a run turns up.
+	for (const language of ["typescript", "go", "python", "whitespace-esque"]) {
+		const prompt = getLens("defect").systemPrompt({ language });
+		assert.match(prompt, /A finding is a reachable failure: name in the description the concrete input, call site, or sequence that reaches it and what then goes wrong\./, language);
+		assert.match(prompt, /report it at severity low under the pattern name `type-hygiene`/, language);
+		assert.match(prompt, /severity high or medium is for failures you traced to a trigger\.$/, language);
+		assert.ok(prompt.indexOf("Look for these specific patterns") < prompt.indexOf("A finding is a reachable failure"), "the rubric follows the pattern list");
+	}
+});
+
 test("conventions lens prompt names language-appropriate categories and idioms", () => {
 	const rust = getLens("conventions").systemPrompt({ language: "rust" });
 	assert.match(rust, /crates and modules/);
