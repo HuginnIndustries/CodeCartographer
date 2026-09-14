@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The security and API lenses fall back when their targeted paths match no *source* file, not only when they match nothing.** The 0.23.0 fallback (#319) triggered on an empty match. On CodeCartographer itself the security lens's paths matched exactly one file — `SECURITY.md` — so the lens read a policy document, reported zero findings, and wrote a coverage note saying no code had been provided; the fallback never fired because the match was not empty. A match containing no file with a source extension of any language Broad-Side scans now falls back the same way, keeping what did match ahead of the code (the policy the model is about to check the code against), and the sentence on the estimate, the batch entry, `status`, and the prompt says which files matched: `no source files matched server/**, **/auth*, **/middleware/**, SECURITY.md (only SECURITY.md; test files excluded); scanned all typescript sources (**/*.ts) as well`. Code in another language under the targeted paths still counts as a match; a language with no source glob keeps the match as it was.
+
 ## [0.24.0] — 2026-09-13
 
 The last open roadmap item, built on evidence rather than the design it was filed with (#143, #331).
