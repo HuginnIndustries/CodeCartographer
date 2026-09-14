@@ -1089,12 +1089,16 @@ type LensDefinition = {
 	// Globs are matched against repo-relative forward-slash paths.
 	globsFor: (info: RepoInfo) => string[];
 	/**
-	 * Where to look when `globsFor` matches nothing (#319). The security and
-	 * api lenses target server/, auth, and middleware paths because that is
-	 * where the trust boundary usually lives; a service whose server is
-	 * `src/server.js` matched none of them and got no security review at all.
-	 * The fallback is the language's whole source set — priced as such, and
-	 * said so in the estimate, the run record, and the prompt.
+	 * Where to look when `globsFor` matches no source file (#319). The
+	 * security and api lenses target server/, auth, and middleware paths
+	 * because that is where the trust boundary usually lives; a service whose
+	 * server is `src/server.js` matched none of them and got no security
+	 * review at all. A match that is only documents is the same starvation:
+	 * `SECURITY.md` satisfied the security lens on CodeCartographer itself,
+	 * which then reviewed a policy and reported zero findings. The fallback
+	 * is the language's whole source set, added to whatever did match —
+	 * priced as such, and said so in the estimate, the run record, and the
+	 * prompt.
 	 */
 	fallbackGlobsFor?: (info: RepoInfo) => string[];
 	systemPrompt: (info: RepoInfo) => string;
@@ -1741,11 +1745,30 @@ function collectFilesMatching(allFiles: string[], lens: LensDefinition, globs: s
 	return out;
 }
 
+/** Code in any language Broad-Side scans as, whatever this repo's is. */
+const SOURCE_EXTENSIONS = new Set(Object.values(SOURCE_SPECS).flatMap((spec) => spec.exts));
+
+function isSourceFile(relPath: string): boolean {
+	const dot = relPath.lastIndexOf(".");
+	return dot > relPath.lastIndexOf("/") && SOURCE_EXTENSIONS.has(relPath.slice(dot).toLowerCase());
+}
+
+/** `a, b, c and 4 more` — a matched-file list short enough for a status line. */
+function listSome(paths: string[], max = 3): string {
+	if (paths.length <= max) return paths.join(", ");
+	return `${paths.slice(0, max).join(", ")} and ${paths.length - max} more`;
+}
+
 /**
- * The files a lens will read: its targeted globs, or — when those match
- * nothing and the lens declares a fallback — the fallback globs, with a
- * sentence saying so (#319). The sentence travels to the estimate, the
- * batch entry, and the prompt, so a fallback scan is never a silent one.
+ * The files a lens will read: its targeted globs, or — when those match no
+ * source file and the lens declares a fallback — the fallback globs on top
+ * of whatever did match, with a sentence saying so (#319). The sentence
+ * travels to the estimate, the batch entry, and the prompt, so a fallback
+ * scan is never a silent one.
+ *
+ * "No source file" rather than "no file": a policy document or a config
+ * file under a targeted path satisfies the globs and leaves the lens with
+ * nothing to review, and the coverage note it writes back is the only sign.
  */
 export function selectLensFiles(
 	allFiles: string[],
@@ -1754,15 +1777,23 @@ export function selectLensFiles(
 ): { files: CollectedFile[]; fallback?: string } {
 	const globs = lens.globsFor(info).filter(Boolean);
 	const targeted = collectFilesMatching(allFiles, lens, globs);
-	if (targeted.length > 0 || globs.length === 0 || !lens.fallbackGlobsFor) return { files: targeted };
+	if (globs.length === 0 || !lens.fallbackGlobsFor) return { files: targeted };
+	if (targeted.some((f) => isSourceFile(f.relPath))) return { files: targeted };
 	const fallbackGlobs = lens.fallbackGlobsFor(info).filter(Boolean);
-	const files = collectFilesMatching(allFiles, lens, fallbackGlobs);
-	if (files.length === 0) return { files };
+	const matched = new Set(targeted.map((f) => f.relPath));
+	const sources = collectFilesMatching(allFiles, lens, fallbackGlobs).filter((f) => !matched.has(f.relPath));
+	if (sources.length === 0) return { files: targeted };
+	const excluded = lens.skipTestFiles ? "test files excluded" : "";
+	const scanned = `scanned all ${info.language} sources (${fallbackGlobs.join(", ")})`;
 	return {
-		files,
+		// What did match rides first: the policy the model is about to check
+		// the code against, ahead of the code.
+		files: [...targeted, ...sources],
 		fallback:
-			`no files matched ${globs.join(", ")}${lens.skipTestFiles ? " (test files excluded)" : ""}; ` +
-			`scanned all ${info.language} sources (${fallbackGlobs.join(", ")}) instead`,
+			targeted.length === 0
+				? `no files matched ${globs.join(", ")}${excluded ? ` (${excluded})` : ""}; ${scanned} instead`
+				: `no source files matched ${globs.join(", ")} (only ${listSome(targeted.map((f) => f.relPath))}` +
+					`${excluded ? `; ${excluded}` : ""}); ${scanned} as well`,
 	};
 }
 
@@ -1904,8 +1935,8 @@ export function buildBatchRequest(
 						// so the model judges the trust boundary wherever it appears
 						// and does not report the missing server/ as a finding (#319).
 						(slice.fallback
-							? `NOTE: this repository has no files under the paths this lens usually reads (${slice.fallback}). ` +
-								"What follows is every source file it has; locate the trust boundary and the request-handling code wherever they live.\n\n"
+							? `NOTE: this repository has no source files under the paths this lens usually reads (${slice.fallback}). ` +
+								"What follows is every source file it has, after anything those paths did match; locate the trust boundary and the request-handling code wherever they live.\n\n"
 							: "") + lens.userPrompt(info, slice.content, slice.moduleName),
 				},
 			],

@@ -108,14 +108,16 @@ every source file; the **security** and **API** lenses target where the
 trust boundary usually lives — `server/**`, `**/auth*`, `**/middleware/**`,
 `SECURITY.md` (security) and `server/**`, `api/**`, `src/server/**`,
 `src/api/**`, `**/*routes*`, `**/*router*`, `**/*handler*`, `**/*endpoint*`
-(API). A repository whose server is `src/server.js` matches none of those, so
-when the targeted patterns find nothing those two lenses **fall back to every
-source file** — priced as such, chunked at the lens's slice size rather than
-truncated, and said so on the lens line of the estimate, the submit report,
-`status`, and the prompt the model receives. A lens whose targeted patterns
-and fallback both find nothing (only test files, say) is skipped with a line
-naming both. `max_cost` is the guard against a fallback scan on a large
-repository being more than you meant to spend.
+(API). A repository whose server is `src/server.js` matches none of those,
+and one whose only match is `SECURITY.md` has given the lens a policy to read
+and no code to check it against; so when the targeted patterns find **no
+source file** those two lenses **fall back to every source file**, on top of
+whatever did match — priced as such, chunked at the lens's slice size rather
+than truncated, and said so on the lens line of the estimate, the submit
+report, `status`, and the prompt the model receives. A lens whose targeted
+patterns and fallback both find nothing (only test files, say) is skipped
+with a line naming both. `max_cost` is the guard against a fallback scan on
+a large repository being more than you meant to spend.
 
 Collect runs two cross-lens post-passes by default: **synthesis** (the
 executive report) and **triage** (the prioritized work order). Pass

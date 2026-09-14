@@ -1,9 +1,12 @@
 // The security and api lenses fall back to every source file when their
-// targeted globs match nothing (#319).
+// targeted globs match no source file (#319).
 //
 // Seen live on 0.22.0: a Node service whose server lives at src/server.js
 // matched none of server/**, **/auth*, **/middleware/**, SECURITY.md, and
 // the lens that exists to find exactly that code reported "skipped".
+// Seen live on 0.24.0: CodeCartographer's own SECURITY.md satisfied the
+// same globs, so the security lens reviewed a policy document, found
+// nothing, and wrote a coverage note saying it had seen no code.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -15,7 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/broadside.ts`).href);
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
-const { broadsideDirFor, collectRepoInfo, estimateSubmitText, gatherSlices, getLens, loadBroadsideState, runBroadsideSubmit, statusText } = core;
+const { broadsideDirFor, collectRepoInfo, estimateSubmitText, gatherSlices, getLens, loadBroadsideState, runBroadsideSubmit, selectLensFiles, statusText } = core;
 
 process.env.OPENROUTER_API_KEY = "sk-fake";
 
@@ -43,6 +46,7 @@ async function goService() {
 	await mkdir(join(dir, "server"), { recursive: true });
 	await writeFile(join(dir, "server", "auth.go"), "package server\n");
 	await writeFile(join(dir, "internal.go"), "package main\n");
+	await writeFile(join(dir, "SECURITY.md"), "# Security policy\n");
 	return dir;
 }
 
@@ -101,7 +105,7 @@ test("a targeted match never falls back, and lenses without a fallback are untou
 	try {
 		const info = await collectRepoInfo(dir);
 		const security = await gatherSlices(dir, getLens("security"), info);
-		assert.deepEqual(security.flatMap((s) => s.files), ["server/auth.go"], "the targeted scope stands when it matches");
+		assert.deepEqual(security.flatMap((s) => s.files), ["SECURITY.md", "server/auth.go"], "the targeted scope stands when it matches code");
 		assert.equal(security[0].fallback, undefined);
 		const defect = await gatherSlices(dir, getLens("defect"), info);
 		assert.equal(defect.some((s) => s.fallback), false, "a lens that already reads every source has nothing to fall back to");
@@ -140,7 +144,7 @@ test("a fallback scan is said out loud: in the estimate, the submit report, the 
 
 		// The prompt tells the model what it is looking at.
 		const request = posted[0].requests[0];
-		assert.match(request.body.messages[1].content, /^NOTE: this repository has no files under the paths this lens usually reads \(no files matched .*\)\. What follows is every source file it has; locate the trust boundary/);
+		assert.match(request.body.messages[1].content, /^NOTE: this repository has no source files under the paths this lens usually reads \(no files matched .*\)\. What follows is every source file it has, after anything those paths did match; locate the trust boundary/);
 		assert.match(request.body.messages[1].content, /=== src\/server\.js ===/);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
@@ -174,9 +178,54 @@ test("a targeted scan's prompt carries no fallback note", async () => {
 		const lens = getLens("security");
 		const [slice] = await gatherSlices(dir, lens, info);
 		const request = core.buildBatchRequest(lens, info, slice, 0, 1);
-		assert.doesNotMatch(request.body.messages[1].content, /^NOTE: this repository has no files/);
+		assert.doesNotMatch(request.body.messages[1].content, /^NOTE: this repository has no/);
 		assert.match(request.body.messages[1].content, /^Review these server source files/);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+});
+
+test("a match that is only documents falls back too, keeping the documents ahead of the code", async () => {
+	const dir = await nodeService();
+	try {
+		await writeFile(join(dir, "SECURITY.md"), "# Security policy\n\nReport privately.\n");
+		const info = await collectRepoInfo(dir);
+		const lens = getLens("security");
+		const [slice] = await gatherSlices(dir, lens, info);
+		assert.deepEqual(slice.files, ["SECURITY.md", "src/lib/validate.js", "src/router.js", "src/server.js"], "the policy first, then every source, tests excluded");
+		assert.equal(
+			slice.fallback,
+			"no source files matched server/**, **/auth*, **/middleware/**, SECURITY.md (only SECURITY.md; test files excluded); scanned all javascript sources (**/*.js) as well",
+		);
+		assert.ok(slice.content.indexOf("=== SECURITY.md ===") < slice.content.indexOf("=== src/server.js ==="));
+		const request = core.buildBatchRequest(lens, info, slice, 0, 1);
+		assert.match(request.body.messages[1].content, /^NOTE: this repository has no source files under the paths this lens usually reads \(no source files matched .*; scanned all javascript sources \(\*\*\/\*\.js\) as well\)\. What follows is every source file it has, after anything those paths did match;/);
+
+		// The submit report and the run record carry the same sentence.
+		const posted = [];
+		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["security"], fetcher: recordingFetcher(posted), maxCost: 0, confirm: () => true });
+		assert.match(result.batches.security.fallback, /^no source files matched .* \(only SECURITY\.md; test files excluded\); scanned all javascript sources/);
+		assert.match(estimateSubmitText(result, [lens]), /Security review: batch batch-1 \(1 request\(s\), ~\$[\d.]+\) — no source files matched .*; scanned all javascript sources \(\*\*\/\*\.js\) as well/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a long document-only match is abbreviated, and a lens with no sources to fall back to keeps what matched", () => {
+	const lens = getLens("security");
+	const info = { language: "javascript", sourceGlob: "**/*.js", sourceExts: [".js", ".jsx"] };
+	const docs = ["SECURITY.md", "server/README.md", "server/config.yaml", "server/openapi.json", "server/notes.txt"];
+	const { files, fallback } = selectLensFiles([...docs, "src/app.js", "src/app.test.js"], lens, info);
+	assert.deepEqual(files.map((f) => f.relPath), [...docs, "src/app.js"]);
+	assert.match(fallback, /\(only SECURITY\.md, server\/README\.md, server\/config\.yaml and 2 more; test files excluded\)/);
+
+	// Code in another language under the targeted paths is still code: no fallback.
+	const mixed = selectLensFiles(["SECURITY.md", "server/index.py", "src/app.js"], lens, info);
+	assert.deepEqual(mixed.files.map((f) => f.relPath), ["SECURITY.md", "server/index.py"]);
+	assert.equal(mixed.fallback, undefined);
+
+	// An unknown language has no source glob to fall back to: the match stands as it was.
+	const unknown = selectLensFiles(["SECURITY.md", "src/app.rb"], lens, { language: "unknown", sourceGlob: "", sourceExts: [] });
+	assert.deepEqual(unknown.files.map((f) => f.relPath), ["SECURITY.md"]);
+	assert.equal(unknown.fallback, undefined);
 });
