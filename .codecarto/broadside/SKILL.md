@@ -35,6 +35,10 @@ not replace any phase; it tells phases where to look.
    it describes), **discarded** (the claim is wrong about the code, with the
    guard or line that shows it), or **unclear**. Start from the confirmed
    ones; treat a discarded one as answered unless the reasoning is thin.
+   Then make sure the work order was built from it: `status` shows
+   `triage: completed (built from N verdicts)`; if it says `(no verdicts)`,
+   run `collect --regenerate` (`regenerate_post_passes: true`) before
+   reading `triage.md`.
    Measured on this repository, the top twelve findings by severity were two
    real defects and ten that a look at the guard, the caller, or the tsconfig
    dismissed — the pass agreed with a reviewer on all twelve for about a cent
@@ -85,6 +89,7 @@ Broad-Side is an executable-surface feature. On the Pi extension:
 /codecarto-broadside status             # show recorded runs
 /codecarto-broadside models             # compare batch models
 /codecarto-broadside verify --top=10    # read the top findings against the source
+/codecarto-broadside collect --regenerate  # rebuild synthesis and triage from the verdicts
 ```
 
 On the MCP server:
@@ -95,6 +100,7 @@ codecarto_broadside {cwd, action: "collect"}                  # poll, save, synt
 codecarto_broadside {cwd, action: "status"}                   # show recorded runs
 codecarto_broadside {cwd, action: "models"}                   # compare batch models
 codecarto_broadside {cwd, action: "verify", top: 10}          # read the top findings against the source
+codecarto_broadside {cwd, action: "collect", regenerate_post_passes: true}   # rebuild synthesis and triage from the verdicts
 ```
 
 The `models` action lists every `:batch` variant on OpenRouter — pricing per
@@ -138,6 +144,16 @@ beside `triage.md` and records the pass on the run. `max_cost` is a running
 cap here, since a sync call's cost is known only when it returns: the pass
 stops before the next finding once the calls so far have reached it and
 reports `partial`. About a cent a finding on the default model.
+
+The post-passes read the verdicts when they exist: a synthesis or triage
+built after a `verify` ranks the confirmed findings first, drops the
+discarded ones, lists the not-a-defect ones apart in `omitted`, and says in
+its summary how many verdicts it was built from; `status` and the collect
+report show `(built from N verdicts)` or `(no verdicts)` on each pass. A run
+collected before it was verified has a work order built from batch
+severities alone — `collect --regenerate` (`regenerate_post_passes: true`)
+resets the settled passes and runs them again with the verdicts, for another
+post-pass pair's cost; a pass still in flight is left to finish.
 
 Two caveats apply to any model you pick. The `models` action lists every id
 OpenRouter advertises a `:batch` variant for, and many of those variants do not

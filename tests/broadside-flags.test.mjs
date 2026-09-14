@@ -128,7 +128,7 @@ test("every completion token the command offers is one the parser accepts", () =
 		// Value-taking flags are offered as a prefix ("--max-cost="); complete
 		// them with a value before parsing.
 		const arg = token === "--lens-model=" ? `${token}security:vendor/name:batch` : token.endsWith("=") ? `${token}1` : token;
-		const context = token === "--benchmarks" ? "models " : token === "--wait=" || token === "--run=" ? "collect " : token === "--top=" ? "verify " : "";
+		const context = token === "--benchmarks" ? "models " : token === "--wait=" || token === "--run=" || token === "--regenerate" ? "collect " : token === "--top=" ? "verify " : "";
 		const r = parseBroadsideFlags(`${context}${arg}`);
 		assert.deepEqual(r.unknown, [], `completion token ${token} parses as unknown`);
 		assert.equal(r.error, undefined, `completion token ${token} errors: ${r.error}`);
@@ -183,4 +183,19 @@ test("verify takes --top, --model, --run, and --max-cost, and nothing that belon
 	assert.match(parseBroadsideFlags("submit --top=3").error, /--top is only meaningful for verify/);
 	assert.match(parseBroadsideFlags("verify --wait=10").error, /verify runs to completion/);
 	assert.match(parseBroadsideFlags("verify security").error, /Lens names are only meaningful for submit/);
+});
+
+// ---------- #338: --regenerate ----------
+
+test("--regenerate is a collect flag that needs a pass to regenerate", () => {
+	const r = parseBroadsideFlags("collect --regenerate --run=2026-09-14T03-53-20-895Z");
+	assert.equal(r.action, "collect");
+	assert.equal(r.regeneratePostPasses, true);
+	assert.equal(r.runId, "2026-09-14T03-53-20-895Z");
+	assert.equal(r.error, undefined);
+	assert.equal(parseBroadsideFlags("collect --regenerate --no-triage").error, undefined, "one pass left to regenerate");
+	assert.match(parseBroadsideFlags("collect --regenerate --no-synthesis --no-triage").error, /leaves nothing to regenerate/);
+	assert.match(parseBroadsideFlags("verify --regenerate").error, /--regenerate is only meaningful for collect/);
+	assert.match(parseBroadsideFlags("--regenerate").error, /only meaningful for collect \(got action "submit"\)/);
+	assert.equal(parseBroadsideFlags("collect").regeneratePostPasses, undefined);
 });

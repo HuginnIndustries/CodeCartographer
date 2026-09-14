@@ -4,7 +4,13 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- **The synthesis and triage passes are built from `verify`'s verdicts when they exist, and `collect --regenerate` rebuilds them for a run verified after its first collect.** The work order used to rank on the batch model's own severities — the ranking `verify` was built to correct; on this repository's 2026-09-13 run it put two dismissed casts at P1 above the one finding a reviewer confirmed. When `verified.json` is in the run directory, both post-passes receive the verdicts (verdict, confidence, the evidence the verifier cited, its reasoning) and are told what they mean: triage puts confirmed findings at the top with `verified: confirmed — <trigger>` in the rationale, keeps unclear ones marked as such, and lists discarded and not-a-defect ones in `omitted` with the verifier's reason rather than queueing them; synthesis leads `top_findings` with the confirmed ones and leaves discarded ones out of the severity counts. Each pass records how many verdicts it was built from, shown as `(built from N verdicts)` or `(no verdicts)` on the collect report and in `status`. A run collected before it was verified has passes built from severities alone; `/codecarto-broadside collect --regenerate` (`codecarto_broadside {action: "collect", regenerate_post_passes: true}`) resets the settled passes on disk and runs them again with the verdicts, for another post-pass pair's cost — a pass still in flight is left to finish, a run whose lens batches are still running is refused, and a collect with both passes disabled has nothing to regenerate. #338.
+
 ### Fixed
+
+- **A repeat collect no longer reports — or persists — a run total without the post-passes and the retry an earlier collect had settled.** The total was accumulated from what each collect polled, so reading a completed run again wrote a smaller `total cost` into its state every time. The retry pass now records its cost on its entry, and the total is the sum of what the run's entries record, including the cost of post-pass results a regenerate replaced.
 
 - **Pi: the end-of-run notification says why an auto run stopped.** `Auto pipeline stopped: 0/1 phases.` was all a headless run (`pi -p`, a log, CI) ever saw; the reason lived in the auto-summary message and the widget, neither of which renders there. The notification now reads `Auto pipeline stopped: 0/1 phases — Auto-complete failed on architecture: YAML line 37: Duplicate YAML key: post_pipeline`; a completed run keeps the short form. #347.
 

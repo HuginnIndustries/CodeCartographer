@@ -1149,7 +1149,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("codecarto-broadside", {
-		description: "Batch reconnaissance (Broad-Side): /codecarto-broadside [submit|collect|status|models|verify] [lenses…] [--model=ID] [--lens-model=LENS:ID] [--top=N] [flags]",
+		description: "Batch reconnaissance (Broad-Side): /codecarto-broadside [submit|collect|status|models|verify] [lenses…] [--model=ID] [--lens-model=LENS:ID] [--top=N] [--regenerate] [flags]",
 		// Completes the token under the cursor, so lens names and flags are
 		// offered after the action too, and keeps everything typed before it.
 		getArgumentCompletions: (prefix) => completeLastToken(prefix, KNOWN_BROADSIDE_TOKENS.map((value) => ({ value }))),
@@ -1393,6 +1393,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 					retryTruncated,
 					onStatus,
 					...(flags.runId && { runId: flags.runId }),
+					...(flags.regeneratePostPasses && { regeneratePostPasses: true }),
 				});
 				const lines = collectResultText(collect).split("\n");
 				const done = collect.status === "completed";

@@ -7,6 +7,7 @@
 //   /codecarto-broadside status
 //   /codecarto-broadside models --benchmarks
 //   /codecarto-broadside verify --top=10       → read the top findings against the source
+//   /codecarto-broadside collect --regenerate  → rebuild synthesis and triage from the verdicts
 //
 // Flags mirror the codecarto_broadside tool parameters, with the negative
 // forms spelled out because a slash command has no place to pass `false`:
@@ -18,6 +19,7 @@
 //   --model=ID (submit: the run's batch model, as listed by models; verify: the sync model to read with)
 //   --lens-model=LENS:ID (submit only, repeatable: one lens on its own model)
 //   --top=N (verify only: how many findings to read, most severe first)
+//   --regenerate (collect only: reset the settled post-passes and run them again, verdicts included)
 //
 // A model id itself contains a colon (`vendor/name:batch`), so --lens-model
 // splits on the first colon only: `security:deepseek/deepseek-v4-pro:batch`.
@@ -58,6 +60,8 @@ export interface BroadsideFlags {
 	lensModels?: Partial<Record<BroadsideLensId, string>>;
 	/** For verify: how many findings to read (#143). */
 	top?: number;
+	/** For collect: reset the settled post-passes and run them again (#338). */
+	regeneratePostPasses?: boolean;
 	benchmarks: boolean;
 	unknown: string[];
 	/** Set on an invalid combination. The caller surfaces it as an error. */
@@ -82,6 +86,7 @@ export const KNOWN_BROADSIDE_TOKENS = [
 	"--model=",
 	"--lens-model=",
 	"--top=",
+	"--regenerate",
 	"--no-synthesis",
 	"--no-triage",
 	"--no-retry-truncated",
@@ -135,6 +140,7 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 		if (token === "--no-synthesis") { result.includeSynthesis = false; continue; }
 		if (token === "--no-triage") { result.includeTriage = false; continue; }
 		if (token === "--no-retry-truncated") { result.retryTruncated = false; continue; }
+		if (token === "--regenerate") { result.regeneratePostPasses = true; continue; }
 		if (token === "--benchmarks") { result.benchmarks = true; continue; }
 		if (token.startsWith("--max-cost=")) { result.maxCost = parseNumeric(token, "--max-cost", result); continue; }
 		if (token.startsWith("--wait=")) { result.waitSeconds = parseNumeric(token, "--wait", result); continue; }
@@ -201,6 +207,12 @@ export function parseBroadsideFlags(args: string): BroadsideFlags {
 	}
 	if (result.top !== undefined && result.action !== "verify") {
 		result.error ??= `--top is only meaningful for verify (got action "${result.action}").`;
+	}
+	if (result.regeneratePostPasses && result.action !== "collect") {
+		result.error ??= `--regenerate is only meaningful for collect (got action "${result.action}").`;
+	}
+	if (result.regeneratePostPasses && result.includeSynthesis === false && result.includeTriage === false) {
+		result.error ??= "--regenerate with both --no-synthesis and --no-triage leaves nothing to regenerate.";
 	}
 	if (result.action === "verify" && result.waitSeconds !== undefined) {
 		result.error ??= "--wait is only meaningful for submit and collect; verify runs to completion.";
