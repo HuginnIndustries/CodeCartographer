@@ -21,22 +21,12 @@
 
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import {
-	BROADSIDE_DIR,
-	BROADSIDE_LENS_IDS,
-	type BroadsideLensId,
-	type BroadsideVerifyEntry,
-	broadsideDirFor,
-	defaultReasoningFor,
-	type FetchLike,
-	isSlurpable,
-	listRepoFiles,
-	loadBroadsideState,
-	loadSavedLensResults,
-	parseLensJson,
-	persistBroadsideRunMerging,
-	type StoredLensResult,
-} from "./broadside.ts";
+import { BROADSIDE_DIR, BROADSIDE_LENS_IDS, type BroadsideLensId } from "./constants.ts";
+import { type BroadsideVerifyEntry, defaultReasoningFor } from "./types.ts";
+import { isSlurpable, listRepoFiles } from "./repo.ts";
+import { broadsideDirFor, loadBroadsideState, persistBroadsideRunMerging } from "./state.ts";
+import { type FetchLike } from "./client.ts";
+import { loadSavedLensResults, parseLensJson, type StoredLensResult } from "./results.ts";
 
 export const BROADSIDE_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 /** How many findings `verify` reads by default, most severe first. */

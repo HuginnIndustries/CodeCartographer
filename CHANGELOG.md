@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`core/broadside.ts` is now a barrel over `core/broadside/`** — fourteen modules, one per concern (`constants`, `types`, `schemas`, `lenses`, `repo`, `requests`, `state`, `models`, `client`, `submit`, `results`, `verify`, `collect`, `render`), with an acyclic import graph at runtime; `core/broadside-verify.ts` moved to `core/broadside/verify.ts`. No behaviour change: every name the old module exported is exported by the barrel, `core/index.ts` re-exports it as before, and the test suite is unchanged. Fourteen helpers that crossed a module boundary are now exported (`SCHEMAS`, `sanitizeId`, `gitHead`, `parseSynthesisTopFindings`, …); the provider-error explanations moved beside the batch client. #339.
+
 ## [0.25.0] — 2026-09-14
 
 The verification loop closes: the work order is built from the verdicts, and a headless auto run says why it stopped.
