@@ -1,0 +1,107 @@
+schema_version: 1
+phase_id: architecture
+owner_notes:
+  - "Self-audit run: analyzed the CodeCartographer framework itself. Read all 19 core/ modules in full (dashboard.ts head only), all 14 core/broadside/ modules by export surface (constants/types/schemas/state/client/submit/repo head in full), the complete extensions/codecarto/index.ts plus auto-runner.ts and agent-runner.ts, and the complete mcp-server/server.ts."
+  - "Three delivery surfaces (drop-in .codecarto/ template, Pi extension, MCP server) share one core/; byte-identical phase prompts and validation is the load-bearing invariant. The only module-graph cycle found is core/index.ts <-> core/dashboard-writer.ts (works via call-time bindings)."
+  - "All five declared secondary outputs were written as catalog-level documents; the primary architecture map summarizes and points at them rather than duplicating their detail."
+open_questions:
+  - id: q-openrouter-batch-semantics
+    kind: needs-runtime-test
+    description: "The exact OpenRouter Batch API contract Broad-Side relies on — concurrent-job quota (job-submission-count), which catalog ids actually have :batch endpoints, and reasoning acceptance — is asserted in code comments but not verifiable from this source alone."
+    deferred_reason: "External service behavior; requires a live probe or the provider's own source. No later pipeline phase owns an external API contract."
+  - id: q-pi-sdk-execution-parity
+    kind: needs-runtime-test
+    description: "Byte-identical phase prompts are test-pinned, but whether Pi sub-agent execution (tool sandbox, compaction, session persistence) and an MCP host's own execution produce equivalent outcomes is not established by reading."
+    deferred_reason: "Requires running the same phase under both surfaces and comparing results."
+  - id: q-node-windows-fs-semantics
+    kind: needs-runtime-test
+    description: "Lock-file O_EXCL, atomic rename over an existing file, symlink-aware path containment, and git invocation may behave differently on Windows; the code is written to POSIX expectations."
+    deferred_reason: "Platform behavior cannot be confirmed by source inspection; CI runs Linux only."
+  - id: q-npm-tarball-template-parity
+    kind: needs-fixture-capture
+    description: "Whether the published npm tarball's .codecarto/ template and agent-skill/ are byte-identical to this checkout is not verified here."
+    deferred_reason: "Needs packing the tarball and diffing — a fixture capture, not a source read."
+carry_forward:
+  - id: cf-arch-1
+    kind: defer-to-phase
+    target_phase: contracts
+    description: "MCP tool input schemas and Pi command argument grammars/flag parsers are enumerated by name in findings/public-surfaces/ but their per-argument defaults, side effects, and error behavior are not extracted."
+    deferred_reason: "The contracts phase rubric owns user-visible defaults and error behavior for each surface."
+  - id: cf-arch-2
+    kind: defer-to-phase
+    target_phase: protocols
+    description: "The exact serialized shapes of status.yaml, scratch/handoffs/<phase>.yaml, scratch/amendments/<slug>.yaml, Broad-Side state.json, and library metadata.yaml/index.yaml are summarized, not specified field-by-field."
+    deferred_reason: "Persistence-format extraction is the protocols phase rubric."
+  - id: cf-arch-3
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: "Concurrency-sensitive paths (status lock/stale-break, atomic writes, completion commit point, Broad-Side slot claims/merges, sub-agent re-entry) are mapped but not audited for races."
+    deferred_reason: "Pass 3 (concurrency/resources) is the semantic defect scan's rubric."
+  - id: cf-arch-4
+    kind: defer-to-phase
+    target_phase: defect-scan-mechanical
+    description: "The core/index.ts <-> core/dashboard-writer.ts import cycle and the core/broadside/state.ts -> client.ts ordering drift are structural observations only; mechanical correctness/refactor risk is not assessed."
+    deferred_reason: "The mechanical pass (logic/error handling/config) is the early defect scan's rubric."
+carry_forward_closures: []
+open_question_closures: []
+post_pipeline:
+  - id: post-arch-context-budget
+    kind: spike
+    description: "Measure architecture-phase context consumption against a >100k-token repository to validate the README's context-budget guidance and the partial-result behavior under pressure."
+decisions:
+  - "Wrote all five declared secondary outputs (public-surfaces, runtime-lifecycle, state-and-storage, build-and-deploy, config-model) as full catalog-level documents for this self-audit, instead of accounting for missing ones in Coverage and limits: the architecture phase is the natural home for that detail, and the primary output summarizes and points."
+proposed_conventions:
+  - name: byte-identical-surface-prompts
+    rule: "Any primitive used by both executable wrappers lives in core/ and is re-exported through core/index.ts; the Pi extension and MCP server must assemble identical phase prompts and return identical validation results for the same inputs."
+    evidence: "core/prompts.ts header; CLAUDE.md 'Architecture'; tests/pipeline-invariants.test.mjs and sibling parity tests."
+  - name: idempotent-post-commit-writes
+    rule: "Artifacts that assert a phase is complete (closeout, THREAD_LOG entry, decision rows, staged conventions) are written only after the status.yaml rename commits, and every writer dedupes so re-running completion regenerates rather than duplicates them."
+    evidence: "core/workspace.ts StatusUpdate.afterCommit doc (#234); core/completion.ts writeCompletionArtifacts."
+closeout_summary: "Architecture mapped for the self-audit: three delivery surfaces over one core, with layer map, dependency direction, public surfaces, runtime lifecycle, concurrency model, build/packaging, and porting priorities. All five declared secondary outputs written; four open questions and four carry-forwards routed."
+closeout_content: |-
+  # Closeout — architecture
+
+  ## Summary
+
+  Mapped the CodeCartographer framework (self-audit) into layers, dependency direction,
+  public surfaces, runtime lifecycle, concurrency model, build/packaging, and porting
+  priorities. The primary output is `.codecarto/findings/architecture/architecture-map.md`;
+  catalog-level detail lives in the five declared secondary outputs.
+
+  ## Key findings
+
+  - **One core, three surfaces.** The drop-in `.codecarto/` template, the Pi extension, and
+    the MCP server all share `core/`; byte-identical phase prompts/validation across Pi and
+    MCP is the load-bearing invariant, pinned by the invariant test suite.
+  - **Stable base, thin wrappers.** `core/{types,utils,yaml}.ts` sit at the bottom; nothing in
+    the repo depends on a wrapper. Both wrappers are adapters over shared internals.
+  - **One module cycle.** `core/index.ts` re-exports `core/dashboard-writer.ts`, which imports
+    names from `core/index.ts`. It resolves only because bindings are used at call time — a
+    portability hazard for eager-evaluation ports. Routed to `defect-scan-mechanical` as
+    `cf-arch-4`.
+  - **Concurrency is file-lock + atomic-rename + sequential sub-agents.** Single-threaded Node,
+    O_EXCL lock files with stale-break under a removal lock, temp+rename writes, sequential
+    phases, and concurrent Broad-Side batch polling with per-run spend-slot claims.
+  - **Broad-Side is an optional, network-coupled subsystem.** 14 modules with a declared
+    acyclic graph (one ordering drift noted); it is deliberately advisory, not evidence.
+
+  ## Decisions beyond prompt
+
+  - All five declared secondary outputs were written as full catalog-level documents rather
+    than being accounted for as absent, because this phase is their natural home.
+
+  ## Open questions and carry-forward
+
+  - Open: `q-openrouter-batch-semantics`, `q-pi-sdk-execution-parity`,
+    `q-node-windows-fs-semantics` (all runtime tests), `q-npm-tarball-template-parity`
+    (fixture capture).
+  - Routed: `cf-arch-1` → contracts, `cf-arch-2` → protocols, `cf-arch-3` →
+    defect-scan-semantic, `cf-arch-4` → defect-scan-mechanical.
+  - Post-pipeline: `post-arch-context-budget` (optional spike).
+
+  ## Coverage and limits
+
+  COMPLETE. Inspected scope, skipped scope, evidence basis, and blind spots are recorded in
+  the primary output's `## Coverage and limits`. Broad-Side collect/verify, the dashboard
+  body, test bodies, and `docs/` contents were read by structure rather than line-by-line;
+  each is named there or routed above.

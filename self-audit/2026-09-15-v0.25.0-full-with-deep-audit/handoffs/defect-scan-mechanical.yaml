@@ -1,0 +1,86 @@
+schema_version: 1
+phase_id: defect-scan-mechanical
+owner_notes:
+  - "Primary output findings/defect-scan-mechanical/mechanical-defects.md; validation PASS (9/9 pipeline criteria). 14 mechanical findings: 1 high, 5 medium, 8 low; Pass 1 = 6, Pass 2 = 3, Pass 6 = 5."
+  - "Routed item cf-arch-4 closed: the core/index.ts <-> core/dashboard-writer.ts cycle (finding 1.1) and the core/broadside/state.ts -> client.ts ordering drift (finding 1.2) both work under Node/TypeScript because bindings are dereferenced at call time; each is recorded as a latent portability/refactor hazard with action port differently, so the port must break the cycle rather than reproduce it."
+  - "Orchestrator duties done: promoted the two architecture CONVENTIONS proposals to C01 (byte-identical surface prompts) and C02 (idempotent post-commit writes), leaving none pending. Re-triaged the four inherited questions: q-openrouter-batch-semantics, q-pi-sdk-execution-parity, and q-node-windows-fs-semantics remain needs-runtime-test; q-npm-tarball-template-parity remains needs-fixture-capture. No finding in this phase asserts a candidate answer to any of them."
+  - "No execution tool was available this session, so zero runtime probes ran; the four Pass 6 portability findings are external-behavior claims carrying verify at runtime, tied to q-node-windows-fs-semantics. Probe stubs are named (not written) in the report's Runtime probes table for the porting phase to pick up."
+  - "Contradiction sweep: no measured contradiction with the architecture owner_notes. Claim (a) (core/types,utils,yaml is a stable base; no core->wrapper imports) was re-checked by grep and holds. Claim (c)'s POSIX lock/rename mechanics were confirmed by reading; its Windows-portability portion is left verify at runtime. Claim (b)'s byte-identical prompt assembly is confirmed at source level (both surfaces call buildPrompt); execution parity is not, and remains q-pi-sdk-execution-parity."
+open_questions: []
+carry_forward:
+  - id: cfs-mech-1
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: "withRemovalLock (core/status.ts:526-550) breaks a stale removal lock with an unguarded rm; two waiters that both observed it stale can both rm and recreate, defeating the removal serialization the lock exists to provide."
+    deferred_reason: "Pass 3 (concurrency/resources) is the semantic defect scan's rubric; refines the architecture's cf-arch-3."
+  - id: cfs-mech-2
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: "acquireLock treats any lock older than STALE_LOCK_MS = 60_000 (core/status.ts:25) as dead; a lock legitimately held longer (e.g. library publish holding .publish.lock across a full reindex, or a large switchPipeline) can be broken while its owner still writes."
+    deferred_reason: "Pass 3 (concurrency/resources) owns stale-lock/race analysis; refines cf-arch-3."
+  - id: cfs-mech-3
+    kind: defer-to-phase
+    target_phase: defect-scan-semantic
+    description: "refreshScaffold (core/workspace.ts:430-455) appends THREAD_LOG.md and fires writeDashboard outside the status.yaml lock, so a concurrent completion can interleave with it."
+    deferred_reason: "Pass 3 (concurrency/resources) owns lock-scope analysis; refines cf-arch-3."
+carry_forward_closures:
+  - cf-arch-4
+open_question_closures: []
+post_pipeline:
+  - id: post-mech-windows-fs
+    kind: spike
+    description: "Run the atomic-rename, lock-race, and symlink-containment probes on a Windows runner to close q-node-windows-fs-semantics; scripts are named in mechanical-defects.md under Runtime probes (mechanic-atomic-rename.mjs, mechanic-lock-race.mjs, mechanic-containment.mjs)."
+  - id: post-mech-import-order
+    kind: spike
+    description: "Static import-graph check for the eventual port: assert the module graph is acyclic and that no module reads a cross-module constant at top level, covering findings 1.1 and 1.2 without a runtime."
+decisions:
+  - "Closed cf-arch-4 with action port differently rather than fix before porting: the barrel cycle and the Broad-Side ordering drift are latent portability hazards that do not fail under Node/TypeScript, so they belong in the porting bundle's dependency guidance, not in a source-fix queue."
+  - "Marked the Windows/macOS filesystem, locking, and containment findings (6.1-6.4) as external-behavior claims with verify at runtime, inheriting q-node-windows-fs-semantics; no Pass 6 finding asserts a candidate answer to that question, per the orchestrator re-triage duty."
+  - "Promoted the two architecture proposed_conventions to CONVENTIONS.md C01 and C02 at this phase boundary rather than leaving them pending, because both are load-bearing invariants already encoded in core and pinned by the test suite."
+proposed_conventions: []
+closeout_summary: "Mechanical defect pass complete: 14 findings across passes 1/2/6 (1 high, 5 medium, 8 low); closed cf-arch-4 with port differently; promoted C01/C02; four Windows/network claims left verify at runtime."
+closeout_content: |-
+  # Closeout — defect-scan-mechanical
+
+  ## Summary
+
+  - Ran the mechanical defect passes (1 logic, 2 error handling, 6 configuration) over the
+    CodeCartographer core, both Broad-Side subgraphs, both executable surfaces' load-bearing
+    code, and the build/packaging surface. 14 findings: 1 high, 5 medium, 8 low.
+  - Closed the routed item `cf-arch-4`: the `core/index.ts` ↔ `core/dashboard-writer.ts` import
+    cycle (finding 1.1) and the `core/broadside/state.ts` → `client.ts` ordering drift (finding
+    1.2). Both work under Node/TypeScript because every shared binding is dereferenced at call
+    time; both are recorded as latent portability/refactor hazards with action `port differently`.
+  - Performed the orchestrator duties: promoted the two pending CONVENTIONS proposals to C01
+    (byte-identical surface prompts) and C02 (idempotent post-commit writes); re-triaged the four
+    inherited questions and left each at its current kind, with no finding asserting a candidate
+    answer to any of them; swept for contradictions and found none.
+
+  ## Key findings
+
+  - **6.1 (high, verify at runtime)** — `atomicWriteFile` (`core/utils.ts:43-51`) is atomic only
+    if `rename` over an existing destination succeeds, with no unlink+rename fallback. On Windows
+    this can fail, and every canonical write (`status.yaml`, usage log, Broad-Side `state.json`)
+    routes through it.
+  - **1.1 (medium, port differently)** — the barrel↔dashboard-writer cycle; an eager-evaluation
+    port must break it.
+  - **6.2–6.4 (medium, verify at runtime)** — lock-file O_EXCL/stale-break, symlink-aware
+    containment, and bare-`git` invocation are written to POSIX expectations; the portability
+    question `q-node-windows-fs-semantics` remains open.
+  - **2.2 (medium, port differently)** — `refreshScaffold` copies framework files with no staging
+    or rollback; a mid-loop failure leaves a mixed-version scaffold.
+
+  ## Decisions Beyond Prompt
+
+  - Closed `cf-arch-4` with `port differently`, not `fix before porting` — latent portability
+    hazard, not a live bug.
+  - Left the Windows/network findings at `verify at runtime`, inheriting
+    `q-node-windows-fs-semantics`, `q-openrouter-batch-semantics`, and `q-pi-sdk-execution-parity`.
+  - Promoted the architecture proposals to C01/C02 at this boundary.
+
+  ## Handoff
+
+  - Routed `cfs-mech-1..3` (lock-race and lock-scope specifics) to `defect-scan-semantic`,
+    refining `cf-arch-3`.
+  - Added post-pipeline spikes `post-mech-windows-fs` and `post-mech-import-order`.
+  - No runtime probes ran this session (no execution tool); probe stubs are named in the report.

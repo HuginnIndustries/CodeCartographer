@@ -1,0 +1,94 @@
+schema_version: 1
+phase_id: protocols
+owner_notes:
+  - "Primary output findings/protocols/protocols-and-state.md; validation PASS (6/6 pipeline criteria). Produced a 17-protocol event catalog (P1-P17), 7 state machines (SM1-SM7), field-by-field persistent schemas for every on-disk/wire format, and a 14-row compatibility-hazard table."
+  - "Closed all three routed items: cf-arch-2 (status.yaml, handoff, amendment, Broad-Side state.json, library metadata.yaml/index.yaml now specified field-by-field in the primary output and the state-and-storage secondary); cf-contracts-1 (docs/library-format.md read against core/library.ts — every field, path, ordering, and guard matches; only two cosmetic placeholder drifts in staging/temp-suffix naming, `*.publish.*`/`*.tmp` globs still cover them — the doc stays authoritative); cf-contracts-2 (core/dashboard.ts read in full + dashboard-writer.ts; the HTML body's sections, counts, citations, narration, embedded JSON export, and data sources are now cataloged)."
+  - "Orchestrator duties done. Promoted the single pending proposal (`unsettled-contracts-inherit-their-uncertainty`) to CONVENTIONS.md C03 — it had been applied by architecture, defect-scan-mechanical, and contracts and is mechanized in core/findings.ts's pairing gate. Re-triaged the four inherited questions: q-openrouter-batch-semantics, q-pi-sdk-execution-parity, and q-node-windows-fs-semantics remain needs-runtime-test (reading client.ts/models.ts/verify.ts confirms only what the code sends and how it parses, not what the provider does); q-npm-tarball-template-parity remains needs-fixture-capture. No schema note, event, hazard row, or state machine in this report asserts a candidate answer to any of them with a settled action — every claim landing on the OpenRouter API, a lock/rename, containment, or bare git carries verify at runtime."
+  - "Secondary outputs all written (mode: append): public-surfaces (protocol boundary catalog + two corrections — Pi has 20 commands, not '~21'; Broad-Side actions include verify), runtime-lifecycle (SM1-SM7 + Pi hook ordering), state-and-storage (the cf-arch-2 field-by-field catalog + persistence semantics), config-model (three-system config propagation protocol). None dropped silently."
+  - "No runtime probes ran this session (no execution tool). Every test citation is 'the test file pins X', not an observed pass; platform/network claims are hedged. Contradiction sweep: the Pi-count and README-Broad-Side-action contradictions recorded by contracts are re-affirmed with cited evidence, not smoothed over; no new contradiction with upstream owner_notes."
+open_questions: []
+carry_forward:
+  - id: cf-protocols-1
+    kind: defer-to-phase
+    target_phase: porting
+    description: "The exact hand-rolled YAML subset (what core/yaml.ts reads vs. silently coerces or drops, plus the __proto__ sequence-merge gap at yaml.ts:487) is cataloged in the protocols output; whether the port adopts a full YAML library or reproduces the subset — and how it preserves duplicate-key and scalar-coercion behavior — is a synthesis-level decision made per target language."
+    deferred_reason: "The right parser strategy depends on the port's language and its YAML ecosystem; the porting bundle is where cross-module dependency/refactor decisions are consolidated."
+carry_forward_closures:
+  - cf-arch-2
+  - cf-contracts-1
+  - cf-contracts-2
+open_question_closures: []
+post_pipeline:
+  - id: post-protocols-openrouter-api
+    kind: spike
+    description: "Probe the live OpenRouter Batch API to close q-openrouter-batch-semantics: which catalog ids actually accept a :batch job, the per-account concurrent-job quota and its error text, and whether reasoning is accepted/required per model. The code asserts all three from comments."
+  - id: post-protocols-pi-mcp-parity
+    kind: spike
+    description: "Run one comparable phase under the Pi sub-agent path and under an MCP host, then diff the resulting primary output and status.yaml transitions, to close q-pi-sdk-execution-parity. Prompts are already test-pinned byte-identical; outcomes are not."
+  - id: post-protocols-npm-template-parity
+    kind: spike
+    description: "Pack the npm tarball and diff its .codecarto/ template and agent-skill/ against this checkout, to close q-npm-tarball-template-parity (a fixture capture, not a source read)."
+decisions:
+  - "Accepted docs/library-format.md as accurate against core/library.ts at every field, path, ordering, and guard, closing cf-contracts-1 without a schema change; the only drifts are cosmetic placeholder names (docs say `<slug>.publish.<pid>.<timestamp>` / `<file>.<pid>.<timestamp>.tmp`, code uses `<pid>.<sequence>.<random-hex>`), both still matched by the doc's `*.publish.*`/`*.tmp` ignore advice."
+  - "Promoted the contracts proposed convention `unsettled-contracts-inherit-their-uncertainty` to CONVENTIONS.md C03 rather than leaving it pending, because it has now been applied by three independent phases and is mechanized in core/findings.ts."
+  - "Closed cf-arch-2 by specifying every serialized shape field-by-field in the protocols primary output and the state-and-storage secondary, rather than deferring the remaining shapes to porting: persistence-format extraction is this phase's declared rubric, and the porting bundle is a compression boundary that should cite the schemas, not re-derive them."
+  - "Routed the hand-rolled-YAML-vs-real-parser decision to porting (cf-protocols-1) instead of choosing here, because the answer depends on the target language's YAML ecosystem and scalar semantics."
+proposed_conventions:
+  - name: markdown-contracts-are-wire-format
+    rule: "Every framework parser that reads a phase output keys on an exact Markdown shape — the `## Validation` / `## Coverage and limits` / `## Pass N` headings, the fixed coverage bullet labels, and table headers like `| # | Location | … | Evidence Level | Action |` — so any reimplementation must preserve those headings, labels, and column names verbatim; changing them makes the parser silently see nothing rather than fail."
+    evidence: "core/pipeline.ts (lastIndexOf('## Validation'), parseOverallLine), core/coverage.ts (LEDGER_LABELS + fixed bullet labels), core/findings.ts (header-driven table parse), core/completion.ts (visible-heading checks for '## Completion log' / '## Pending proposals'), core/dashboard-writer.ts (reads the first lines under '## Summary')."
+closeout_summary: "Cataloged 17 protocol boundaries, 7 state machines, and field-by-field schemas for every on-disk/wire format (closing cf-arch-2); closed cf-contracts-1 (docs/library-format.md matches core/library.ts) and cf-contracts-2 (dashboard HTML body + data sources cataloged); promoted CONVENTIONS C03; re-affirmed the three runtime questions and routed the YAML-parser decision to porting."
+closeout_content: |-
+  # Closeout — protocols
+
+  ## Summary
+
+  The phase extracted CodeCartographer's protocol and storage layer: a 17-protocol event catalog, seven state machines, field-by-field schemas for every persistent and wire format, and a compatibility-hazard table. It closed the three items routed to it — `cf-arch-2`, `cf-contracts-1`, and `cf-contracts-2` — and promoted the pending contracts convention to `CONVENTIONS.md` C03. The next phase (`defect-scan-semantic`) starts from a specified protocol surface with every runtime/platform/network claim still carrying `verify at runtime`.
+
+  ## Files Touched
+
+  - **Added:** `.codecarto/findings/protocols/protocols-and-state.md`; `.codecarto/scratch/checkpoints/protocols.md`; `.codecarto/scratch/handoffs/protocols.yaml`.
+  - **Modified (append):** `.codecarto/findings/public-surfaces/public-surfaces.md`, `.codecarto/findings/runtime-lifecycle/runtime-lifecycle.md`, `.codecarto/findings/state-and-storage/state-and-storage.md`, `.codecarto/findings/config-model/config-model.md`.
+  - **Modified (orchestrator):** `.codecarto/CONVENTIONS.md` (promoted C03).
+  - **Deleted:** none.
+
+  ## Tests / Gates
+
+  | Gate | Result | Notes |
+  |---|---|---|
+  | Phase validation (6 criteria) | PASS | Appended to the primary output; no test execution available this session. |
+  | Runtime probes | not run | No execution tool; all platform/network claims remain `verify at runtime`. |
+
+  ## Decisions Beyond Prompt
+
+  - **docs/library-format.md parity accepted.** Reading the doc against `core/library.ts` shows every field, path, ordering, and guard matches; only two cosmetic placeholder drifts (staging/temp suffix naming) remain, both covered by the doc's ignore globs. No schema change; the doc stays authoritative.
+  - **Promoted the contracts convention to C03.** `unsettled-contracts-inherit-their-uncertainty` has been applied by three independent phases and is mechanized in `core/findings.ts`, meeting the promotion bar.
+  - **cf-arch-2 closed in this phase, not deferred.** Persistence-format extraction is the protocols rubric; the porting bundle should cite the schemas rather than re-derive them.
+  - **YAML parser decision routed to porting.** Whether to adopt a full YAML library is a per-language synthesis decision (`cf-protocols-1`).
+
+  ## Proposed Conventions
+
+  ### C? `markdown-contracts-are-wire-format`
+
+  **Why:** Several framework parsers read phase outputs by exact Markdown shape; a reimplementation that changes a heading, bullet label, or table header makes the parser silently see nothing.
+
+  **How to apply:** Preserve `## Validation`, `## Coverage and limits`, `## Pass N`, the five coverage bullet labels, and the findings table header (`Evidence Level` / `Action`) verbatim in any port.
+
+  ## Open Questions Left Behind
+
+  | ID | Kind | Description | Deferred Reason |
+  |---|---|---|---|
+  | q-openrouter-batch-semantics | needs-runtime-test | OpenRouter Batch API quota/`:batch`/reasoning contract | Needs a live probe |
+  | q-pi-sdk-execution-parity | needs-runtime-test | Pi vs MCP execution outcome parity | Needs both surfaces run |
+  | q-node-windows-fs-semantics | needs-runtime-test | Windows/macOS lock/rename/containment/git behavior | Platform behavior |
+  | q-npm-tarball-template-parity | needs-fixture-capture | npm tarball template byte-parity | Needs packing + diffing |
+
+  ## Carry-Forward Routed
+
+  | ID | Target Phase | Description | Deferred Reason |
+  |---|---|---|---|
+  | cf-protocols-1 | porting | Hand-rolled YAML subset vs a full YAML library | Per-language synthesis decision |
+
+  ## Next Session Pointer
+
+  `defect-scan-semantic` reads `findings/protocols/protocols-and-state.md` (required read) alongside contracts and mechanical defects. Its Pass 3 (concurrency/resources) rubric owns the lock/stale-break/commit-point races mapped in SM2/SM3/SM4 and the carry-forwards `cf-arch-3`, `cfs-mech-1`, `cfs-mech-2`, `cfs-mech-3`; the protocol catalog names the exact lock primitives and ordering those findings must cite. Every finding landing on the OpenRouter API or non-POSIX filesystem must inherit `verify at runtime` per CONVENTIONS C03.
