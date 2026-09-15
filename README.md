@@ -20,7 +20,7 @@
 ```
 
 <p align="center">
-  <img src="docs/demo-dashboard-hero.png" alt="CodeCartographer dashboard — a mid-run pipeline with architecture and defect-scan phases complete, contracts in progress, per-phase token and tool-use telemetry.">
+  <img src="docs/demo-dashboard-hero.png" alt="CodeCartographer's dashboard after running the full deep-audit pipeline on its own repository — 7/7 phases complete, 50M tokens and 618 tool uses across 77 minutes, seven open questions and twelve post-pipeline items routed, no blocking artifact gaps.">
 </p>
 
 ---
