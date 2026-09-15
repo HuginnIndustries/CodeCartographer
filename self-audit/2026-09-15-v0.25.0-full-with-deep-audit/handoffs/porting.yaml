@@ -1,0 +1,62 @@
+schema_version: 1
+phase_id: porting
+owner_notes:
+  - "Primary output .codecarto/findings/porting/reverse-engineering-bundle.md; validation PASS (7/7 pipeline criteria). The bundle synthesizes all five upstream reports (architecture, contracts, protocols, both defect scans) into a 27-feature contract table, a 24-row Defect Synthesis covering all 27 findings (1 high + 10 medium individually, 16 lows in 13 shared-root-cause groups), a consolidated portability-hazard table, and a compact Source Index with per-row deep-read triggers."
+  - "Closed the routed item cf-protocols-1 in the output's §YAML Codec Decision with a fixed seven-constraint decision framework (duplicate-key refusal, prototype-pollution guard in mappings AND sequence merges, scalar round-trip quoting, flow-collection policy, key order, tab/multi-doc errors, determinism) plus a reproduce-or-re-impose-behind-an-adapter policy; the concrete per-stack library choice is deferred to reimplementation-spec as cf-porting-1. No full source re-walk was performed — the bundle is a synthesis, and the load-bearing defect/contradiction claims were re-confirmed by targeted source reads (core/findings.ts, core/status.ts:520-575, core/workspace.ts:425-458, core/orchestrator-config.ts:245-289, core/library.ts:610-625,905-1005, core/broadside/verify.ts:133-188, extensions/codecarto/phase-compaction.ts:70-89, mcp-server/server.ts:673-710)."
+  - "Contradiction sweep resolved: the cfs-mech-3 clause that refreshScaffold 'fires writeDashboard' is absent from the current source (independently re-confirmed at core/workspace.ts:430-458 — only the copyFile loop, ensureWorkspaceGitignore, and the THREAD_LOG append). Porting reproduces finding 3.3 (lock-scope gap + non-atomic copy) and not the writeDashboard clause; closed rather than re-routed. The carried Pi-count (20, not ~21) and README Broad-Side-action contradictions are re-affirmed."
+  - "Orchestrator duties done. Promoted the single pending proposal lock-scope-covers-derived-state-writers to CONVENTIONS.md C05 (no pending proposals remain; this handoff stages none). Re-triaged all four inherited questions: q-node-windows-fs-semantics, q-openrouter-batch-semantics, and q-pi-sdk-execution-parity remain needs-runtime-test (none became answerable by reading; the targeted reads confirm only what the code does), and q-npm-tarball-template-parity remains needs-fixture-capture. No row in the bundle asserts one of their candidate answers with a settled action: defect rows 6.1/6.2/6.3/6.4/4.3 are external-behavior claims with verify at runtime, and the code's own lock/ordering/redaction defects carry settled fix-before-porting actions."
+  - "Defect dispositions split as: fix before porting — 3.1, 3.2, 3.3, 3.4, 4.1, plus lows 2.1, 3.5, 3.7, 5.2; port differently — 1.1 (module cycle), L1/1.2 (dependency direction), L2/1.3 (YAML prototype-pollution gap), L3/1.4+1.5+1.6+2.3 (Broad-Side robustness cluster), 3.6, 4.2, 5.1, 5.3, 6.5; verify at runtime — 6.1, 6.2, 6.3, 6.4, 4.3. No finding is leave behind. All five declared secondary outputs were appended with a dated 2026-09-15 porting-phase section (build-and-deploy received its first addendum since architecture)."
+open_questions: []
+carry_forward:
+  - id: cf-porting-1
+    kind: defer-to-phase
+    target_phase: reimplementation-spec
+    description: "Select the concrete YAML parser/library for the target stack against the seven dialect constraints fixed in the bundle's §YAML Codec Decision (duplicate-key refusal, prototype-pollution guard, scalar round-trip quoting, flow-collection policy, key order, tab/multi-doc errors, determinism), and pin it with ported round-trip/coercion tests."
+    deferred_reason: "The dialect's constraints are fixed by the porting phase, but the library choice is language-specific and reimplementation-spec is where the target stack is locked."
+  - id: cf-porting-2
+    kind: defer-to-phase
+    target_phase: reimplementation-spec
+    description: "Decide the scope cut for the optional subsystems (Broad-Side provider adapter, versioned library, dashboard, Pi UI) and pin the concurrency redesign's concrete choices (owner-liveness lock, compare-and-delete removal, one writer-class per state file per CONVENTIONS C05, staged/atomic scaffold refresh) as required design elements."
+    deferred_reason: "The bundle fixes each defect's required design consequence and each feature's priority; the spec decides what ships and names the primitives."
+carry_forward_closures:
+  - cf-protocols-1
+open_question_closures: []
+post_pipeline: []
+decisions:
+  - "Closed cf-protocols-1 with a seven-constraint YAML codec decision framework (reproduce the dialect, or wrap a full parser in an adapter that re-imposes its contracts) rather than choosing a parser, because the port is language-agnostic and the library choice belongs to reimplementation-spec (routed as cf-porting-1)."
+  - "Kept the porting Defect Synthesis split exactly as the semantic phase left it — fix before porting for the code's own lock/ordering/redaction defects (3.1-3.4, 3.7, 4.1, plus lows 2.1, 3.5, 5.2) and verify at runtime for the external-behavior hazards (6.1-6.4, 4.3) — so no unsettled diagnosis is flattened into a settled one (CONVENTIONS C03)."
+  - "Resolved the cfs-mech-3 writeDashboard contradiction inside the porting bundle with an independent source read (core/workspace.ts:430-458 contains no writeDashboard on the refresh path), closing it rather than re-routing, and reproduced only the confirmed 3.3 behavior."
+  - "Promoted the staged proposal lock-scope-covers-derived-state-writers to CONVENTIONS.md C05 at the porting boundary rather than leaving it pending: it generalizes across semantic findings 3.3, 3.4, 3.7, and 5.3 and is the writer-side companion to C02."
+proposed_conventions: []
+closeout_summary: "Porting synthesis: 27-feature contract table, P1-P17/SM1-SM7 protocol notes, consolidated hazards, and a 24-row Defect Synthesis covering all 27 findings; closed cf-protocols-1 with a YAML codec decision framework and resolved the cfs-mech-3 writeDashboard contradiction; promoted lock-scope-covers-derived-state-writers to C05."
+closeout_content: |-
+  # Closeout — porting
+
+  ## Summary
+
+  - Primary output: `.codecarto/findings/porting/reverse-engineering-bundle.md`; validation **PASS** (7/7 pipeline criteria).
+  - Synthesized architecture, contracts, protocols, and both defect scans into a single compression boundary for `reimplementation-spec`: system summary, layer map with dependency order, 27-feature contract table, P1-P17/SM1-SM7 protocol/state notes, consolidated portability hazards, observed-vs-inferred separation, domain glossary, a 15-row Source Index with deep-read triggers, and a 24-row Defect Synthesis covering all 27 findings.
+  - Closed the routed item `cf-protocols-1`; resolved the `cfs-mech-3` `writeDashboard` contradiction; appended a porting-phase section to all five secondary outputs.
+  - No tests and no runtime probes ran; the load-bearing defect and contradiction claims were re-confirmed by targeted source reads only.
+
+  ## Defect synthesis
+
+  - **1 high:** 6.1 (`atomicWriteFile` has no non-atomic fallback) — `external-behavior claim`, `verify at runtime`.
+  - **10 medium:** 1.1 (module cycle), 2.2 (refresh no-rollback), 6.2/6.3/6.4 (POSIX lock/containment/git — `verify at runtime`), 3.1 (removal-lock race), 3.2 (fixed-TTL stale break), 3.3 (refresh lock-scope gap), 3.4 (unlocked derived-index writers), 4.1 (`verify` redaction bypass) — the last five are `observed fact`, `fix before porting`.
+  - **16 low in 13 groups:** module dependency direction (1.2); YAML `__proto__` gap (1.3); Broad-Side robustness cluster (1.4/1.5/1.6/2.3); dashboard result ignored (2.1); hardcoded constants (6.5); pre-lock closure checks (3.6); mode-guard reset (4.2); unlocked config RMW (3.7); containment check-then-use (4.3, `verify at runtime`); re-entry check-then-act (3.5); child-guard divergence (5.1); THREAD_LOG non-idempotence (5.2); `listEntries` rewrite (5.3).
+  - No finding is `leave behind`; every `verify at runtime` row inherits `q-node-windows-fs-semantics`.
+
+  ## cf-protocols-1 closure
+
+  The port must satisfy seven dialect constraints — duplicate-key refusal, a `__proto__`/prototype-pollution guard in **both** mappings and sequence-item merges, the scalar round-trip quoting rule, an explicit flow-collection policy, key order preservation, tab/multi-document rejection, and determinism. It may reproduce the hand-rolled codec or wrap a mature YAML parser in an adapter that re-imposes those contracts; a bare default YAML library is not a port, because every workflow file is a wire format parsed by the same codec. The per-stack library choice is routed to `reimplementation-spec` as `cf-porting-1`.
+
+  ## Contradiction resolved
+
+  `status.yaml` and `mechanical-defects.md` summarized `cfs-mech-3` as "appends `THREAD_LOG.md` and fires `writeDashboard` (fire-and-forget)". Reading `core/workspace.ts:430-458` confirms the lock-scope gap, the non-atomic `copyFile`, and the undeduped `THREAD_LOG` append, but there is **no `writeDashboard` call on the refresh path**. Porting reproduces finding 3.3 and not the `writeDashboard` clause. Also re-affirmed: Pi exposes 20 commands (not "~21"), and Broad-Side implements five actions including `verify`.
+
+  ## Decisions Beyond Prompt
+
+  - Closed `cf-protocols-1` with a constraint framework rather than a parser choice, because the port is language-agnostic.
+  - Preserved the semantic phase's defect dispositions exactly, keeping `verify at runtime` on the external-behavior hazards (C03).
+  - Resolved the `cfs-mech-3` contradiction in the bundle with an independent source read rather than re-routing it.
+  - Promoted `lock-scope-covers-derived-state-writers` to CONVENTIONS C05 (orchestrator duty).

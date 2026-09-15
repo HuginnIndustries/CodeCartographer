@@ -1,0 +1,226 @@
+project_name: CodeCartographer
+pipeline: workflow/pipeline-full-with-deep-audit.yaml
+current_phase: complete
+last_updated: "2026-09-15T05:50:45.499Z"
+schema_version: 1
+phases:
+  architecture:
+    status: complete
+    owner_notes:
+      - "Completed via /codecarto-complete."
+      - "Primary output: .codecarto/findings/architecture/architecture-map.md"
+      - "Validation: PASS"
+      - "Self-audit run: analyzed the CodeCartographer framework itself. Read all 19 core/ modules in full (dashboard.ts head only), all 14 core/broadside/ modules by export surface (constants/types/schemas/state/client/submit/repo head in full), the complete extensions/codecarto/index.ts plus auto-runner.ts and agent-runner.ts, and the complete mcp-server/server.ts."
+      - "Three delivery surfaces (drop-in .codecarto/ template, Pi extension, MCP server) share one core/; byte-identical phase prompts and validation is the load-bearing invariant. The only module-graph cycle found is core/index.ts <-> core/dashboard-writer.ts (works via call-time bindings)."
+      - "All five declared secondary outputs were written as catalog-level documents; the primary architecture map summarizes and points at them rather than duplicating their detail."
+    outputs_present:
+      - findings/architecture/architecture-map.md
+    open_questions: []
+    carry_forward: []
+  defect-scan-mechanical:
+    status: complete
+    owner_notes:
+      - "Completed via /codecarto-complete."
+      - "Primary output: .codecarto/findings/defect-scan-mechanical/mechanical-defects.md"
+      - "Validation: PASS"
+      - "Primary output findings/defect-scan-mechanical/mechanical-defects.md; validation PASS (9/9 pipeline criteria). 14 mechanical findings: 1 high, 5 medium, 8 low; Pass 1 = 6, Pass 2 = 3, Pass 6 = 5."
+      - "Routed item cf-arch-4 closed: the core/index.ts <-> core/dashboard-writer.ts cycle (finding 1.1) and the core/broadside/state.ts -> client.ts ordering drift (finding 1.2) both work under Node/TypeScript because bindings are dereferenced at call time; each is recorded as a latent portability/refactor hazard with action port differently, so the port must break the cycle rather than reproduce it."
+      - "Orchestrator duties done: promoted the two architecture CONVENTIONS proposals to C01 (byte-identical surface prompts) and C02 (idempotent post-commit writes), leaving none pending. Re-triaged the four inherited questions: q-openrouter-batch-semantics, q-pi-sdk-execution-parity, and q-node-windows-fs-semantics remain needs-runtime-test; q-npm-tarball-template-parity remains needs-fixture-capture. No finding in this phase asserts a candidate answer to any of them."
+      - "No execution tool was available this session, so zero runtime probes ran; the four Pass 6 portability findings are external-behavior claims carrying verify at runtime, tied to q-node-windows-fs-semantics. Probe stubs are named (not written) in the report's Runtime probes table for the porting phase to pick up."
+      - "Contradiction sweep: no measured contradiction with the architecture owner_notes. Claim (a) (core/types,utils,yaml is a stable base; no core->wrapper imports) was re-checked by grep and holds. Claim (c)'s POSIX lock/rename mechanics were confirmed by reading; its Windows-portability portion is left verify at runtime. Claim (b)'s byte-identical prompt assembly is confirmed at source level (both surfaces call buildPrompt); execution parity is not, and remains q-pi-sdk-execution-parity."
+    outputs_present:
+      - findings/defect-scan-mechanical/mechanical-defects.md
+    open_questions: []
+    carry_forward: []
+  contracts:
+    status: complete
+    owner_notes:
+      - "Completed via /codecarto-complete."
+      - "Primary output: .codecarto/findings/contracts/behavioral-contracts.md"
+      - "Validation: PASS"
+      - "Primary output: .codecarto/findings/contracts/behavioral-contracts.md; validation appended (Overall: PASS, 7/7 criteria). Produced 19 shared workflow-control feature contracts, plus the drop-in workspace, the versioned library, and the dashboard as artifact contracts, and a 30-scenario black-box acceptance list."
+      - "Closed routed item cf-arch-1 for BOTH surfaces: the primary output carries per-tool defaults/side-effects/error behavior for all 22 MCP tools and the argument grammar/flag-parser defaults for all 20 Pi commands; the full per-argument catalog is appended to findings/public-surfaces/public-surfaces.md under '2026-09-15 — contracts phase'. Recorded in carry_forward_closures."
+      - "Orchestrator duties done. Re-triage: q-openrouter-batch-semantics, q-pi-sdk-execution-parity, and q-node-windows-fs-semantics each remain needs-runtime-test (none became answerable by reading); q-npm-tarball-template-parity remains needs-fixture-capture. No contract or finding asserts a candidate answer to any of them with a settled action — every behavior landing on atomicWriteFile, the lock, symlink containment, git, or the OpenRouter API carries verify at runtime, inheriting q-node-windows-fs-semantics (6.1-6.4) and q-openrouter-batch-semantics."
+      - "Secondary outputs all written: findings/public-surfaces/public-surfaces.md and findings/config-model/config-model.md, findings/runtime-lifecycle/runtime-lifecycle.md, and findings/state-and-storage/state-and-storage.md each gained a dated '2026-09-15 — contracts phase' section (mode: append). config-model and state-and-storage carry the verify-at-runtime hedge explicitly."
+      - "Contradiction sweep: one measured contradiction with an upstream summarized claim — architecture-map.md and public-surfaces.md say '~21' Pi slash commands, but tests/pi-parity-commands.test.mjs pins commands.size === 20 and README.md lists 20. This phase uses 20 (observed fact); README also still lists only four Broad-Side actions (submit/collect/status/models) while the code adds verify. No contradiction with defect-scan-mechanical owner_notes. Mechanical findings 1.1/2.2 surfaces are described as port differently, not asserted runtime-correct."
+      - "No runtime probes ran this session (no execution tool). Every test citation is 'the test file pins X', not an observed pass; platform/network claims are hedged."
+    outputs_present:
+      - findings/contracts/behavioral-contracts.md
+    open_questions: []
+    carry_forward: []
+  protocols:
+    status: complete
+    owner_notes:
+      - "Completed via /codecarto-complete."
+      - "Primary output: .codecarto/findings/protocols/protocols-and-state.md"
+      - "Validation: PASS"
+      - "Primary output findings/protocols/protocols-and-state.md; validation PASS (6/6 pipeline criteria). Produced a 17-protocol event catalog (P1-P17), 7 state machines (SM1-SM7), field-by-field persistent schemas for every on-disk/wire format, and a 14-row compatibility-hazard table."
+      - "Closed all three routed items: cf-arch-2 (status.yaml, handoff, amendment, Broad-Side state.json, library metadata.yaml/index.yaml now specified field-by-field in the primary output and the state-and-storage secondary); cf-contracts-1 (docs/library-format.md read against core/library.ts — every field, path, ordering, and guard matches; only two cosmetic placeholder drifts in staging/temp-suffix naming, `*.publish.*`/`*.tmp` globs still cover them — the doc stays authoritative); cf-contracts-2 (core/dashboard.ts read in full + dashboard-writer.ts; the HTML body's sections, counts, citations, narration, embedded JSON export, and data sources are now cataloged)."
+      - "Orchestrator duties done. Promoted the single pending proposal (`unsettled-contracts-inherit-their-uncertainty`) to CONVENTIONS.md C03 — it had been applied by architecture, defect-scan-mechanical, and contracts and is mechanized in core/findings.ts's pairing gate. Re-triaged the four inherited questions: q-openrouter-batch-semantics, q-pi-sdk-execution-parity, and q-node-windows-fs-semantics remain needs-runtime-test (reading client.ts/models.ts/verify.ts confirms only what the code sends and how it parses, not what the provider does); q-npm-tarball-template-parity remains needs-fixture-capture. No schema note, event, hazard row, or state machine in this report asserts a candidate answer to any of them with a settled action — every claim landing on the OpenRouter API, a lock/rename, containment, or bare git carries verify at runtime."
+      - "Secondary outputs all written (mode: append): public-surfaces (protocol boundary catalog + two corrections — Pi has 20 commands, not '~21'; Broad-Side actions include verify), runtime-lifecycle (SM1-SM7 + Pi hook ordering), state-and-storage (the cf-arch-2 field-by-field catalog + persistence semantics), config-model (three-system config propagation protocol). None dropped silently."
+      - "No runtime probes ran this session (no execution tool). Every test citation is 'the test file pins X', not an observed pass; platform/network claims are hedged. Contradiction sweep: the Pi-count and README-Broad-Side-action contradictions recorded by contracts are re-affirmed with cited evidence, not smoothed over; no new contradiction with upstream owner_notes."
+    outputs_present:
+      - findings/protocols/protocols-and-state.md
+    open_questions: []
+    carry_forward: []
+  defect-scan-semantic:
+    status: complete
+    owner_notes:
+      - "Completed via /codecarto-complete."
+      - "Primary output: .codecarto/findings/defect-scan-semantic/semantic-defects.md"
+      - "Validation: PASS"
+      - "Primary output .codecarto/findings/defect-scan-semantic/semantic-defects.md; validation PASS (9/9 pipeline criteria). 13 findings: 0 critical, 0 high, 5 medium, 8 low (Pass 3 = 7, Pass 4 = 3, Pass 5 = 3)."
+      - "Closed all four routed items. cfs-mech-1 (3.1): the .break stale-break race is real and worse than described — the non-atomic stat -> describeLockHolder -> rm in breakStaleLock can delete a freshly acquired lock. cfs-mech-2 (3.2): confirmed; the publish lock held across reindex is the concrete long-held case. cfs-mech-3 (3.3): lock-scope and non-atomic-copy parts confirmed; the claimed writeDashboard call is NOT in the current refresh path. cf-arch-3 (3.1-3.7): each mapped path audited; the SM2 completion commit point itself is sound, only its pre-lock integrity checks are a narrow TOCTOU (3.6)."
+      - "New defects beyond the routed ones: 3.4 (standalone library_reindex/list write index.yaml without the publish lock; lost update), 3.5 (sub-agent re-entry guard is check-then-act across the async prompt/LLM-rewrite prelude), 3.7 (writeLibraryConfig unlocked + non-atomic), 4.1 (Broad-Side verify uploads raw file content to OpenRouter without redactSecrets, bypassing the submit redaction guarantee), 4.2 (codecartoModeActive reset on session_start leaves the orchestrator guard off after a reload), 5.1-5.3 (child-guard parity comment, refresh THREAD_LOG non-idempotence, listEntries rewriting a corrupt index)."
+      - "Orchestrator duties done. Promoted the single pending proposal markdown-contracts-are-wire-format to CONVENTIONS.md C04 (no pending proposals remain except any this handoff stages). Re-triaged all four inherited questions: q-node-windows-fs-semantics, q-openrouter-batch-semantics, q-pi-sdk-execution-parity remain needs-runtime-test; q-npm-tarball-template-parity remains needs-fixture-capture. Only finding 4.3 (readSpecArg check-then-use on a symlinked path) inherits q-node-windows-fs-semantics at verify at runtime; the lock findings are defects in the code's own ordering logic and carry settled actions."
+      - "Contradiction sweep: one measured contradiction with a summarized upstream claim. status.yaml and mechanical-defects.md say refreshScaffold 'fires writeDashboard (fire-and-forget) outside the status.yaml lock'; core/workspace.ts:430-458 and both callers (mcp-server/server.ts:1216-1237, extensions/codecarto/index.ts:1708-1743) contain no writeDashboard on the refresh path. The lock-scope gap and THREAD_LOG append are real; the writeDashboard clause is not. Routed here for the porting phase. The protocols placeholder drifts and C03 promotion are re-confirmed; no other contradiction."
+      - "No runtime probes ran (no execution tool); every finding is a source read. The three lock findings are interleavings argued from source; a multi-process probe could confirm or narrow them (named in the report's Runtime probes table and added as a post_pipeline spike)."
+    outputs_present:
+      - findings/defect-scan-semantic/semantic-defects.md
+    open_questions:
+      -
+        id: q-node-windows-fs-semantics
+        kind: needs-runtime-test
+        description: "Do lock-file O_EXCL, atomic rename over an existing file, symlink-aware path containment, and bare-git invocation behave on Windows/macOS as the POSIX-written code expects? Finding 4.3 (readSpecArg containment is check-then-use on a path) inherits it."
+        deferred_reason: "Platform behavior cannot be confirmed by reading; CI runs Linux only. Re-triaged this phase: still needs-runtime-test."
+      -
+        id: q-openrouter-batch-semantics
+        kind: needs-runtime-test
+        description: "The exact OpenRouter Batch API contract Broad-Side relies on — concurrent-job quota (job-submission-count), which catalog ids have :batch endpoints, and reasoning acceptance — is asserted in comments."
+        deferred_reason: "External service behavior; needs a live probe or the provider's source. Re-triaged: still needs-runtime-test. Finding 4.1 is about what the code sends (observed fact), not what the provider does, so it does not answer this."
+      -
+        id: q-pi-sdk-execution-parity
+        kind: needs-runtime-test
+        description: "Do Pi sub-agent execution (tool sandbox, compaction, session persistence) and an MCP host's execution produce equivalent outcomes given byte-identical prompts?"
+        deferred_reason: "Requires running the same phase under both surfaces and comparing. Re-triaged: still needs-runtime-test. Finding 3.5 is about the in-process Pi re-entry guard, not outcome parity."
+      -
+        id: q-npm-tarball-template-parity
+        kind: needs-fixture-capture
+        description: "Does the published npm tarball's .codecarto/ template and agent-skill/ byte-match this checkout?"
+        deferred_reason: "Needs packing the tarball and diffing — a fixture capture, not a source read. Re-triaged: still needs-fixture-capture."
+    carry_forward: []
+  porting:
+    status: complete
+    owner_notes:
+      - "Completed via /codecarto-complete."
+      - "Primary output: .codecarto/findings/porting/reverse-engineering-bundle.md"
+      - "Validation: PASS"
+      - "Primary output .codecarto/findings/porting/reverse-engineering-bundle.md; validation PASS (7/7 pipeline criteria). The bundle synthesizes all five upstream reports (architecture, contracts, protocols, both defect scans) into a 27-feature contract table, a 24-row Defect Synthesis covering all 27 findings (1 high + 10 medium individually, 16 lows in 13 shared-root-cause groups), a consolidated portability-hazard table, and a compact Source Index with per-row deep-read triggers."
+      - "Closed the routed item cf-protocols-1 in the output's §YAML Codec Decision with a fixed seven-constraint decision framework (duplicate-key refusal, prototype-pollution guard in mappings AND sequence merges, scalar round-trip quoting, flow-collection policy, key order, tab/multi-doc errors, determinism) plus a reproduce-or-re-impose-behind-an-adapter policy; the concrete per-stack library choice is deferred to reimplementation-spec as cf-porting-1. No full source re-walk was performed — the bundle is a synthesis, and the load-bearing defect/contradiction claims were re-confirmed by targeted source reads (core/findings.ts, core/status.ts:520-575, core/workspace.ts:425-458, core/orchestrator-config.ts:245-289, core/library.ts:610-625,905-1005, core/broadside/verify.ts:133-188, extensions/codecarto/phase-compaction.ts:70-89, mcp-server/server.ts:673-710)."
+      - "Contradiction sweep resolved: the cfs-mech-3 clause that refreshScaffold 'fires writeDashboard' is absent from the current source (independently re-confirmed at core/workspace.ts:430-458 — only the copyFile loop, ensureWorkspaceGitignore, and the THREAD_LOG append). Porting reproduces finding 3.3 (lock-scope gap + non-atomic copy) and not the writeDashboard clause; closed rather than re-routed. The carried Pi-count (20, not ~21) and README Broad-Side-action contradictions are re-affirmed."
+      - "Orchestrator duties done. Promoted the single pending proposal lock-scope-covers-derived-state-writers to CONVENTIONS.md C05 (no pending proposals remain; this handoff stages none). Re-triaged all four inherited questions: q-node-windows-fs-semantics, q-openrouter-batch-semantics, and q-pi-sdk-execution-parity remain needs-runtime-test (none became answerable by reading; the targeted reads confirm only what the code does), and q-npm-tarball-template-parity remains needs-fixture-capture. No row in the bundle asserts one of their candidate answers with a settled action: defect rows 6.1/6.2/6.3/6.4/4.3 are external-behavior claims with verify at runtime, and the code's own lock/ordering/redaction defects carry settled fix-before-porting actions."
+      - "Defect dispositions split as: fix before porting — 3.1, 3.2, 3.3, 3.4, 4.1, plus lows 2.1, 3.5, 3.7, 5.2; port differently — 1.1 (module cycle), L1/1.2 (dependency direction), L2/1.3 (YAML prototype-pollution gap), L3/1.4+1.5+1.6+2.3 (Broad-Side robustness cluster), 3.6, 4.2, 5.1, 5.3, 6.5; verify at runtime — 6.1, 6.2, 6.3, 6.4, 4.3. No finding is leave behind. All five declared secondary outputs were appended with a dated 2026-09-15 porting-phase section (build-and-deploy received its first addendum since architecture)."
+    outputs_present:
+      - findings/porting/reverse-engineering-bundle.md
+    open_questions: []
+    carry_forward: []
+  reimplementation-spec:
+    status: complete
+    owner_notes:
+      - "Completed via /codecarto-complete."
+      - "Primary output: .codecarto/findings/reimplementation-spec/reimplementation-spec.md"
+      - "Validation: PASS"
+      - "Primary output .codecarto/findings/reimplementation-spec/reimplementation-spec.md; validation PASS (8/8 pipeline criteria). The spec is language-agnostic (variant: language-agnostic, selection: auto-default) because the phase ran under /codecarto-next --auto, which suppresses the Strategic Alignment Hook. Produced 20 conceptual modules with layer split, 46 numbered required behaviors, 41 black-box acceptance scenarios, a protocol/persistence section (P1-P17, SM1-SM7, three persistence classes), an external-dependency stance table, a 19-row portability-hazard table, a 24-row Defect Design Consequences table covering every row of the bundle's Defect Synthesis, a 7-entry Known Unknowns table, and a 14-entry Spike List."
+      - "Closed BOTH routed items. cf-porting-1: chose the reproduce-a-small-codec default, with an explicit wrap-and-adapter alternative and a per-ecosystem candidate table, plus the seven-constraint conformance test obligation (the concrete library pick is registered as q-yaml-codec-library-choice because the target stack is unlocked). cf-porting-2: chose three scope tiers (minimum viable = core + one CLI surface + drop-in template; major-workflow = dashboard/config/refresh/amend/usage/second surface; full = library/Broad-Side/Pi UI/synthesis) and pinned the concurrency redesign as required design elements 24-29 (state-file-to-lock map, owner-liveness, compare-and-delete, remover-vs-acquirer closure, one writer-class per state file per C05, deliberate re-entrancy) plus staged/atomic scaffold refresh (behavior 22)."
+      - "SKILL discipline honored: every verify-at-runtime row (6.1, 6.2, 6.3, 6.4, L9) was converted to a Spike List entry and NOT into a design consequence; only fix-before-porting and port-differently rows received design consequences. No finding is leave behind, stated explicitly. Five targeted deep reads were made and recorded in Coverage and limits (core/yaml.ts, core/status.ts:442-610, core/utils.ts:1-120, core/workspace.ts:422-465 + core/library.ts:587-625,947-1001, core/broadside/verify.ts:122-181), each justified by a cf-porting-* closure or a defect rationale."
+      - "Orchestrator duties done. Re-triage: q-node-windows-fs-semantics, q-openrouter-batch-semantics, and q-pi-sdk-execution-parity remain needs-runtime-test; q-npm-tarball-template-parity remains needs-fixture-capture; none became answerable by the deep reads (which confirm only what the code does). No row in the spec asserts one of their candidate answers with a settled action. Three NEW needs-maintainer-decision questions registered for the suppressed hook's choices: q-target-stack, q-scope-cut, q-yaml-codec-library-choice."
+      - "Contradiction sweep: one measured contradiction with the porting bundle's one-line 3.1 summary, routed through owner_notes and the spec's Coverage and limits rather than smoothed over. Current core/status.ts already token-checks releaseOwnedLock and serializes removals under <lock>.break (so 'unguarded .break stale-break' describes an earlier state), but the residual race is real for a different reason: the main-lock open() path does not consult the removal claim, so a fresh acquirer can be created between a remover's staleness re-check and its rm and then deleted. The design consequence (behaviors 25-27) is unchanged. The bundle's other load-bearing reads were re-confirmed by source read: refreshScaffold still copies one-at-a-time with no lock and an unduped THREAD_LOG append (3.3/L12); reindex still writes the index without .publish.lock (3.4); verify's reader still returns raw lines with no redaction (4.1); atomicWriteFile still has no fallback (6.1); the YAML sequence-merge path still plain-assigns parsed keys (L2). The carried contradictions (Pi = 20 commands; README lists four Broad-Side actions while code implements five incl. verify) are re-affirmed."
+      - "No tests and no runtime probes ran this session (no execution tool). Every durability/lock/containment/git/OpenRouter/SDK claim is an external-behavior claim or portability hazard with verify at runtime per C03."
+    outputs_present:
+      - findings/reimplementation-spec/reimplementation-spec.md
+    open_questions:
+      -
+        id: q-target-stack
+        kind: needs-maintainer-decision
+        description: "Which target language/runtime and project identity should the opinionated spec lock? The auto runner suppressed the Strategic Alignment Hook, so this spec defaulted to language-agnostic and did not choose a stack."
+        deferred_reason: "Only the maintainer can pick the target stack and project identity; an opinionated rerun (post-reimpl-opinionated-spec) consumes the choice."
+      -
+        id: q-scope-cut
+        kind: needs-maintainer-decision
+        description: "Which optional subsystems ship at minimum viable tier — Broad-Side provider adapter, versioned library, dashboard, Pi UI? The spec supplies three scope tiers and defaults all four to major/full parity."
+        deferred_reason: "cf-porting-2's scope half is answered by the three tiers, but the cut is a product decision the maintainer owns."
+      -
+        id: q-yaml-codec-library-choice
+        kind: needs-maintainer-decision
+        description: "Reproduce a small codec, or wrap a mature YAML library in an adapter that re-imposes the seven dialect constraints — and which library per target ecosystem? The spec recommends reproduce-the-codec and supplies a per-ecosystem candidate table."
+        deferred_reason: "Depends on the locked target stack (q-target-stack); the seven-constraint conformance obligation is already fixed."
+    carry_forward: []
+next_actions:
+  - "All phases complete. Review findings; post-pipeline skills: codecarto_list_skills then codecarto_skill on MCP, /codecarto-list-skills then /codecarto-skill on Pi."
+  - "7 open question(s) and 12 post-pipeline item(s) remain — apply resolutions with codecarto_amend on MCP, /codecarto-amend on Pi (write scratch/amendments/<slug>.yaml from templates/amendment.yaml)."
+  - "Publish the finished spec to a library: codecarto_publish on MCP, /codecarto-publish on Pi (create one with codecarto_library_init on MCP, /codecarto-library-init on Pi; see the library guide topic)."
+  - "Dashboard: .codecarto/dashboard.html (refreshed on completion and amendment; re-render on demand with codecarto_dashboard on MCP, /codecarto-dashboard on Pi). Usage totals: codecarto_usage on MCP, /codecarto-usage on Pi."
+post_pipeline:
+  -
+    id: post-arch-context-budget
+    kind: spike
+    description: "Measure architecture-phase context consumption against a >100k-token repository to validate the README's context-budget guidance and the partial-result behavior under pressure."
+    source_phase: architecture
+    status: pending
+  -
+    id: post-mech-windows-fs
+    kind: spike
+    description: "Run the atomic-rename, lock-race, and symlink-containment probes on a Windows runner to close q-node-windows-fs-semantics; scripts are named in mechanical-defects.md under Runtime probes (mechanic-atomic-rename.mjs, mechanic-lock-race.mjs, mechanic-containment.mjs)."
+    source_phase: defect-scan-mechanical
+    status: pending
+  -
+    id: post-mech-import-order
+    kind: spike
+    description: "Static import-graph check for the eventual port: assert the module graph is acyclic and that no module reads a cross-module constant at top level, covering findings 1.1 and 1.2 without a runtime."
+    source_phase: defect-scan-mechanical
+    status: pending
+  -
+    id: post-protocols-openrouter-api
+    kind: spike
+    description: "Probe the live OpenRouter Batch API to close q-openrouter-batch-semantics: which catalog ids actually accept a :batch job, the per-account concurrent-job quota and its error text, and whether reasoning is accepted/required per model. The code asserts all three from comments."
+    source_phase: protocols
+    status: pending
+  -
+    id: post-protocols-pi-mcp-parity
+    kind: spike
+    description: "Run one comparable phase under the Pi sub-agent path and under an MCP host, then diff the resulting primary output and status.yaml transitions, to close q-pi-sdk-execution-parity. Prompts are already test-pinned byte-identical; outcomes are not."
+    source_phase: protocols
+    status: pending
+  -
+    id: post-protocols-npm-template-parity
+    kind: spike
+    description: "Pack the npm tarball and diff its .codecarto/ template and agent-skill/ against this checkout, to close q-npm-tarball-template-parity (a fixture capture, not a source read)."
+    source_phase: protocols
+    status: pending
+  -
+    id: post-sem-concurrency-probes
+    kind: spike
+    description: "Run the three deterministic multi-process probes named in semantic-defects.md §Runtime probes (sem-removal-lock-race.mjs, sem-stale-lock-ttl.mjs, sem-reindex-publish-race.mjs) to confirm or narrow findings 3.1, 3.2, and 3.4 before an implementation acts on them. Scripts are not written."
+    deferred_reason: "No execution tool was available this session; the findings are source-read interleavings."
+    source_phase: defect-scan-semantic
+    status: pending
+  -
+    id: post-reimpl-yaml-codec-conformance
+    kind: spike
+    description: "Port the source dialect's round-trip/coercion cases into the chosen target stack (duplicate-key refusal, __proto__ in mappings AND sequence merges, scalar quoting for '2048'/'true'/'null'/'1.5'/'-'/empty, flow-collection policy, key order, tab and multi-document errors, determinism) and assert the seven-constraint conformance before any workflow file is parsed."
+    source_phase: reimplementation-spec
+    status: pending
+  -
+    id: post-reimpl-lock-redesign-probe
+    kind: spike
+    description: "Prototype and probe the owner-liveness + compare-and-delete lock redesign (spec behaviors 24-27): two-process races with a pre-planted stale lock, a lock held beyond the source's old 60 s TTL, and the remover-vs-acquirer window the current source leaves open; assert exactly one holder at all times and that no live holder's lock is ever deleted."
+    source_phase: reimplementation-spec
+    status: pending
+  -
+    id: post-reimpl-redaction-chokepoint
+    kind: spike
+    description: "Verify the single outbound redaction chokepoint (spec behavior 32) by planting a secret and running the reconnaissance verify tool loop; assert only [REDACTED:…] leaves the process."
+    source_phase: reimplementation-spec
+    status: pending
+  -
+    id: post-reimpl-defect-recheck
+    kind: spike
+    description: "Re-read the current source defect set before an implementation acts on it: the checkout may have advanced during this run (the removal lock already token-checks release), so re-confirm rows 3.1-3.4, 4.1, 6.1, and L2 against the source as built."
+    source_phase: reimplementation-spec
+    status: pending
+  -
+    id: post-reimpl-opinionated-spec
+    kind: amendment
+    description: "Run reimplementation-spec interactively (or amend this one) once q-target-stack, q-scope-cut, and q-yaml-codec-library-choice are ruled on, using templates/reimplementation-spec-opinionated.md to lock the stack, project identity, and scope cut."
+    source_phase: reimplementation-spec
+    status: pending

@@ -1,0 +1,82 @@
+schema_version: 1
+phase_id: contracts
+owner_notes:
+  - "Primary output: .codecarto/findings/contracts/behavioral-contracts.md; validation appended (Overall: PASS, 7/7 criteria). Produced 19 shared workflow-control feature contracts, plus the drop-in workspace, the versioned library, and the dashboard as artifact contracts, and a 30-scenario black-box acceptance list."
+  - "Closed routed item cf-arch-1 for BOTH surfaces: the primary output carries per-tool defaults/side-effects/error behavior for all 22 MCP tools and the argument grammar/flag-parser defaults for all 20 Pi commands; the full per-argument catalog is appended to findings/public-surfaces/public-surfaces.md under '2026-09-15 — contracts phase'. Recorded in carry_forward_closures."
+  - "Orchestrator duties done. Re-triage: q-openrouter-batch-semantics, q-pi-sdk-execution-parity, and q-node-windows-fs-semantics each remain needs-runtime-test (none became answerable by reading); q-npm-tarball-template-parity remains needs-fixture-capture. No contract or finding asserts a candidate answer to any of them with a settled action — every behavior landing on atomicWriteFile, the lock, symlink containment, git, or the OpenRouter API carries verify at runtime, inheriting q-node-windows-fs-semantics (6.1-6.4) and q-openrouter-batch-semantics."
+  - "Secondary outputs all written: findings/public-surfaces/public-surfaces.md and findings/config-model/config-model.md, findings/runtime-lifecycle/runtime-lifecycle.md, and findings/state-and-storage/state-and-storage.md each gained a dated '2026-09-15 — contracts phase' section (mode: append). config-model and state-and-storage carry the verify-at-runtime hedge explicitly."
+  - "Contradiction sweep: one measured contradiction with an upstream summarized claim — architecture-map.md and public-surfaces.md say '~21' Pi slash commands, but tests/pi-parity-commands.test.mjs pins commands.size === 20 and README.md lists 20. This phase uses 20 (observed fact); README also still lists only four Broad-Side actions (submit/collect/status/models) while the code adds verify. No contradiction with defect-scan-mechanical owner_notes. Mechanical findings 1.1/2.2 surfaces are described as port differently, not asserted runtime-correct."
+  - "No runtime probes ran this session (no execution tool). Every test citation is 'the test file pins X', not an observed pass; platform/network claims are hedged."
+open_questions: []
+carry_forward:
+  - id: cf-contracts-1
+    kind: defer-to-phase
+    target_phase: protocols
+    description: "Whether docs/library-format.md (declared authoritative for the library ABI) matches the shapes core/library.ts reads and writes was not checked — docs/* was outside the contracts phase's source scope and architecture read only the directory listing."
+    deferred_reason: "Answerable by reading the doc against core/library.ts; it is a documentation-vs-code parity check, not a runtime question, so it belongs with the protocols phase's persistence-format work (cf-arch-2)."
+  - id: cf-contracts-2
+    kind: defer-to-phase
+    target_phase: protocols
+    description: "The dashboard's rendered content (sections, counts, citations, narration) is contracted only as an artifact contract; the byte-level catalog of the HTML body and its data sources is not extracted."
+    deferred_reason: "Renderer internals are the protocols/state rubric; architecture deferred the dashboard.ts body beyond ~120 lines and this phase did not read it."
+carry_forward_closures:
+  - cf-arch-1
+open_question_closures: []
+post_pipeline: []
+decisions:
+  - "Closed cf-arch-1 by extracting per-argument defaults, side effects, and error behavior into both the contracts primary output (MCP: 22 tools; Pi: 20 commands + 3 flag parsers) and the public-surfaces secondary, rather than leaving the catalog unnamed for the porting phase."
+  - "Routed docs/library-format.md parity to protocols as a carry_forward (cf-contracts-1) instead of registering it as an open question: it is answerable by reading docs against code, so labeling it needs-runtime-test would have been a mislabeled question that suppresses verification."
+  - "Kept every contract that lands on atomicWriteFile durability, the status/publish/usage/state lock, symlink-aware containment, bare-git invocation, or the OpenRouter API at verify at runtime, inheriting q-node-windows-fs-semantics and q-openrouter-batch-semantics; no settled action is asserted for those surfaces."
+proposed_conventions:
+  - name: unsettled-contracts-inherit-their-uncertainty
+    rule: "A user-visible contract (or a finding) that lands on a platform, OS, third-party API, or SDK behavior the source cannot settle must be marked external-behavior claim / portability hazard with the unsettled action verify at runtime, and must not assert one of the open question's candidate answers as settled."
+    evidence: "Applied by architecture, re-affirmed by defect-scan-mechanical (findings 6.1-6.4), and again by contracts for every atomicWriteFile / lock / containment / git / OpenRouter contract; pinned by core/findings.ts's evidence/action pairing gate."
+closeout_summary: "Contracted both executable surfaces (22 MCP tools, 20 Pi commands) plus the drop-in workspace, library, and dashboard; closed cf-arch-1; routed two items to protocols; re-triaged all four inherited open questions with none asserting a candidate answer."
+closeout_content: |-
+  # Closeout — contracts
+
+  ## Summary
+
+  - Produced `.codecarto/findings/contracts/behavioral-contracts.md` (validation PASS, 7/7).
+    It splits the system into six user-facing surfaces, states 19 shared workflow-control feature
+    contracts (trigger, defaults, output, side effects, persisted state, error behavior, recovery,
+    owner), and adds the drop-in workspace, versioned library, and dashboard as artifact contracts.
+  - **Closed `cf-arch-1`.** Extracted the per-argument defaults, side effects, and error behavior
+    for all 22 MCP tools and the argument grammars / flag-parser defaults for all 20 Pi slash
+    commands, in the primary output and in `findings/public-surfaces/public-surfaces.md`
+    §2026-09-15.
+  - Provided a 30-scenario black-box acceptance list with concrete preconditions and expected
+    outcomes; platform/network-dependent checks are marked `[verify at runtime]`.
+  - Wrote dated sections to all four declared secondary outputs (public-surfaces, config-model,
+    runtime-lifecycle, state-and-storage), never overwriting earlier content.
+
+  ## Decisions Beyond Prompt
+
+  - Closed `cf-arch-1` in the primary output rather than only the secondary, because downstream
+    phases cite the primary by anchor.
+  - Routed `docs/library-format.md` parity to `protocols` as `cf-contracts-1` (a read task) and the
+    dashboard's content catalog as `cf-contracts-2`, rather than registering either as an open
+    question.
+  - Inherited `verify at runtime` for every contract on atomic writes, locks, path containment,
+    `git`, or the OpenRouter API; no settled action for an unresolved open question.
+
+  ## Orchestrator Duties
+
+  - **Re-triage:** `q-openrouter-batch-semantics`, `q-pi-sdk-execution-parity`,
+    `q-node-windows-fs-semantics` remain `needs-runtime-test`; `q-npm-tarball-template-parity`
+    remains `needs-fixture-capture`. No finding asserts a candidate answer to any of them.
+  - **Secondary outputs:** all four written (append).
+  - **Contradiction sweep:** the "~21 Pi commands" summary in architecture/public-surfaces
+    contradicts a test-pinned 20 and README's 20; README's Broad-Side action list omits `verify`.
+    Both recorded as measured facts in Doc/Test Conflicts.
+
+  ## Coverage and limits
+
+  - Inspected: both executable surfaces in full; the shared core modules that carry the contracts
+    (`pipeline`, `prompts`, `completion`, `status`, `workspace`, `library`, `orchestrator-config`,
+    `usage`, `amendment`, `guide`, `secrets`, `findings`, `coverage`, `utils`); the Broad-Side
+    surface's user-visible text and state; representative test bodies; README/CLAUDE tables.
+  - Skipped: `core/dashboard.ts` body beyond ~120 lines; `core/broadside/{schemas,lenses,repo,
+    requests,client,results}.ts` line-by-line; `docs/*`; `scripts/*`; most extension bodies.
+  - Blind spots: no runtime verification; Windows/macOS FS/lock/containment, OpenRouter semantics,
+    Pi-vs-MCP parity, npm tarball parity, and the unread docs remain unsettled and are routed.

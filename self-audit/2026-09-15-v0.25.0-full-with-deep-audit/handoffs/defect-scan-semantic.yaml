@@ -1,0 +1,82 @@
+schema_version: 1
+phase_id: defect-scan-semantic
+owner_notes:
+  - "Primary output .codecarto/findings/defect-scan-semantic/semantic-defects.md; validation PASS (9/9 pipeline criteria). 13 findings: 0 critical, 0 high, 5 medium, 8 low (Pass 3 = 7, Pass 4 = 3, Pass 5 = 3)."
+  - "Closed all four routed items. cfs-mech-1 (3.1): the .break stale-break race is real and worse than described — the non-atomic stat -> describeLockHolder -> rm in breakStaleLock can delete a freshly acquired lock. cfs-mech-2 (3.2): confirmed; the publish lock held across reindex is the concrete long-held case. cfs-mech-3 (3.3): lock-scope and non-atomic-copy parts confirmed; the claimed writeDashboard call is NOT in the current refresh path. cf-arch-3 (3.1-3.7): each mapped path audited; the SM2 completion commit point itself is sound, only its pre-lock integrity checks are a narrow TOCTOU (3.6)."
+  - "New defects beyond the routed ones: 3.4 (standalone library_reindex/list write index.yaml without the publish lock; lost update), 3.5 (sub-agent re-entry guard is check-then-act across the async prompt/LLM-rewrite prelude), 3.7 (writeLibraryConfig unlocked + non-atomic), 4.1 (Broad-Side verify uploads raw file content to OpenRouter without redactSecrets, bypassing the submit redaction guarantee), 4.2 (codecartoModeActive reset on session_start leaves the orchestrator guard off after a reload), 5.1-5.3 (child-guard parity comment, refresh THREAD_LOG non-idempotence, listEntries rewriting a corrupt index)."
+  - "Orchestrator duties done. Promoted the single pending proposal markdown-contracts-are-wire-format to CONVENTIONS.md C04 (no pending proposals remain except any this handoff stages). Re-triaged all four inherited questions: q-node-windows-fs-semantics, q-openrouter-batch-semantics, q-pi-sdk-execution-parity remain needs-runtime-test; q-npm-tarball-template-parity remains needs-fixture-capture. Only finding 4.3 (readSpecArg check-then-use on a symlinked path) inherits q-node-windows-fs-semantics at verify at runtime; the lock findings are defects in the code's own ordering logic and carry settled actions."
+  - "Contradiction sweep: one measured contradiction with a summarized upstream claim. status.yaml and mechanical-defects.md say refreshScaffold 'fires writeDashboard (fire-and-forget) outside the status.yaml lock'; core/workspace.ts:430-458 and both callers (mcp-server/server.ts:1216-1237, extensions/codecarto/index.ts:1708-1743) contain no writeDashboard on the refresh path. The lock-scope gap and THREAD_LOG append are real; the writeDashboard clause is not. Routed here for the porting phase. The protocols placeholder drifts and C03 promotion are re-confirmed; no other contradiction."
+  - "No runtime probes ran (no execution tool); every finding is a source read. The three lock findings are interleavings argued from source; a multi-process probe could confirm or narrow them (named in the report's Runtime probes table and added as a post_pipeline spike)."
+open_questions:
+  - id: q-node-windows-fs-semantics
+    kind: needs-runtime-test
+    description: "Do lock-file O_EXCL, atomic rename over an existing file, symlink-aware path containment, and bare-git invocation behave on Windows/macOS as the POSIX-written code expects? Finding 4.3 (readSpecArg containment is check-then-use on a path) inherits it."
+    deferred_reason: "Platform behavior cannot be confirmed by reading; CI runs Linux only. Re-triaged this phase: still needs-runtime-test."
+  - id: q-openrouter-batch-semantics
+    kind: needs-runtime-test
+    description: "The exact OpenRouter Batch API contract Broad-Side relies on — concurrent-job quota (job-submission-count), which catalog ids have :batch endpoints, and reasoning acceptance — is asserted in comments."
+    deferred_reason: "External service behavior; needs a live probe or the provider's source. Re-triaged: still needs-runtime-test. Finding 4.1 is about what the code sends (observed fact), not what the provider does, so it does not answer this."
+  - id: q-pi-sdk-execution-parity
+    kind: needs-runtime-test
+    description: "Do Pi sub-agent execution (tool sandbox, compaction, session persistence) and an MCP host's execution produce equivalent outcomes given byte-identical prompts?"
+    deferred_reason: "Requires running the same phase under both surfaces and comparing. Re-triaged: still needs-runtime-test. Finding 3.5 is about the in-process Pi re-entry guard, not outcome parity."
+  - id: q-npm-tarball-template-parity
+    kind: needs-fixture-capture
+    description: "Does the published npm tarball's .codecarto/ template and agent-skill/ byte-match this checkout?"
+    deferred_reason: "Needs packing the tarball and diffing — a fixture capture, not a source read. Re-triaged: still needs-fixture-capture."
+carry_forward: []
+carry_forward_closures:
+  - cf-arch-3
+  - cfs-mech-1
+  - cfs-mech-2
+  - cfs-mech-3
+open_question_closures: []
+post_pipeline:
+  - id: post-sem-concurrency-probes
+    kind: spike
+    description: "Run the three deterministic multi-process probes named in semantic-defects.md §Runtime probes (sem-removal-lock-race.mjs, sem-stale-lock-ttl.mjs, sem-reindex-publish-race.mjs) to confirm or narrow findings 3.1, 3.2, and 3.4 before an implementation acts on them. Scripts are not written."
+    deferred_reason: "No execution tool was available this session; the findings are source-read interleavings."
+    source_phase: defect-scan-semantic
+    status: pending
+decisions:
+  - "Closed cf-arch-3 and cfs-mech-1/2/3 in the semantic phase with per-finding verdicts, rather than re-routing them: each named concurrency path now has a finding or an explicit 'sound' verdict, and the closures name the exact defect site."
+  - "Kept the lock/ordering findings (3.1-3.7, 4.1, 4.2, 5.1-5.3) as observed fact with settled actions (fix before porting / port differently) rather than verify at runtime, because they are defects in the code's own serialization and lock-scope logic, not OS/platform behavior; only 4.3, whose exploitation is a symlink-swap timing property, inherits q-node-windows-fs-semantics at verify at runtime."
+  - "Promoted the protocols proposal markdown-contracts-are-wire-format to CONVENTIONS.md C04 at this boundary rather than leaving it pending: the defect templates and the header-driven findings parser make the exact heading/label/column shape a port-blocking invariant, and the parser's silent-see-nothing failure mode is exactly what a convention should protect."
+  - "Routed the measured contradiction in cfs-mech-3 (refreshScaffold does not call writeDashboard in the current source) to the porting phase via owner_notes instead of silently inheriting the mechanical report's description."
+proposed_conventions:
+  - name: lock-scope-covers-derived-state-writers
+    rule: "Every writer of a state file must take that state's lock, including writers of derived artifacts built from it (an index rebuilt from a library, a scaffold refresh that overwrites the active pipeline, user config merged in place). A lock that excludes a writer of the same state serializes nothing."
+    evidence: "semantic findings 3.3 (refreshScaffold overwrites workflow/pipeline*.yaml and appends THREAD_LOG with no status lock), 3.4 (library_reindex/library_list write index.yaml without .publish.lock), 3.7 (writeLibraryConfig unlocked read-modify-write); cf. CONVENTIONS C02."
+closeout_summary: "Semantic defect scan: 13 findings (5 medium, 8 low) across concurrency (7), security (3), and API-contract (3); closed cf-arch-3 and cfs-mech-1/2/3; promoted markdown-contracts-are-wire-format to C04."
+closeout_content: |-
+  # Closeout — defect-scan-semantic
+
+  ## Summary
+
+  - Primary output: `.codecarto/findings/defect-scan-semantic/semantic-defects.md`; validation **PASS** (9/9).
+  - 13 findings: 0 critical, 0 high, 5 medium, 8 low — Pass 3 (concurrency): 7, Pass 4 (security): 3, Pass 5 (contract violations): 3.
+  - Closed all four routed carry-forwards: `cf-arch-3`, `cfs-mech-1`, `cfs-mech-2`, `cfs-mech-3`.
+  - No runtime probes ran (no execution tool); every finding is a source read.
+
+  ## Findings
+
+  **Concurrency (Pass 3).** 3.1 `withRemovalLock`'s unguarded `.break` stale-break (`core/status.ts:537-540`) lets two waiters both hold the removal lock, and `breakStaleLock`'s non-atomic `stat → describeLockHolder → rm` (`:562-575`) can delete a *fresh* lock — closes `cfs-mech-1`. 3.2 `STALE_LOCK_MS = 60_000` (`:25`) breaks a lock legitimately held across a long `reindex` (`core/library.ts:619`) — closes `cfs-mech-2`. 3.3 `refreshScaffold` overwrites framework files and appends `THREAD_LOG` outside the status lock via non-atomic `copyFile` (`core/workspace.ts:430-458`) — closes `cfs-mech-3`. 3.4 standalone `library_reindex`/`library_list` write the derived index without `.publish.lock`. 3.5 the sub-agent re-entry guard is check-then-act across the async prompt/LLM-rewrite prelude. 3.6 completion's closure-integrity checks run on a pre-lock snapshot. 3.7 `writeLibraryConfig` is an unlocked, non-atomic read-modify-write.
+
+  **Security (Pass 4).** 4.1 Broad-Side `verify` uploads raw file content to OpenRouter without `redactSecrets` (`core/broadside/verify.ts:147-181,340`), bypassing the guarantee `submit` honors. 4.2 `codecartoModeActive` is reset on `session_start`, so the orchestrator's write confinement and bash block are off after a reload until init/open. 4.3 `readSpecArg` containment is check-then-use on a path (`external-behavior claim`, `verify at runtime`, inherits `q-node-windows-fs-semantics`).
+
+  **Contract violations (Pass 5).** 5.1 the child-session guard's "same containment as the parent" comment omits the configured-library root the parent allows. 5.2 refresh-scaffold's `THREAD_LOG` entry is not deduped, against its idempotence contract. 5.3 `listEntries` rewrites an existing (corrupt) index, against its "read-only but may build if absent" contract.
+
+  ## Carry-forward closures
+
+  | ID | Verdict |
+  |----|---------|
+  | cf-arch-3 | Addressed by 3.1–3.7; the SM2 commit point is sound, the lock/stale-break, sub-agent re-entry, and derived-writer paths are not. |
+  | cfs-mech-1 | Confirmed and refined (3.1); can delete a fresh lock. |
+  | cfs-mech-2 | Confirmed (3.2); long-held publish lock. |
+  | cfs-mech-3 | Lock-scope confirmed (3.3); the claimed `writeDashboard` call is not in the source — routed as a contradiction. |
+
+  ## Decisions Beyond Prompt
+
+  - Kept the lock/ordering findings at `observed fact` with settled actions rather than `verify at runtime`: they are the code's own serialization logic, not platform behavior. Only 4.3 (symlink check-then-use) inherits `q-node-windows-fs-semantics`.
+  - Promoted `markdown-contracts-are-wire-format` to CONVENTIONS C04 (orchestrator duty) rather than leaving it pending.
+  - Routed the `cfs-mech-3` `writeDashboard` contradiction to porting instead of smoothing it over.
