@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -57,6 +57,16 @@ test("phaseCompactionExtension can be installed into isolated child sessions", a
 		assert.equal(
 			await handlers.get("tool_call")({ toolName: "write", input: { path: ".codecarto/findings/contracts/out.md" } }, ctx),
 			undefined,
+		);
+		// Narrower than the orchestrator's hook on purpose (#364): a phase
+		// never publishes, so a configured library is not a write root here.
+		await mkdir(join(cwd, "library"), { recursive: true });
+		await writeFile(join(cwd, "library", ".codecarto-library"), JSON.stringify({ schema_version: 1, name: "library", namespaced: false }), "utf8");
+		await mkdir(join(cwd, ".codecarto", "workflow"), { recursive: true });
+		await writeFile(join(cwd, ".codecarto", "workflow", "config.yaml"), `library:\n  path: ${join(cwd, "library")}\n`, "utf8");
+		assert.match(
+			(await handlers.get("tool_call")({ toolName: "write", input: { path: "library/entries/spec.md" } }, ctx)).reason,
+			/only allow write within \.codecarto\//,
 		);
 		await handlers.get("session_compact")(
 			{ compactionEntry: { summary: "child summary", tokensBefore: 456 } },
