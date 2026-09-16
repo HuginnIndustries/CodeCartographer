@@ -154,7 +154,7 @@ Also confirm the prompt is present in **both** `content` and `structuredContent`
 
 ### Self-review (every so often)
 
-Separate from release verification: run the full deep-audit pipeline on this repository itself, driven by a host LLM over MCP. It yields an engineering review of the codebase and a first-hand account of driving the product, which is where the framework's own bugs tend to originate. The prompt, the reasoning behind its choices, and the cost to expect are in [`docs/self-review-prompt.md`](docs/self-review-prompt.md). It is a spend, not a gate — run it after a run of releases or before a large refactor, not per tag.
+Separate from release verification: run the full deep-audit pipeline on this repository itself — driven by a host LLM over MCP, or unattended through the Pi extension. It yields an engineering review of the codebase and a first-hand account of driving the product, which is where the framework's own bugs tend to originate. The prompt, the headless Pi recipe, the reasoning behind the choices, and the cost to expect are in [`docs/self-review-prompt.md`](docs/self-review-prompt.md); each run's output lives under [`self-audit/`](self-audit/) with a `REVIEW.md` that maps findings to issues. It is a spend, not a gate — run it after a run of releases or before a large refactor, not per tag.
 
 ### Standard release (single version)
 

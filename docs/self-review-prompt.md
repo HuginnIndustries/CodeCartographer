@@ -14,6 +14,18 @@ Every so often — after a run of releases, before a large refactor, or whenever
 
 The pipeline is resumable. `status.yaml` in the scratch clone is the checkpoint, so a session that fills its context mid-run ends cleanly and the next one continues with `codecarto_open` then `codecarto_status`. The prompt says so; do not fight it by trimming phases.
 
+### The Pi route (unattended)
+
+The 2026-09-15 audit ran the same pipeline through the Pi extension with no host LLM in the loop: seven isolated sub-agents, auto-validated and auto-completed, 77 minutes wall-clock on `ollama-cloud/deepseek-v4.1-flash` (1M-token context, so no compaction), 50M input tokens. From a detached worktree of `main`:
+
+```bash
+script -qec "pi -ne -e ~/.pi/agent/extensions/<provider>.ts --model <provider>/<model> \
+  -e /abs/path/to/CodeCartographer/extensions/codecarto/index.ts \
+  -p '/codecarto-open' '/codecarto-next --auto --llm-steer'" /dev/null
+```
+
+Three things the headless route needs: `/codecarto-open` rather than `/codecarto-init`, because the repository already carries `.codecarto/` and init's confirm is answered "no" by the headless stub; the provider extension passed with `-e`, because `-ne` disables extension discovery; and a model whose coverage disposition comes back `COMPLETE` — a flash-class model returned a `PARTIAL`, docs-derived architecture map in three minutes, which is a way to size the run, not to audit it. Set `project_name` in `status.yaml` before rendering the dashboard: an empty template name is filled from the directory. The output goes under `self-audit/<date>-v<version>-<pipeline>/` in the shape of the existing folders (README, REVIEW with the issue index, DOGFOODING), and the findings become issues only after each is confirmed by reading.
+
 ## What it deliberately does not cover
 
 The pipeline analyzes source *outside* `.codecarto/`. This repo's `.codecarto/` is the packaged template — prompts, pipelines, skills — and it doubles as the run's own workspace, so its content is not under review. This is a code review, not a prompt review.
