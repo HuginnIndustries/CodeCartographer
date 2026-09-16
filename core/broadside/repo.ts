@@ -3,7 +3,7 @@
 // Split out of core/broadside.ts (#339); the barrel there re-exports every
 // name, so `core/index.ts` and the tests see one module as before.
 
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, relative } from "node:path";
@@ -588,7 +588,7 @@ export async function gatherSlices(targetDir: string, lens: LensDefinition, info
 	}
 	const { files: allFiles } = await listRepoFiles(targetDir);
 	const { files, fallback } = selectLensFiles(allFiles, lens, info);
-	const totalChars = await sumFileSizes(targetDir, files);
+	const totalChars = await sumFileChars(targetDir, files);
 	const mode = resolveSliceMode(lens, files, totalChars);
 	const slices = mode === "none"
 		// Whole-repo slice: one module named after the repo, so a small
@@ -599,11 +599,19 @@ export async function gatherSlices(targetDir: string, lens: LensDefinition, info
 	return slices;
 }
 
-async function sumFileSizes(targetDir: string, files: CollectedFile[]): Promise<number> {
+/**
+ * The files' total length in the unit the slices are capped in — UTF-16
+ * code units, what `slurpFileList` counts — not bytes (#368): a byte total
+ * split a non-ASCII repository per directory when one slice would have
+ * held it. The read is repeated by slurpFileList; the files are the ones
+ * about to be uploaded, so the cost is a second pass over what is read
+ * anyway.
+ */
+async function sumFileChars(targetDir: string, files: CollectedFile[]): Promise<number> {
 	let total = 0;
 	for (const f of files) {
 		try {
-			total += (await stat(join(targetDir, f.relPath))).size;
+			total += (await readFile(join(targetDir, f.relPath), "utf8")).length;
 		} catch {
 			// Unreadable file — slurpFileList substitutes a placeholder.
 		}
