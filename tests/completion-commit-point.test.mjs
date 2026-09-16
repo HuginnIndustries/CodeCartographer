@@ -229,3 +229,72 @@ test("amendment: the pipeline-complete check is made on the state read under the
 		await cleanup();
 	}
 });
+
+test("completion: the closure-integrity gates are judged on the state read under the lock (#360)", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "cc-gates-lock-"));
+	const codecarto = join(cwd, ".codecarto");
+	const statusPath = join(codecarto, "workflow", "status.yaml");
+	try {
+		await handleInit({ cwd, pipeline: "lite" });
+		// Architecture routes arch-CF1 to contracts as a candidate answer to
+		// arch-OQ1 (derives_from), leaving the question open.
+		await writeFile(join(codecarto, "findings", "architecture", "architecture-map.md"), PASSING_OUTPUT, "utf8");
+		await mkdir(join(codecarto, "scratch", "handoffs"), { recursive: true });
+		await writeFile(join(codecarto, "scratch", "handoffs", "architecture.yaml"), [
+			"schema_version: 1",
+			"phase_id: architecture",
+			"open_questions:",
+			"  - id: arch-OQ1",
+			"    kind: needs-maintainer-decision",
+			"    description: Which default to keep.",
+			"    deferred_reason: Product call.",
+			"carry_forward:",
+			"  - id: arch-CF1",
+			"    kind: defer-to-phase",
+			"    target_phase: contracts",
+			"    derives_from: arch-OQ1",
+			"    description: One candidate default.",
+			"    deferred_reason: Contracts phase decides.",
+			"closeout_summary: Architecture mapped.",
+			"",
+		].join("\n"), "utf8");
+		await completeValidatedPhase(cwd, await validatePhaseOutput(await getWorkspaceState(cwd), "architecture"), "test");
+		const withQuestion = await readFile(statusPath, "utf8");
+
+		// The question gets resolved out from under the pipeline (the shape an
+		// amendment or a rollback produces): remove arch-OQ1 by hand.
+		const { stringifySimpleYaml } = await import(pathToFileURL(`${REPO_ROOT}/core/yaml.ts`).href);
+		const state = await getWorkspaceState(cwd);
+		state.status.phases.architecture.open_questions = [];
+		await writeFile(statusPath, `${stringifySimpleYaml(state.status)}\n`, "utf8");
+
+		// Contracts closes arch-CF1 without closing arch-OQ1: fine while the
+		// question is gone (pre-lock verdict), a D1 refusal once it is back.
+		const contractsOutput = PASSING_OUTPUT
+			.replace("# Architecture Map", "# Behavioral Contracts\n\nResolves arch-CF1.")
+			.replace("| 1 | The system intent is documented. | PASS | §above |", "| 1 | User-facing surfaces are split by surface type. | PASS | §above |");
+		await writeFile(join(codecarto, "findings", "contracts", "behavioral-contracts.md"), contractsOutput, "utf8");
+		await writeFile(join(codecarto, "scratch", "handoffs", "contracts.yaml"), [
+			"schema_version: 1",
+			"phase_id: contracts",
+			"carry_forward_closures:",
+			"  - arch-CF1",
+			"closeout_summary: Contracts written.",
+			"",
+		].join("\n"), "utf8");
+		const validation = await validatePhaseOutput(await getWorkspaceState(cwd), "contracts");
+		assert.equal(validation.overall, "PASS");
+
+		const held = await acquireLock(`${statusPath}.lock`);
+		const completing = completeValidatedPhase(cwd, validation, "test");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		await writeFile(statusPath, withQuestion, "utf8"); // arch-OQ1 is open again
+		await held.release();
+
+		await assert.rejects(completing, /Refusing to complete contracts: the handoff closes carry_forward arch-CF1, which derives_from open question arch-OQ1/);
+		assert.equal(await readFile(statusPath, "utf8"), withQuestion, "the refused completion wrote nothing");
+		assert.equal((await readdir(join(codecarto, "closeouts"))).some((name) => name.includes("-contracts")), false);
+	} finally {
+		await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+	}
+});
