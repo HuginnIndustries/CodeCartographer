@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- **The phase sub-agent's write guard is documented as what it is: `.codecarto/` alone.** Its comment claimed "the same containment as the parent extension's hook" and the README said "same rules apply to phase sub-agents", but the child guard never admitted the configured library root the orchestrator's hook does — correctly, since a phase writes findings and handoffs and never publishes. The comment, the README, and a test now say so. Found by the 2026-09-15 self-audit (#364).
+
 - **A truncation-retry batch the provider refuses says why.** A retry submit that failed was swallowed and the retry entry had no field for the reason, so the run reported the pass as `failed` with no diagnostic — unlike every other submit path. The refusal, explained the way submit's are (a full job queue, a model with no batch endpoint), is now recorded on the retry entry per model, carried on the collect result, and printed in the report with the note that the truncated results stand as collected. Found by the 2026-09-15 self-audit (#370).
 
 - **Pi: `/codecarto-dashboard` says when the write failed.** `writeDashboard` is best-effort and returns false on any failure; the command ignored the result and reported "Dashboard regenerated" regardless. A failed write is now an error notification that says the previous file stands. Found by the 2026-09-15 self-audit (#369).

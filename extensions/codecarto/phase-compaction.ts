@@ -75,8 +75,12 @@ export function phaseCompactionExtension(pi: ExtensionAPI): void {
 		if (event.toolName === "edit" || event.toolName === "write") {
 			const inputPath = typeof event.input.path === "string" ? event.input.path : "";
 			const strippedPath = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
-			// Same containment as the parent extension's hook (#223): follow the
-			// existing prefix through symlinks, then append the unborn tail.
+			// The same symlink-aware containment as the parent extension's hook
+			// (#223) — follow the existing prefix through symlinks, then append
+			// the unborn tail — over a narrower root on purpose: a phase writes
+			// findings, handoffs, and checkpoints under .codecarto/ and never
+			// publishes, so the configured library the orchestrator's hook admits
+			// is not admitted here (#364).
 			const targetPath = await resolveExistingPrefix(strippedPath, ctx.cwd);
 			const allowedRoot = await canonicalPath(join(ctx.cwd, ".codecarto"));
 			if (!isWithinPath(targetPath, allowedRoot)) {
