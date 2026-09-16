@@ -1698,10 +1698,15 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				}
 			}
 
-			await writeDashboard(ctx.cwd, PACKAGE_VERSION);
-			lastFeedbackLines = ["Dashboard regenerated: .codecarto/dashboard.html"];
+			// writeDashboard is best-effort and says so with its result: a
+			// swallowed write failure used to be reported as success (#369).
+			const written = await writeDashboard(ctx.cwd, PACKAGE_VERSION);
+			const line = written
+				? "Dashboard regenerated: .codecarto/dashboard.html"
+				: "Dashboard not regenerated: the write to .codecarto/dashboard.html failed (permissions or disk?); the previous file, if any, stands.";
+			lastFeedbackLines = [line];
 			setUiState(ctx, state, lastFeedbackLines);
-			notifyCtx(ctx, "Dashboard regenerated: .codecarto/dashboard.html", "info");
+			notifyCtx(ctx, line, written ? "info" : "error");
 		},
 	});
 

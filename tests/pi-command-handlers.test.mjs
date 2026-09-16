@@ -295,6 +295,22 @@ test("dashboard writes the single-file report", async () => {
 	});
 });
 
+test("dashboard reports a write that failed instead of claiming success (#369)", { skip: (process.platform === "win32" || typeof process.getuid !== "function" || process.getuid() === 0) && "needs a non-root POSIX user" }, async () => {
+	await withRepo(async (cwd) => {
+		const { commands, ctx, ui } = await initialized(cwd);
+		const { chmod } = await import("node:fs/promises");
+		const codecarto = join(cwd, ".codecarto");
+		await chmod(codecarto, 0o555);
+		try {
+			await commands.get("codecarto-dashboard").handler("", ctx);
+			assert.match(ui.notifications.at(-1).message, /^Dashboard not regenerated: the write to \.codecarto\/dashboard\.html failed/);
+			assert.equal(ui.notifications.at(-1).level, "error");
+		} finally {
+			await chmod(codecarto, 0o755);
+		}
+	});
+});
+
 test("config reports without throwing", async () => {
 	await withRepo(async (cwd) => {
 		const { commands, ctx, ui } = await initialized(cwd);
