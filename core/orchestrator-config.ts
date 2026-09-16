@@ -23,8 +23,9 @@
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { PathLike } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { expandTilde, pathExists } from "./utils.ts";
+import { mkdir, readFile } from "node:fs/promises";
+import { atomicWriteFile, expandTilde, pathExists } from "./utils.ts";
+import { acquireLock } from "./status.ts";
 import { loadYamlFile, parseSimpleYaml, stringifySimpleYaml } from "./yaml.ts";
 
 export interface OrchestratorConfig {
@@ -252,6 +253,24 @@ export async function writeLibraryConfig(
 	libraryPath: string,
 	namespace: string | null = null,
 ): Promise<void> {
+	// dirname() honors the platform separator; the previous hand-rolled
+	// `includes("/")` check treated every Windows path as a bare filename
+	// and left mkdir a no-op before the writeFile ENOENT'd (#128).
+	const dir = dirname(configPath);
+	await mkdir(dir, { recursive: true });
+	// A read-modify-write of a file every workspace on the machine reads:
+	// under a lock beside it, and landed atomically, so two library-inits
+	// (two hosts, or MCP and Pi) cannot lose each other's change and a crash
+	// mid-write cannot truncate it (#361).
+	const lock = await acquireLock(`${configPath}.lock`);
+	try {
+		await writeLibraryConfigLocked(configPath, libraryPath, namespace);
+	} finally {
+		await lock.release();
+	}
+}
+
+async function writeLibraryConfigLocked(configPath: string, libraryPath: string, namespace: string | null): Promise<void> {
 	let existing: Record<string, unknown> = {};
 	if (await pathExists(configPath)) {
 		const raw = await readFile(configPath, "utf8");
@@ -278,10 +297,5 @@ export async function writeLibraryConfig(
 	if (namespace) library.namespace = namespace;
 
 	const updated: Record<string, unknown> = { ...existing, library };
-	// dirname() honors the platform separator; the previous hand-rolled
-	// `includes("/")` check treated every Windows path as a bare filename
-	// and left mkdir a no-op before the writeFile ENOENT'd (#128).
-	const dir = dirname(configPath);
-	await mkdir(dir, { recursive: true });
-	await writeFile(configPath, `${stringifySimpleYaml(updated)}\n`, "utf8");
+	await atomicWriteFile(configPath, `${stringifySimpleYaml(updated)}\n`);
 }

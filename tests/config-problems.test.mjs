@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -338,6 +338,30 @@ test("/codecarto-config shows the same problem lines and /codecarto-publish refu
 		assert.match(ui.notifications.at(-1).message, /^Publish refused: the configuration has problems/);
 		assert.equal(ui.confirmations.length, 0, "refused before any preview dialog");
 		assert.deepEqual(await core.listEntries(libraryPath), []);
+	});
+});
+
+test("two concurrent library-config writes keep each other's change, and the write is atomic (#361)", async () => {
+	await withTemp(async ({ dir, userConfigPath }) => {
+		const { writeLibraryConfig } = await import(pathToFileURL(`${REPO_ROOT}/core/orchestrator-config.ts`).href);
+		await writeUserConfig(userConfigPath, "orchestrator:\n  llm_steer_next_phase: true\n");
+		// A sets a namespace, B only a path. Unlocked, both read the pre-write
+		// file and whichever write landed last decided whether the namespace
+		// survived — a coin toss per run; serialized, it survives every time.
+		for (let round = 0; round < 12; round++) {
+			await Promise.all([
+				writeLibraryConfig(userConfigPath, join(dir, "lib-a"), "team"),
+				writeLibraryConfig(userConfigPath, join(dir, "lib-b")),
+			]);
+			const written = await readFile(userConfigPath, "utf8");
+			assert.match(written, /namespace: team/, `round ${round}: A's namespace survived B's write`);
+			assert.match(written, /llm_steer_next_phase: true/, "unrelated keys survive");
+			assert.match(written, /path: .*lib-[ab]/);
+			await writeUserConfig(userConfigPath, "orchestrator:\n  llm_steer_next_phase: true\n");
+		}
+		await writeLibraryConfig(userConfigPath, join(dir, "lib-a"), "team");
+		const leftovers = (await readdir(dirname(userConfigPath))).filter((name) => name !== "config.yaml");
+		assert.deepEqual(leftovers, [], "no temp or lock files remain");
 	});
 });
 
