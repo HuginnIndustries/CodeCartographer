@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- **Pi: `/codecarto-dashboard` says when the write failed.** `writeDashboard` is best-effort and returns false on any failure; the command ignored the result and reported "Dashboard regenerated" regardless. A failed write is now an error notification that says the previous file stands. Found by the 2026-09-15 self-audit (#369).
+
 - **Broad-Side decides whether to slice a repository per directory in the unit slices are capped in.** The whole-repo-or-per-directory choice summed file sizes in bytes while slices are capped in characters, so a non-ASCII repository that fit one slice was split per directory and paid for the extra requests. The total is now measured in characters. Found by the 2026-09-15 self-audit (#368).
 
 - **Broad-Side run ids are unique: two submits in the same millisecond no longer share a record and a directory.** A run's id was its millisecond timestamp; a second submit in that millisecond took the same id, `persistBroadsideRun` merged by id and replaced the first run's record, and both wrote into one output directory. Ids now carry a four-hex suffix checked against the runs on record and the directories on disk (`2026-09-14T03-53-20-895Z-a1b2`). Found by the 2026-09-15 self-audit (#367).
