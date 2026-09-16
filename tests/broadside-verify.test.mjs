@@ -323,3 +323,57 @@ test("/codecarto-broadside verify --top=2 reads two findings and reports them", 
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+// ---------- #358: tool output is redacted before it reaches the model ----------
+
+test("the reader redacts secret-shaped values in read_file and grep output, and the pass reports it", async () => {
+	const { dir, runDir, runId } = await collectedRun();
+	try {
+		// An ordinary source file — not a credential store, so isSlurpable keeps
+		// it readable — carrying a value the redaction pass recognizes.
+		await writeFile(join(dir, "src", "config.js"), 'export const api_key = "sk-abcdefghijklmnopqrstuvwxyz1234";\nexport const region = "eu";\n', "utf8");
+		const reader = await core.createRepoReader(dir);
+		const read = await reader.readFile("src/config.js", 1, 2);
+		assert.doesNotMatch(read, /sk-abcdefghijklmnopqrstuvwxyz1234/, "the raw key never leaves the reader");
+		assert.match(read, /1: export const api_key = "\[REDACTED:/);
+		assert.match(read, /2: export const region = "eu";/, "the rest of the line and file are untouched");
+		const grepped = await reader.grep("api_key");
+		assert.doesNotMatch(grepped, /sk-abcdefghijklmnopqrstuvwxyz1234/);
+		assert.match(grepped, /^src\/config\.js:1: export const api_key = "\[REDACTED:/);
+		assert.equal(reader.redactions.values, 2, "one value in the read, one in the grep");
+		assert.deepEqual([...reader.redactions.files], ["src/config.js"]);
+
+		// Off by config: the value passes through, and the run record says so.
+		const raw = await core.createRepoReader(dir, { redact: false });
+		assert.match(await raw.readFile("src/config.js", 1, 1), /sk-abcdefghijklmnopqrstuvwxyz1234/);
+		assert.equal(raw.redactions.values, 0);
+
+		// End to end: a finding that points at the file; the model's read comes back redacted
+		// and the message that carries it to the provider holds no secret.
+		await writeFile(join(runDir, "security-svc.json"), JSON.stringify({
+			module: "svc",
+			findings: [{ severity: "high", category: "Secrets", title: "Hardcoded API key", location: "src/config.js:1", description: "A key in source." }],
+		}), "utf8");
+		const { fetcher, calls } = chatFetcher({ "Hardcoded API key": { verdict: "confirmed", confidence: "high", evidence: [{ file: "src/config.js", lines: "1", note: "literal" }], reasoning: "The key is in the file." } });
+		const result = await runBroadsideVerify(dir, "sk-fake", { runId, top: 1, fetcher });
+		const toolMessages = calls.flatMap((c) => c.messages.filter((m) => m.role === "tool"));
+		assert.ok(toolMessages.length > 0, "the scripted model read the file");
+		for (const m of toolMessages) assert.doesNotMatch(String(m.content), /sk-abcdefghijklmnopqrstuvwxyz1234/, "no message to the provider carries the raw key");
+		assert.match(toolMessages[0].content, /\[REDACTED:sk-api-key\]/);
+		assert.equal(result.redactedValues, 1);
+		assert.match(core.verifyResultText(result), /1 secret-like value\(s\) redacted from tool output before upload/);
+		assert.match(await readFile(join(runDir, "verified.md"), "utf8"), /redacted from tool output/);
+		const { state } = await core.runBroadsideStatus(dir);
+		assert.equal(state.runs.at(-1).verify.redactedValues, 1, "recorded on the run");
+
+		// redact_secrets: false in config.yaml turns it off for verify the way it does for submit.
+		await writeFile(join(core.broadsideDirFor(dir), "config.yaml"), "redact_secrets: false\n", "utf8");
+		const { fetcher: rawFetcher, calls: rawCalls } = chatFetcher({ "Hardcoded API key": { verdict: "confirmed", confidence: "high", evidence: [], reasoning: "r" } });
+		const rawResult = await runBroadsideVerify(dir, "sk-fake", { runId, top: 1, fetcher: rawFetcher });
+		assert.match(rawCalls.flatMap((c) => c.messages.filter((m) => m.role === "tool"))[0].content, /sk-abcdefghijklmnopqrstuvwxyz1234/);
+		assert.equal(rawResult.redactedValues, 0);
+		assert.doesNotMatch(core.verifyResultText(rawResult), /redacted from tool output/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});

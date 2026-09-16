@@ -23,8 +23,9 @@ import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { BROADSIDE_DIR, BROADSIDE_LENS_IDS, type BroadsideLensId } from "./constants.ts";
 import { type BroadsideVerifyEntry, defaultReasoningFor } from "./types.ts";
+import { redactSecrets } from "../secrets.ts";
 import { isSlurpable, listRepoFiles } from "./repo.ts";
-import { broadsideDirFor, loadBroadsideState, persistBroadsideRunMerging } from "./state.ts";
+import { broadsideDirFor, loadBroadsideConfig, loadBroadsideState, persistBroadsideRunMerging } from "./state.ts";
 import { type FetchLike } from "./client.ts";
 import { loadSavedLensResults, parseLensJson, type StoredLensResult } from "./results.ts";
 
@@ -68,6 +69,10 @@ export type BroadsideVerifyResult = {
 	totalCost: number;
 	/** Set when the cost cap stopped the pass before every selected finding was read. */
 	stoppedByCost?: boolean;
+	/** Secret-like values redacted from tool output before it reached the model (#358). */
+	redactedValues: number;
+	/** The files those values were in. */
+	redactedFiles: string[];
 };
 
 type CandidateFinding = {
@@ -125,6 +130,8 @@ export type RepoReader = {
 	readFile(path: string, startLine?: number, endLine?: number): Promise<string>;
 	grep(pattern: string, pathPrefix?: string): Promise<string>;
 	listDir(path: string): Promise<string>;
+	/** What the redaction pass did to this reader's output so far (#358). */
+	readonly redactions: { values: number; files: Set<string> };
 };
 
 /**
@@ -133,10 +140,28 @@ export type RepoReader = {
  * everything {@link isSlurpable} keeps out of a lens: credential stores, build
  * output, binaries. A path outside the repository, or one the listing does
  * not contain, is an error the model sees, not a read.
+ *
+ * Every line the reader hands back goes through the same secret-redaction
+ * pass `submit` runs over its slices (#358): the file list keeps credential
+ * *stores* out, but a key in an ordinary source file is exactly what a
+ * finding points a verifier at, and the tool result is the upload. `redact`
+ * mirrors config.yaml's `redact_secrets`. A pattern the model greps for can
+ * still tell it that a line matched; the line it sees is redacted.
  */
-export async function createRepoReader(cwd: string): Promise<RepoReader> {
+export async function createRepoReader(cwd: string, opts: { redact?: boolean } = {}): Promise<RepoReader> {
 	const { files } = await listRepoFiles(cwd);
 	const readable = new Set(files.filter(isSlurpable));
+	const redact = opts.redact ?? true;
+	const redactions = { values: 0, files: new Set<string>() };
+	const clean = (rel: string, line: string): string => {
+		if (!redact) return line;
+		const redaction = redactSecrets(line);
+		if (redaction.count > 0) {
+			redactions.values += redaction.count;
+			redactions.files.add(rel);
+		}
+		return redaction.text;
+	};
 	const confine = (path: string): string => {
 		const abs = resolve(cwd, path);
 		const rel = relative(cwd, abs).split("\\").join("/");
@@ -144,6 +169,7 @@ export async function createRepoReader(cwd: string): Promise<RepoReader> {
 		return rel;
 	};
 	return {
+		redactions,
 		async readFile(path, startLine, endLine) {
 			const rel = confine(path);
 			if (!readable.has(rel)) return `error: ${rel} is not a readable source file of this repository`;
@@ -152,7 +178,7 @@ export async function createRepoReader(cwd: string): Promise<RepoReader> {
 			const requestedEnd = Math.floor(Number(endLine ?? start + READ_FILE_MAX_LINES - 1)) || start;
 			const end = Math.min(lines.length, requestedEnd, start + READ_FILE_MAX_LINES - 1);
 			if (start > lines.length) return `error: ${rel} has ${lines.length} lines`;
-			return lines.slice(start - 1, end).map((line, i) => `${start + i}: ${line}`).join("\n");
+			return lines.slice(start - 1, end).map((line, i) => `${start + i}: ${clean(rel, line)}`).join("\n");
 		},
 		async grep(pattern, pathPrefix) {
 			let regex: RegExp;
@@ -174,7 +200,7 @@ export async function createRepoReader(cwd: string): Promise<RepoReader> {
 				}
 				const lines = text.split("\n");
 				for (let i = 0; i < lines.length && matches.length < GREP_MAX_MATCHES; i++) {
-					if (regex.test(lines[i])) matches.push(`${rel}:${i + 1}: ${lines[i]}`);
+					if (regex.test(lines[i])) matches.push(`${rel}:${i + 1}: ${clean(rel, lines[i])}`);
 				}
 				if (matches.length >= GREP_MAX_MATCHES) break;
 			}
@@ -418,7 +444,11 @@ export async function runBroadsideVerify(
 	const model = opts.model ?? syncModelFor(run.model);
 	const maxCost = opts.maxCost ?? 0;
 	const fetcher = opts.fetcher ?? (fetch as FetchLike);
-	const reader = await createRepoReader(cwd);
+	// The same switch submit honours: a repository that turned redaction off
+	// for its slices gets raw lines here too, and one that did not never
+	// uploads a key through a tool result (#358).
+	const config = await loadBroadsideConfig(broadsideDir);
+	const reader = await createRepoReader(cwd, { redact: config.redactSecrets });
 	const selected = ranked.slice(0, top);
 	const findings: VerifiedFinding[] = [];
 	let totalCost = 0;
@@ -452,6 +482,7 @@ export async function runBroadsideVerify(
 		confirmed: findings.filter((f) => f.verdict === "confirmed").length,
 		cost: totalCost,
 		at: new Date().toISOString(),
+		redactedValues: reader.redactions.values,
 	};
 	const result: BroadsideVerifyResult = {
 		runId: run.id,
@@ -462,6 +493,8 @@ export async function runBroadsideVerify(
 		findings,
 		totalCost,
 		...(stoppedByCost && { stoppedByCost: true }),
+		redactedValues: reader.redactions.values,
+		redactedFiles: [...reader.redactions.files].sort(),
 	};
 	await writeFile(join(runDir, "verified.json"), `${JSON.stringify({ ...entry, run_id: run.id, candidates: ranked.length, findings }, null, "\t")}\n`, "utf8");
 	await writeFile(join(runDir, "verified.md"), renderVerifiedMarkdown(result), "utf8");
@@ -485,6 +518,9 @@ export function renderVerifiedMarkdown(result: BroadsideVerifyResult): string {
 		"is a lead worth a human's next look, not a validated claim.",
 		"",
 	];
+	if (result.redactedValues > 0) {
+		lines.push(`${result.redactedValues} secret-like value(s) were redacted from tool output before upload (${result.redactedFiles.join(", ")}).`, "");
+	}
 	for (const f of result.findings) {
 		lines.push(`## ${VERDICT_MARK[f.verdict] ?? "?"} ${f.index}. [${f.severity}] ${f.title}`, "", `- **verdict**: ${f.verdict} (${f.confidence})`, `- **location**: ${f.location}`, `- **lens**: ${f.lensId} (${f.customId})`);
 		if (f.evidence.length > 0) lines.push(`- **evidence**: ${f.evidence.map((e) => `${e.file}:${e.lines} — ${e.note}`).join("; ")}`);
@@ -504,6 +540,9 @@ export function verifyResultText(result: BroadsideVerifyResult): string {
 	];
 	for (const f of result.findings) {
 		lines.push(`  ${VERDICT_MARK[f.verdict] ?? "?"} [${f.severity}] ${f.title} @ ${f.location} — ${f.verdict}`);
+	}
+	if (result.redactedValues > 0) {
+		lines.push(`  ${result.redactedValues} secret-like value(s) redacted from tool output before upload (${result.redactedFiles.join(", ")}).`);
 	}
 	lines.push(`Details in ${result.outputDir}/verified.md. A confirmed finding is a lead for a human's next look, not a validated claim.`);
 	return lines.join("\n");
