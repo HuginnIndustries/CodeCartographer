@@ -40,3 +40,42 @@ test("the runner's linger timer names the run it belongs to", async () => {
 	assert.match(runner, /setTimeout\(\(\) => clearPhase\(phase\.id, activity\), 30_000\)/);
 	assert.doesNotMatch(runner, /clearPhase\(phase\.id\)/, "no unconditional linger clear remains");
 });
+
+// ---------- #359: the phase is reserved before the prelude's first await ----------
+
+test("runSinglePhase reserves the phase synchronously, so a second call during the prelude is refused instead of spawning twice", async () => {
+	const { mkdtemp, rm } = await import("node:fs/promises");
+	const { tmpdir } = await import("node:os");
+	const { runSinglePhase, isPhaseRunning } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/auto-runner.ts`).href);
+	const { handleInit } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
+	const { getWorkspaceState } = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
+	const cwd = await mkdtemp(join(tmpdir(), "cc-reentry-"));
+	try {
+		await handleInit({ cwd, pipeline: "architecture-only" });
+		const state = await getWorkspaceState(cwd);
+		const phase = state.pipeline.phases.find((p) => p.id === "architecture");
+		// A context with no Pi runtime behind it: the sub-agent spawn fails
+		// inside runPhase, which is caught and reported — after the prelude.
+		const ctx = { cwd, hasUI: false, signal: new AbortController().signal, sessionManager: { getSessionFile: () => null }, isIdle: () => true };
+		const pi = { sendMessage: () => {} };
+		const stderr = process.stderr.write;
+		process.stderr.write = () => true;
+		try {
+			const first = runSinglePhase(ctx, pi, state, phase, { llmSteerEnabled: false });
+			assert.equal(isPhaseRunning("architecture"), true, "reserved before the first await resolved");
+			const second = await runSinglePhase(ctx, pi, state, phase, { llmSteerEnabled: false });
+			assert.equal(second.status, "error");
+			assert.match(second.error, /Phase architecture is already running/);
+			const result = await first;
+			assert.equal(result.status, "error", "the stub runtime cannot spawn; the first run ends in error");
+			assert.equal(isPhaseRunning("architecture"), false, "and the reservation is released with it");
+		} finally {
+			process.stderr.write = stderr;
+		}
+	} finally {
+		clearPhase("architecture");
+		// The error path's best-effort usage and dashboard writes may still be landing.
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		await rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+	}
+});

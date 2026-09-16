@@ -89,32 +89,49 @@ export async function runSinglePhase(
 	phase: PipelinePhase,
 	options: RunSinglePhaseOptions,
 ): Promise<SinglePhaseResult> {
-	let prompt = await buildPhasePrompt(state, phase, false, {
-		auto: options.auto === true,
-		preflight: options.preflight,
-	});
+	// Reserve the phase before the first await. The callers check
+	// isPhaseRunning and then call in, but the prompt build and the LLM-steer
+	// rewrite below are awaits, and a second call during them used to find
+	// the phase unregistered and spawn a second sub-agent for it (#359).
+	// The check and the reservation are synchronous, so they are one step.
+	if (isPhaseRunning(phase.id)) {
+		return { status: "error", activity: getPhaseActivity(phase.id)!, error: `Phase ${phase.id} is already running.` };
+	}
+	const activity = startPhase(phase.id);
 
-	if (options.llmSteerEnabled) {
-		notifyCtx(ctx, `Customizing ${phase.id} prompt via LLM rewriter…`, "info");
-		const rewrite = await rewritePhasePrompt({ ctx, state, originalPrompt: prompt, nextPhaseId: phase.id });
-		if (rewrite.used) {
-			prompt = rewrite.prompt;
-			notifyCtx(ctx, `LLM rewriter customized ${phase.id} seed prompt.`, "info");
-			pi.sendMessage({
-				customType: "codecarto-steering",
-				content: buildSteeringMessage({
-					nextPhaseId: phase.id,
-					prevPhaseId: rewrite.prevPhaseId,
-					rewrittenPrompt: rewrite.prompt,
-				}),
-				display: true,
-			});
-		} else {
-			notifyCtx(ctx, `LLM rewriter skipped (${rewrite.skipReason}); using stock prompt.`, "warning");
+	let prompt: string;
+	try {
+		prompt = await buildPhasePrompt(state, phase, false, {
+			auto: options.auto === true,
+			preflight: options.preflight,
+		});
+		if (options.llmSteerEnabled) {
+			notifyCtx(ctx, `Customizing ${phase.id} prompt via LLM rewriter…`, "info");
+			const rewrite = await rewritePhasePrompt({ ctx, state, originalPrompt: prompt, nextPhaseId: phase.id });
+			if (rewrite.used) {
+				prompt = rewrite.prompt;
+				notifyCtx(ctx, `LLM rewriter customized ${phase.id} seed prompt.`, "info");
+				pi.sendMessage({
+					customType: "codecarto-steering",
+					content: buildSteeringMessage({
+						nextPhaseId: phase.id,
+						prevPhaseId: rewrite.prevPhaseId,
+						rewrittenPrompt: rewrite.prompt,
+					}),
+					display: true,
+				});
+			} else {
+				notifyCtx(ctx, `LLM rewriter skipped (${rewrite.skipReason}); using stock prompt.`, "warning");
+			}
 		}
+	} catch (error) {
+		// A prelude that fails releases the reservation the way a failed
+		// phase does, so the next attempt is not told the phase is running.
+		finishPhase(phase.id, { status: "error", error: error instanceof Error ? error.message : String(error) });
+		setTimeout(() => clearPhase(phase.id, activity), 30_000).unref?.();
+		throw error;
 	}
 
-	const activity = startPhase(phase.id);
 	notifyCtx(ctx, `CodeCartographer phase: ${phase.id} (sub-agent running)`, "info");
 	if (ctx.hasUI) getAgentsWidget().attach(ctx.ui);
 
