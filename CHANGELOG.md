@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- **A `__proto__` key in a YAML sequence item is an entry, as it already was in a mapping.** The mapping parser assigns through `Object.defineProperty` precisely so a `__proto__` key becomes an own entry; the sequence-item path plain-assigned both the item's first key and the keys merged from its nested mapping, so a `- __proto__:` block — handoffs and amendments are model-written YAML — set the item's prototype and vanished from its own keys. Both sites now use the same guard. Found by the 2026-09-15 self-audit (#365).
+
 - **`codecarto_publish` reads the `spec_path` it checked.** The containment check ran on the canonical (symlink-resolved) path and the read then used the original string, which a symlink swap between the two could re-point outside the allowed roots; the read now goes through the canonical path. Found by the 2026-09-15 self-audit (#362).
 
 - **The user-global config is written under a lock and atomically.** `writeLibraryConfig` read the file, merged `library.path`/`library.namespace`, and wrote it back with a plain `writeFile` — two library-inits at once (two hosts, or MCP and Pi) could each read the pre-write content and the later write dropped the earlier change, and a crash mid-write could truncate a file every workspace on the machine reads. The read-modify-write now runs under `<config>.lock` and lands through `atomicWriteFile`. Found by the 2026-09-15 self-audit (#361).
