@@ -5,6 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -12,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
-const { acquireLock, atomicWriteFile, uniqueTempSuffix, BREAK_LOCK_STALE_MS, STALE_LOCK_MS } = core;
+const { acquireLock, atomicWriteFile, uniqueTempSuffix, STALE_LOCK_MS } = core;
 const { appendUsageRun, loadUsage, USAGE_RELATIVE_PATH } = await import(pathToFileURL(`${REPO_ROOT}/core/usage.ts`).href);
 const { publishEntry, writeMarker } = core;
 
@@ -54,64 +55,59 @@ test("atomicWriteFile removes its temp file and propagates the error when the re
 	}
 });
 
-test("release after a stale break leaves the new holder's lock in place", async () => {
-	const { dir, cleanup } = await tempDir("cc-lock-");
-	try {
-		const lockPath = join(dir, "status.yaml.lock");
-		const a = await acquireLock(lockPath);
-		assert.equal(a.brokeStale, undefined);
-		// Age A's lock past the stale threshold, as a crashed process would.
-		const old = new Date(Date.now() - STALE_LOCK_MS - 5_000);
-		await utimes(lockPath, old, old);
-		const b = await acquireLock(lockPath);
-		assert.equal(b.brokeStale?.pid, process.pid, "B records whose lock it broke");
-		const bContent = await readFile(lockPath, "utf8");
-
-		await a.release();
-		assert.equal(await readFile(lockPath, "utf8"), bContent, "A's release must not remove B's lock");
-
-		await b.release();
-		assert.deepEqual(await readdir(dir), [], "B's release removes B's lock");
-	} finally {
-		await cleanup();
-	}
-});
-
-// ---------- #342: every removal happens under the removal lock ----------
+// ---------- the lock is a queue of owned tickets (#227, #342, #355) ----------
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const settled = (promise) => Promise.race([promise.then(() => true, () => true), wait(0).then(() => false)]);
+const tickets = async (dir, base = "status.yaml.lock") => (await readdir(dir)).filter((n) => n.startsWith(`${base}.t.`)).sort();
 
-async function staleLock(lockPath, token = "1.dead") {
-	await writeFile(lockPath, `1\n2026-01-01T00:00:00.000Z\n${token}\n`, "utf8");
-	const old = new Date(Date.now() - STALE_LOCK_MS - 5_000);
-	await utimes(lockPath, old, old);
+/** A ticket left by a process that no longer exists (pid 2^22-1 is never live on Linux). */
+async function deadTicket(dir, base = "status.yaml.lock", { ageMs = 0 } = {}) {
+	const path = join(dir, `${base}.t.000000000000001-4194303-dead`);
+	await writeFile(path, "4194303\n2026-01-01T00:00:00.000Z\ndead\n", "utf8");
+	if (ageMs) {
+		const old = new Date(Date.now() - ageMs);
+		await utimes(path, old, old);
+	}
+	return path;
 }
 
-test("a waiter that finds a stale lock already being broken does not remove it", async () => {
-	const { dir, cleanup } = await tempDir("cc-lock-break-");
+test("a live holder is never broken by age: its heartbeat keeps the ticket fresh while it holds (#355)", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-live-");
 	try {
 		const lockPath = join(dir, "status.yaml.lock");
-		await staleLock(lockPath);
-		// Another process is mid-break: it holds the removal lock.
-		await writeFile(`${lockPath}.break`, "", "utf8");
-		const waiting = acquireLock(lockPath);
-		await wait(400);
-		assert.equal(await settled(waiting), false, "B waits instead of breaking");
-		assert.match(await readFile(lockPath, "utf8"), /1\.dead/, "B has not removed the stale lock");
+		// A holder well past the stale threshold — a publish across a full reindex.
+		const a = await acquireLock(lockPath, { staleMs: 300 });
+		await wait(700);
+		const b = acquireLock(lockPath, { staleMs: 300, timeoutMs: 400 });
+		await wait(250);
+		assert.equal(await settled(b), false, "B waits behind a live holder older than staleMs");
+		await assert.rejects(b, /Timed out waiting for lock/, "and gives up at its timeout instead of breaking A");
+		assert.equal((await tickets(dir)).length, 1, "A's ticket stands; B withdrew its own");
+		await a.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
 
-		// The other process finishes its break and takes the lock itself…
-		await rm(lockPath);
-		await writeFile(lockPath, `1\n${new Date().toISOString()}\nA.fresh\n`, "utf8");
-		await rm(`${lockPath}.break`);
-		await wait(300);
-		assert.equal(await settled(waiting), false, "B sees a fresh lock and keeps waiting");
-		assert.match(await readFile(lockPath, "utf8"), /A\.fresh/, "B has not removed the fresh lock either");
+test("a dead owner's ticket is removed at once, an unrefreshed one after staleMs, and the breaker records whose it was", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-dead-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		await deadTicket(dir);
+		const a = await acquireLock(lockPath);
+		assert.equal(a.brokeStale?.pid, 4194303, "the dead process's ticket was removed and recorded");
+		assert.equal(a.brokeStale?.since, "2026-01-01T00:00:00.000Z");
+		await a.release();
 
-		// …and releases it: now B gets it, having broken nothing.
-		await rm(lockPath);
-		const b = await waiting;
-		assert.equal(b.brokeStale, undefined);
+		// Alive pid, but the ticket stopped being refreshed: hung, so broken after staleMs.
+		const hung = join(dir, `status.yaml.lock.t.000000000000002-${process.pid}-hung`);
+		await writeFile(hung, `${process.pid}\n2026-01-01T00:00:00.000Z\nhung\n`, "utf8");
+		const old = new Date(Date.now() - 1_000);
+		await utimes(hung, old, old);
+		const b = await acquireLock(lockPath, { staleMs: 500 });
+		assert.equal(b.brokeStale?.pid, process.pid);
 		await b.release();
 		assert.deepEqual(await readdir(dir), []);
 	} finally {
@@ -119,34 +115,21 @@ test("a waiter that finds a stale lock already being broken does not remove it",
 	}
 });
 
-test("release waits for a break in progress rather than removing alongside it", async () => {
+test("release removes only the releaser's own ticket, so a broken holder's late release harms no one (#227)", async () => {
 	const { dir, cleanup } = await tempDir("cc-lock-release-");
 	try {
 		const lockPath = join(dir, "status.yaml.lock");
-		const a = await acquireLock(lockPath);
-		await writeFile(`${lockPath}.break`, "", "utf8");
-		const releasing = a.release();
-		await wait(300);
-		assert.equal(await settled(releasing), false);
-		assert.ok((await readdir(dir)).includes("status.yaml.lock"), "the lock stays until the removal lock is free");
-		await rm(`${lockPath}.break`);
-		await releasing;
-		assert.deepEqual(await readdir(dir), [], "then it is removed, and the removal lock with it");
-	} finally {
-		await cleanup();
-	}
-});
-
-test("a removal lock left behind by a crashed process is cleared", async () => {
-	const { dir, cleanup } = await tempDir("cc-lock-break-stale-");
-	try {
-		const lockPath = join(dir, "status.yaml.lock");
-		await staleLock(lockPath);
-		await writeFile(`${lockPath}.break`, "", "utf8");
-		const old = new Date(Date.now() - BREAK_LOCK_STALE_MS - 5_000);
-		await utimes(`${lockPath}.break`, old, old);
-		const b = await acquireLock(lockPath);
-		assert.equal(b.brokeStale?.pid, 1, "the stale lock was broken through the abandoned removal lock");
+		const a = await acquireLock(lockPath, { staleMs: 200 });
+		// A stops refreshing (its heartbeat is what keeps it alive; simulate a
+		// hang by ageing the ticket) and B breaks it.
+		const [aTicket] = await tickets(dir);
+		const old = new Date(Date.now() - 1_000);
+		await utimes(join(dir, aTicket), old, old);
+		const b = await acquireLock(lockPath, { staleMs: 200 });
+		assert.equal(b.brokeStale?.pid, process.pid);
+		const [bTicket] = await tickets(dir);
+		await a.release();
+		assert.deepEqual(await tickets(dir), [bTicket], "A's release must not remove B's ticket");
 		await b.release();
 		assert.deepEqual(await readdir(dir), []);
 	} finally {
@@ -154,13 +137,14 @@ test("a removal lock left behind by a crashed process is cleared", async () => {
 	}
 });
 
-test("many waiters on one stale lock: one breaks it, and never two hold it", async () => {
+test("many waiters, one dead ticket ahead of them: one holder at a time, every waiter served, nothing left behind", async () => {
 	const { dir, cleanup } = await tempDir("cc-lock-many-");
 	try {
 		const lockPath = join(dir, "status.yaml.lock");
-		await staleLock(lockPath);
+		await deadTicket(dir);
 		let holders = 0;
 		let overlap = 0;
+		let served = 0;
 		const handles = await Promise.all(
 			Array.from({ length: 8 }, async () => {
 				const handle = await acquireLock(lockPath);
@@ -168,27 +152,74 @@ test("many waiters on one stale lock: one breaks it, and never two hold it", asy
 				if (holders > 1) overlap += 1;
 				await wait(15);
 				holders -= 1;
+				served += 1;
 				await handle.release();
 				return handle;
 			}),
 		);
 		assert.equal(overlap, 0, "two holders at once");
-		assert.equal(handles.filter((h) => h.brokeStale).length, 1, "exactly one waiter broke the stale lock");
+		assert.equal(served, 8);
+		assert.equal(handles.filter((h) => h.brokeStale).length, 1, "exactly one waiter removed the dead ticket");
 		assert.deepEqual(await readdir(dir), []);
 	} finally {
 		await cleanup();
 	}
 });
 
-test("release is a no-op when the lock file is already gone", async () => {
+test("a waiter that died in the doorway does not block the queue; a live one does until it has its ticket", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-door-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		await writeFile(join(dir, "status.yaml.lock.c.deadchooser"), "4194303\n2026-01-01T00:00:00.000Z\ndeadchooser\n", "utf8");
+		const a = await acquireLock(lockPath);
+		assert.deepEqual((await readdir(dir)).filter((n) => n.includes(".c.")), [], "the dead chooser's marker is gone");
+		await a.release();
+
+		// A live chooser (our own pid) holds everyone at the door until its marker is withdrawn.
+		const marker = join(dir, "status.yaml.lock.c.livechooser");
+		await writeFile(marker, `${process.pid}\n${new Date().toISOString()}\nlivechooser\n`, "utf8");
+		const b = acquireLock(lockPath);
+		await wait(300);
+		assert.equal(await settled(b), false, "B waits while a live waiter is choosing");
+		await rm(marker);
+		const handle = await b;
+		await handle.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("a plain lock file from a pre-#355 process is honoured while fresh and removed once stale", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-legacy-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		await writeFile(lockPath, `${process.pid}\n${new Date().toISOString()}\nlegacy\n`, "utf8");
+		const fresh = acquireLock(lockPath, { timeoutMs: 400 });
+		await assert.rejects(fresh, /Timed out waiting for lock/, "a fresh legacy lock blocks");
+		const old = new Date(Date.now() - STALE_LOCK_MS - 5_000);
+		await utimes(lockPath, old, old);
+		const a = await acquireLock(lockPath);
+		assert.equal(a.brokeStale?.pid, process.pid, "a stale legacy lock is removed and recorded");
+		assert.equal(existsSync(lockPath), false);
+		await a.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("release is a no-op when the holder's ticket is already gone", async () => {
 	const { dir, cleanup } = await tempDir("cc-lock-gone-");
 	try {
 		const lockPath = join(dir, "x.lock");
 		const handle = await acquireLock(lockPath);
-		await rm(lockPath);
+		const [ticket] = await tickets(dir, "x.lock");
+		await rm(join(dir, ticket));
 		await handle.release();
 		const again = await acquireLock(lockPath);
 		await again.release();
+		assert.deepEqual(await readdir(dir), []);
 	} finally {
 		await cleanup();
 	}
