@@ -115,6 +115,27 @@ test("a dead owner's ticket is removed at once, an unrefreshed one after staleMs
 	}
 });
 
+test("a new waiter takes a number larger than every ticket it can see, so a same-moment arrival never sorts ahead of a holder", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-number-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		// A live holder with ticket number 5 and a token that sorts after anything random.
+		const holder = join(dir, `status.yaml.lock.t.000000000000005-${process.pid}-zzzz`);
+		await writeFile(holder, `${process.pid}\n${new Date().toISOString()}\nzzzz\n`, "utf8");
+		const b = acquireLock(lockPath, { timeoutMs: 400 });
+		await wait(100);
+		const [mine] = (await tickets(dir)).filter((n) => !n.endsWith("-zzzz"));
+		assert.match(mine, /^status\.yaml\.lock\.t\.000000000000006-/, "one more than the largest ticket on the floor, not the clock");
+		await assert.rejects(b, /Timed out waiting for lock/, "and it waits behind the holder");
+		await rm(holder);
+		const c = await acquireLock(lockPath);
+		await c.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
+
 test("release removes only the releaser's own ticket, so a broken holder's late release harms no one (#227)", async () => {
 	const { dir, cleanup } = await tempDir("cc-lock-release-");
 	try {

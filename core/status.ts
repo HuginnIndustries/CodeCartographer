@@ -476,12 +476,12 @@ export interface AcquireLockOptions {
  * `rm`-then-recreate stale break carries (#342, #344, #355).
  *
  * Ordering follows Lamport's bakery: a waiter announces it is *choosing*
- * (`<lock>.c.<token>`) before it writes its ticket and withdraws the marker
- * after, and nobody concludes it holds the lock while a marker it does not
- * own exists — so a waiter that computed an earlier order number but had
- * not yet written its ticket cannot be overtaken. Two tickets with the same
- * order number break the tie on the token, which every observer sorts the
- * same way.
+ * (`<lock>.c.<token>`), takes a number one larger than any ticket it can
+ * see, writes its ticket, and withdraws the marker; nobody concludes it
+ * holds the lock while a marker it does not own exists — so a waiter that
+ * took its number but has not yet written its ticket cannot be overtaken.
+ * Two tickets with the same number (chosen at the same moment) break the
+ * tie on the rest of the name, which every observer sorts the same way.
  *
  * A plain `lockPath` file left by a pre-#355 process is honoured while it is
  * younger than `staleMs` and removed once it is not, so an upgrade under a
@@ -497,9 +497,18 @@ export async function acquireLock(lockPath: string, options: AcquireLockOptions 
 	const choosingPath = join(dir, `${base}.c.${token}`);
 	let brokeStale: LockHandle["brokeStale"];
 
-	// The doorway: announce, take a number, write the ticket, withdraw.
+	// The doorway: announce, take a number, write the ticket, withdraw. The
+	// number is one more than the largest ticket number on the floor, taken
+	// while the marker is up — so a waiter that arrives after us reads our
+	// ticket and takes a larger number, and two that choose at once get the
+	// same number and settle it on the token. A wall-clock number would let
+	// a later arrival in the same millisecond sort ahead of a holder.
 	await writeExclusive(choosingPath, `${process.pid}\n${new Date().toISOString()}\n${token}\n`);
-	const order = String(Date.now()).padStart(15, "0");
+	const numbered = (await readdir(dir).catch(() => [] as string[]))
+		.filter((name) => name.startsWith(`${base}.t.`))
+		.map((name) => Number.parseInt(name.slice(`${base}.t.`.length), 10))
+		.filter((n) => Number.isFinite(n));
+	const order = String(Math.max(0, ...numbered) + 1).padStart(15, "0");
 	const ticketPath = join(dir, `${base}.t.${order}-${process.pid}-${token}`);
 	const ticketName = basename(ticketPath);
 	try {
