@@ -427,14 +427,18 @@ export async function runBroadsideCollect(
 
 		// Submit every group, then poll whatever was accepted, together.
 		const submitted: Array<{ model: string; batchId: string }> = [];
+		const refusals: string[] = [];
 		for (const [model, group] of byModel) {
 			if (aborted()) break;
 			try {
 				const { batchId, error } = await submitBatch(group.requests, apiKey, opts.fetcher, model);
 				if (!error && batchId) submitted.push({ model, batchId });
-			} catch {
+				else refusals.push(`${model}: ${explainBatchError(error) ?? "no batch id returned"}`);
+			} catch (error) {
 				// A retry batch that fails to submit leaves its slices' original
-				// truncated results in place — nothing is lost.
+				// truncated results in place — nothing is lost, and the reason
+				// travels on the entry rather than vanishing here (#370).
+				refusals.push(`${model}: ${explainBatchError(error) ?? String(error)}`);
 			}
 		}
 		// Record the ids under the claim so a later collect can see what was
@@ -444,6 +448,7 @@ export async function runBroadsideCollect(
 			...run.retry!,
 			batches: submitted,
 			status: submitted.length > 0 ? "submitted" : byModel.size === 0 ? "completed" : "failed",
+			...(refusals.length > 0 && { error: refusals.join("; ") }),
 		};
 		await persist();
 		const polled = await pollBatchesConcurrently(
@@ -741,6 +746,7 @@ export async function runBroadsideCollect(
 		resultCount,
 		truncatedCount,
 		retriedCount,
+		...(run.retry?.error && { retryError: run.retry.error }),
 		...(retryElsewhere && { retryElsewhere: true }),
 		lensOutcomes,
 		synthesis: run.synthesis,

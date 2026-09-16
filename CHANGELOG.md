@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- **A truncation-retry batch the provider refuses says why.** A retry submit that failed was swallowed and the retry entry had no field for the reason, so the run reported the pass as `failed` with no diagnostic — unlike every other submit path. The refusal, explained the way submit's are (a full job queue, a model with no batch endpoint), is now recorded on the retry entry per model, carried on the collect result, and printed in the report with the note that the truncated results stand as collected. Found by the 2026-09-15 self-audit (#370).
+
 - **Pi: `/codecarto-dashboard` says when the write failed.** `writeDashboard` is best-effort and returns false on any failure; the command ignored the result and reported "Dashboard regenerated" regardless. A failed write is now an error notification that says the previous file stands. Found by the 2026-09-15 self-audit (#369).
 
 - **Broad-Side decides whether to slice a repository per directory in the unit slices are capped in.** The whole-repo-or-per-directory choice summed file sizes in bytes while slices are capped in characters, so a non-ASCII repository that fit one slice was split per directory and paid for the extra requests. The total is now measured in characters. Found by the 2026-09-15 self-audit (#368).

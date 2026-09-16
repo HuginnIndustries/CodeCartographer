@@ -205,6 +205,9 @@ export function collectResultText(result: BroadsideCollectResult): string {
 	if (result.retryElsewhere) {
 		lines.push("  ↻ The truncation retry is in flight in another collect on this run; collect again for its result.");
 	}
+	if (result.retryError) {
+		lines.push(`  ↻ The truncation retry could not be submitted — ${result.retryError}. The truncated results stand as collected.`);
+	}
 	if (result.truncatedCount > 0) {
 		lines.push(
 			`  ⚠ ${result.truncatedCount} result(s) still truncated after retry — their modules are unscouted, not clean.`,

@@ -354,3 +354,41 @@ test("run ids carry a random suffix, so two submits in the same millisecond are 
 		assert.equal(dirs.length, 2, "each run has its own directory");
 	});
 });
+
+// ---------- #370: a refused retry submit says why ----------
+
+test("a truncation-retry batch the provider refuses is recorded with its reason and reported", async () => {
+	await withRepo(async (dir) => {
+		const posted = [];
+		const fetcher = async (url, init) => {
+			if (init?.method === "POST") {
+				const payload = JSON.parse(init.body);
+				posted.push(payload);
+				// The second post of the same custom id is the retry: refuse it the
+				// way OpenRouter refuses a full job queue.
+				const isRetry = posted.slice(0, -1).some((p) => p.requests.some((r) => r.custom_id === payload.requests[0].custom_id));
+				if (isRetry) return response(429, { error: { message: "job-submission-count in use: 16, quota: 16" } });
+				return response(202, { id: `batch-${posted.length}`, status: "validating" });
+			}
+			if (String(url).includes("/models")) return response(200, { data: [] });
+			const index = Number(String(url).split("/").pop().replace(/^batch-/, "")) - 1;
+			const payload = posted[index];
+			const kind = payload.requests[0].custom_id;
+			const content = kind === "synthesis" || kind === "triage" ? JSON.stringify({ summary: "s", items: [], executive_summary: "s", severity_summary: { critical: 0, high: 0, medium: 0, low: 0 }, top_findings: [] }) : '{"module": "root", "findings": [';
+			return response(200, {
+				id: `batch-${index + 1}`,
+				status: "completed",
+				results: payload.requests.map((r) => ({ custom_id: r.custom_id, response: { status_code: 200, body: { choices: [{ message: { content } }] } }, error: null })),
+				usage: { cost: 0.001 },
+			});
+		};
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher, maxCost: 0 });
+		const result = await runBroadsideCollect(dir, "sk-fake", { fetcher, pollIntervalMs: 10, waitMs: 5_000, includeSynthesis: false, includeTriage: false });
+		const run = (await loadBroadsideState(broadsideDirFor(dir))).runs.at(-1);
+		assert.equal(run.retry.status, "failed");
+		assert.match(run.retry.error, /job-submission-count/, "the provider's refusal is on the entry");
+		assert.match(result.retryError, /per-account limit on concurrent batch jobs/, "explained, not raw");
+		assert.match(collectResultText(result), /↻ The truncation retry could not be submitted — .*job-submission-count.*The truncated results stand as collected\./);
+		assert.equal(result.truncatedCount, 1, "the truncated result is still reported as truncated");
+	});
+});

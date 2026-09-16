@@ -251,6 +251,8 @@ export type BroadsideRetryEntry = {
 	claimedAt: string;
 	/** What the retry batches cost, once polled to completion. */
 	cost?: number;
+	/** Why a retry batch was refused at submit, per model (#370). */
+	error?: string;
 };
 
 /**
@@ -503,6 +505,8 @@ export type BroadsideCollectResult = {
 	retriedCount: number;
 	/** Another collect on this run owns the retry pass; its result lands on a later collect (#322). */
 	retryElsewhere?: boolean;
+	/** Why the truncation retry could not be submitted, when it was refused (#370). */
+	retryError?: string;
 	lensOutcomes: Partial<
 		Record<BroadsideLensId, { status: string; cost?: number; resultCount?: number; truncated?: number; error?: string }>
 	>;
