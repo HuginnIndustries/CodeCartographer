@@ -702,7 +702,10 @@ export async function readSpecArg(
 				`spec_path must be within the workspace (.codecarto/) or the configured library path. Got: ${args.spec_path}`,
 			);
 		}
-		return readFile(args.spec_path, "utf8");
+		// The path that was checked is the path that is read: the original
+		// string could be re-pointed through a symlink between the check and
+		// the read; the canonical one cannot (#362).
+		return readFile(resolvedSpecPath, "utf8");
 	}
 	throw new McpError(ErrorCode.InvalidParams, "Either spec (inline content) or spec_path (absolute file path) is required");
 }

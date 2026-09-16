@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- **`codecarto_publish` reads the `spec_path` it checked.** The containment check ran on the canonical (symlink-resolved) path and the read then used the original string, which a symlink swap between the two could re-point outside the allowed roots; the read now goes through the canonical path. Found by the 2026-09-15 self-audit (#362).
+
 - **The user-global config is written under a lock and atomically.** `writeLibraryConfig` read the file, merged `library.path`/`library.namespace`, and wrote it back with a plain `writeFile` — two library-inits at once (two hosts, or MCP and Pi) could each read the pre-write content and the later write dropped the earlier change, and a crash mid-write could truncate a file every workspace on the machine reads. The read-modify-write now runs under `<config>.lock` and lands through `atomicWriteFile`. Found by the 2026-09-15 self-audit (#361).
 
 - **Completion judges its closure-integrity gates on the state read under the lock.** The carry-forward target check, D1 (a closed routed item whose `derives_from` question is still open), and D3 (a `needs-runtime-test` question closed without evidence) ran on a read taken before the status lock, and the handoff was applied under it without re-running them — so a status change that landed in between, a concurrent completion, an amendment, or a rollback, was applied over as if the first verdict still held (the same shape #337 fixed for amendments). The gates now run again on the locked read, and a refusal there writes nothing. Found by the 2026-09-15 self-audit (#360).

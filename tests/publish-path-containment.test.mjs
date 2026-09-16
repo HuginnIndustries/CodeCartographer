@@ -232,3 +232,24 @@ test("codecarto_library_list and codecarto_library_reindex validate cwd the same
 		await cleanup();
 	}
 });
+
+test("readSpecArg reads the canonical path it checked, not the string it was given (#362)", async () => {
+	const { readFile: read } = await import("node:fs/promises");
+	const { symlink, mkdtemp, writeFile: write, rm, mkdir: mk } = await import("node:fs/promises");
+	const { tmpdir } = await import("node:os");
+	const dir = await mkdtemp(join(tmpdir(), "cc-readspec-"));
+	try {
+		const root = join(dir, "root");
+		await mk(root, { recursive: true });
+		await write(join(root, "real.md"), "# real\n", "utf8");
+		await symlink(join(root, "real.md"), join(root, "link.md"));
+		// A symlink inside the root resolves inside the root: read through the
+		// resolved path, which is what the containment check judged.
+		assert.equal(await readSpecArg({ spec_path: join(root, "link.md") }, [root]), "# real\n");
+		const source = await read(new URL("../mcp-server/server.ts", import.meta.url), "utf8");
+		assert.match(source, /return readFile\(resolvedSpecPath, "utf8"\);/, "the read goes through the checked path");
+		assert.doesNotMatch(source, /return readFile\(args\.spec_path, "utf8"\);/);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
