@@ -25,6 +25,23 @@ test("a key named after a prototype member is an ordinary key", () => {
 	}
 });
 
+test("a __proto__ key in a sequence item is an entry too, on the first key and on a nested one (#365)", () => {
+	// The item's first key is the one the `- key: value` shape assigns directly;
+	// a following key comes through the nested-mapping merge. Both used to
+	// plain-assign, so `__proto__` set the item's prototype instead.
+	const first = parseSimpleYaml("items:\n  - __proto__:\n      polluted: yes\n    id: a\n");
+	const [item] = first.items;
+	assert.ok(Object.prototype.hasOwnProperty.call(item, "__proto__"), "__proto__ is an own key of the item");
+	assert.equal(item.polluted, undefined, "nothing was inherited");
+	assert.equal(item.id, "a");
+
+	const nested = parseSimpleYaml("items:\n  - id: b\n    __proto__:\n      polluted: yes\n");
+	const [second] = nested.items;
+	assert.ok(Object.prototype.hasOwnProperty.call(second, "__proto__"), "__proto__ merged from the nested mapping is an own key");
+	assert.equal(second.polluted, undefined);
+	assert.equal(Object.getPrototypeOf(second), Object.prototype);
+});
+
 test("a __proto__ key becomes an entry rather than changing the prototype", () => {
 	const parsed = parseSimpleYaml("__proto__: injected\nkept: yes\n");
 	assert.equal(parsed.kept, "yes");

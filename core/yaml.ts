@@ -476,15 +476,21 @@ export function parseSimpleYaml(raw: string): unknown {
 				const key = rawItem.slice(0, separator).trim();
 				const rawValue = rawItem.slice(separator + 1).trim();
 				const item: Record<string, unknown> = {};
-				item[key] = rawValue === "" ? null : parseScalarWithContinuation(rawValue, indent);
+				// Through defineProperty for the same reason the mapping parser
+				// does it (#365): `item["__proto__"] = …` would set the item's
+				// prototype and drop the key from its own entries.
+				const assignItem = (k: string, v: unknown): void => {
+					Object.defineProperty(item, k, { value: v, writable: true, enumerable: true, configurable: true });
+				};
+				assignItem(key, rawValue === "" ? null : parseScalarWithContinuation(rawValue, indent));
 
 				skipBlank();
 				if (rawValue === "" && index < lines.length && countIndent(lines[index] ?? "") > indent + 1) {
-					item[key] = parseBlock(countIndent(lines[index] ?? ""));
+					assignItem(key, parseBlock(countIndent(lines[index] ?? "")));
 				}
 				if (index < lines.length && countIndent(lines[index] ?? "") > indent) {
 					const nested = parseMapping(itemIndent);
-					for (const [nestedKey, nestedValue] of Object.entries(nested)) item[nestedKey] = nestedValue;
+					for (const [nestedKey, nestedValue] of Object.entries(nested)) assignItem(nestedKey, nestedValue);
 				}
 				result.push(item);
 				continue;
