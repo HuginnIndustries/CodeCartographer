@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- **Broad-Side decides whether to slice a repository per directory in the unit slices are capped in.** The whole-repo-or-per-directory choice summed file sizes in bytes while slices are capped in characters, so a non-ASCII repository that fit one slice was split per directory and paid for the extra requests. The total is now measured in characters. Found by the 2026-09-15 self-audit (#368).
+
 - **Broad-Side run ids are unique: two submits in the same millisecond no longer share a record and a directory.** A run's id was its millisecond timestamp; a second submit in that millisecond took the same id, `persistBroadsideRun` merged by id and replaced the first run's record, and both wrote into one output directory. Ids now carry a four-hex suffix checked against the runs on record and the directories on disk (`2026-09-14T03-53-20-895Z-a1b2`). Found by the 2026-09-15 self-audit (#367).
 
 - **A synthesis or triage reply gets the JSON tolerance lens results have, and one that is not JSON fails the pass instead of completing it empty.** The post-passes parsed their reply with a raw `JSON.parse`; a reply wrapped in a code fence — which the lens path strips — read as a "completed" pass with no top findings and no work order, silently. Both passes now parse through the same fence-tolerant reader, the stored `synthesis.json`/`triage.json` is the JSON with the fence gone, and a reply that is not a JSON object at all (cut off at the output cap, or prose) marks the pass `failed` with that reason, keeps the raw text beside the run (`<pass>.raw.txt`), and says so in the collect report. Found by the 2026-09-15 self-audit (#366).

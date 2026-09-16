@@ -229,3 +229,25 @@ test("a long document-only match is abbreviated, and a lens with no sources to f
 	assert.deepEqual(unknown.files.map((f) => f.relPath), ["SECURITY.md"]);
 	assert.equal(unknown.fallback, undefined);
 });
+
+// ---------- #368: slice mode is decided in the unit slices are capped in ----------
+
+test("slice mode is chosen on character length, not bytes: a multibyte repo that fits one slice is not split per directory", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "cc-bs-chars-"));
+	try {
+		await writeFile(join(dir, "go.mod"), "module x\n");
+		// Two modules of 15,000 three-byte characters each: 30,000 code units,
+		// 90,000 bytes. The defect lens caps a slice at 60,000 characters.
+		const body = `package a\n// ${"你".repeat(15_000)}\n`;
+		await mkdir(join(dir, "alpha"), { recursive: true });
+		await mkdir(join(dir, "beta"), { recursive: true });
+		await writeFile(join(dir, "alpha", "a.go"), body);
+		await writeFile(join(dir, "beta", "b.go"), body.replace("package a", "package b"));
+		const info = await collectRepoInfo(dir);
+		const slices = await gatherSlices(dir, getLens("defect"), info);
+		assert.equal(slices.length, 1, "one slice: the repository fits the cap in characters");
+		assert.deepEqual(slices[0].files.sort(), ["alpha/a.go", "beta/b.go"]);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
