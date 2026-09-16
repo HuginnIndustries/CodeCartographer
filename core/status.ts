@@ -2,8 +2,8 @@
 // framework logic shared by every wrapper.
 
 import { randomBytes } from "node:crypto";
-import { open, readFile, rm, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { open, readdir, readFile, rm, stat, unlink, utimes } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import type {
 	CarryForwardEntry,
 	ClosureEntry,
@@ -22,13 +22,12 @@ import { loadYamlFile } from "./yaml.ts";
 
 export const LOCK_RETRY_MS = 125;
 export const LOCK_TIMEOUT_MS = 5000;
-export const STALE_LOCK_MS = 60_000;
 /**
- * How old the removal lock (`<lock>.break`, see {@link withRemovalLock}) may
- * be before it is treated as left behind by a crashed process. It is held
- * across one stat and one rm, so anything this old was abandoned.
+ * How long a lock ticket may go unrefreshed before its owner is presumed
+ * hung. Owners refresh every quarter of this while they wait or hold, so a
+ * live holder is never broken by age; a dead one is removed at once.
  */
-export const BREAK_LOCK_STALE_MS = LOCK_TIMEOUT_MS;
+export const STALE_LOCK_MS = 60_000;
 
 export function assertSafePhaseId(phaseId: string): void {
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(phaseId)) {
@@ -439,165 +438,199 @@ export function applyHandoff(status: NormalizedStatus, handoff: PhaseHandoff): N
 	return status;
 }
 
-/** What {@link acquireLock} hands back: a release that only ever removes its own lock. */
+/** What {@link acquireLock} hands back: a release that only ever removes its own ticket. */
 export interface LockHandle {
 	release: () => Promise<void>;
 	/**
-	 * Set when acquiring meant breaking a lock older than {@link STALE_LOCK_MS}:
-	 * the previous holder as its lock file recorded it, for callers that log.
+	 * Set when acquiring meant removing a ticket whose holder was dead or had
+	 * stopped refreshing it for {@link STALE_LOCK_MS}: the previous holder as
+	 * its ticket recorded it, for callers that log.
 	 */
 	brokeStale?: { pid: number | null; since: string | null };
 }
 
+export interface AcquireLockOptions {
+	/** How long to wait for the lock; default {@link LOCK_TIMEOUT_MS}. */
+	timeoutMs?: number;
+	/**
+	 * How long a ticket may go unrefreshed before its holder is presumed
+	 * hung; default {@link STALE_LOCK_MS}. A dead holder is removed at once.
+	 */
+	staleMs?: number;
+}
+
 /**
- * Take the O_EXCL lock at `lockPath`, waiting up to {@link LOCK_TIMEOUT_MS}
- * and breaking a lock older than {@link STALE_LOCK_MS}.
+ * Take the lock named by `lockPath`, waiting up to `timeoutMs`.
  *
- * The lock file records `pid`, timestamp, and a per-acquisition token, and
- * release removes the file only while it still carries that token. Without
- * the token, release removed whoever's lock was there: after a stale break
- * the previous holder's release deleted the new holder's lock, and a third
- * writer walked straight in (#227).
+ * The lock is a queue of **tickets**: files beside `lockPath` named
+ * `<lock>.t.<order>-<pid>-<token>`, one per waiter, each written by its
+ * owner alone. The holder is the owner of the first ticket in name order
+ * whose process is alive and whose ticket has been refreshed within
+ * `staleMs`; every owner refreshes its ticket on a timer while it waits and
+ * while it holds, so a live holder is never broken however long it holds
+ * (#355 — a publish across a full reindex used to lose its lock at 60 s).
+ * A ticket whose owner is dead, or has not refreshed it in `staleMs`, is
+ * removed by whoever notices — by its own unique name, so two waiters
+ * removing the same dead ticket remove the same inode and nothing else.
+ * No shared path is ever removed and re-created, which is the race every
+ * `rm`-then-recreate stale break carries (#342, #344, #355).
  *
- * Every removal — a release or a stale break — happens under the removal
- * lock (`<lock>.break`) and re-checks what it is about to remove there.
- * Two waiters that both saw a stale lock used to both `rm` it: the second
- * `rm` landed after the first waiter had re-created the file, so both held
- * the lock (#342). A file can only be created while the path is free, and
- * only a removal-lock holder removes, so what a holder verified is what it
- * removes.
+ * Ordering follows Lamport's bakery: a waiter announces it is *choosing*
+ * (`<lock>.c.<token>`) before it writes its ticket and withdraws the marker
+ * after, and nobody concludes it holds the lock while a marker it does not
+ * own exists — so a waiter that computed an earlier order number but had
+ * not yet written its ticket cannot be overtaken. Two tickets with the same
+ * order number break the tie on the token, which every observer sorts the
+ * same way.
+ *
+ * A plain `lockPath` file left by a pre-#355 process is honoured while it is
+ * younger than `staleMs` and removed once it is not, so an upgrade under a
+ * live older process does not let two writers in.
  */
-export async function acquireLock(lockPath: string): Promise<LockHandle> {
+export async function acquireLock(lockPath: string, options: AcquireLockOptions = {}): Promise<LockHandle> {
+	const timeoutMs = options.timeoutMs ?? LOCK_TIMEOUT_MS;
+	const staleMs = options.staleMs ?? STALE_LOCK_MS;
 	const startedAt = Date.now();
-	const token = `${process.pid}.${randomBytes(8).toString("hex")}`;
+	const dir = dirname(lockPath);
+	const base = basename(lockPath);
+	const token = randomBytes(8).toString("hex");
+	const choosingPath = join(dir, `${base}.c.${token}`);
 	let brokeStale: LockHandle["brokeStale"];
 
-	while (true) {
-		try {
-			const handle = await open(lockPath, "wx");
-			try {
-				await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n${token}\n`, "utf8");
-			} catch (error) {
-				// A non-EEXIST write failure must not leak the descriptor the
-				// open just created (#131); close best-effort, then rethrow.
-				await handle.close().catch(() => undefined);
-				throw error;
-			}
-			await handle.close();
-			return {
-				release: () => releaseOwnedLock(lockPath, token),
-				...(brokeStale && { brokeStale }),
-			};
-		} catch (error) {
-			const nodeError = error as NodeJS.ErrnoException;
-			if (nodeError.code !== "EEXIST") throw error;
+	// The doorway: announce, take a number, write the ticket, withdraw.
+	await writeExclusive(choosingPath, `${process.pid}\n${new Date().toISOString()}\n${token}\n`);
+	const order = String(Date.now()).padStart(15, "0");
+	const ticketPath = join(dir, `${base}.t.${order}-${process.pid}-${token}`);
+	const ticketName = basename(ticketPath);
+	try {
+		await writeExclusive(ticketPath, `${process.pid}\n${new Date().toISOString()}\n${token}\n`);
+	} finally {
+		await rm(choosingPath, { force: true }).catch(() => undefined);
+	}
 
-			try {
-				const lockStat = await stat(lockPath);
-				if (Date.now() - lockStat.mtimeMs > STALE_LOCK_MS) {
-					const broken = await breakStaleLock(lockPath);
-					if (broken) {
-						brokeStale = broken;
-						continue;
-					}
-					// Another waiter is breaking it, or already has: fall
-					// through to a wait and try the open again.
-				}
-			} catch {
+	// The heartbeat: a ticket that keeps being touched is a live owner's.
+	const heartbeat = setInterval(() => {
+		const now = new Date();
+		void utimes(ticketPath, now, now).catch(() => undefined);
+	}, Math.max(50, Math.floor(staleMs / 4)));
+	heartbeat.unref?.();
+
+	const giveUp = async (): Promise<never> => {
+		clearInterval(heartbeat);
+		await rm(ticketPath, { force: true }).catch(() => undefined);
+		throw new Error(`Timed out waiting for lock: ${lockPath}`);
+	};
+
+	while (true) {
+		const names = await readdir(dir).catch(() => [] as string[]);
+		let blocked = false;
+
+		// A pre-#355 lock file: honour it while fresh, remove it when stale.
+		if (names.includes(base)) {
+			const legacyStat = await stat(lockPath).catch(() => null);
+			if (legacyStat && Date.now() - legacyStat.mtimeMs <= staleMs) blocked = true;
+			else if (legacyStat) {
+				const holder = await describeLockHolder(lockPath);
+				if (await removeIfPresent(lockPath)) brokeStale = holder;
+			}
+		}
+
+		// Someone is between taking a number and writing their ticket: their
+		// number may be earlier than ours. Wait, unless they died in the door.
+		for (const name of names) {
+			if (!name.startsWith(`${base}.c.`) || name === basename(choosingPath)) continue;
+			const path = join(dir, name);
+			if (await ownerIsGone(path, staleMs)) {
+				await rm(path, { force: true }).catch(() => undefined);
 				continue;
 			}
-
-			if (Date.now() - startedAt > LOCK_TIMEOUT_MS) {
-				throw new Error(`Timed out waiting for lock: ${lockPath}`);
-			}
-
-			await sleep(LOCK_RETRY_MS);
+			blocked = true;
 		}
-	}
-}
 
-/**
- * Run `remove` while holding `<lockPath>.break`, the lock that serializes
- * removals of `lockPath`. Waits up to {@link LOCK_TIMEOUT_MS}; a removal lock
- * older than {@link BREAK_LOCK_STALE_MS} is a crashed remover's and is
- * cleared. Resolves to `undefined` when the removal lock could not be had
- * in time — the caller decides what that means.
- */
-async function withRemovalLock<T>(lockPath: string, remove: () => Promise<T>): Promise<T | undefined> {
-	const breakPath = `${lockPath}.break`;
-	const startedAt = Date.now();
-	while (true) {
-		try {
-			const handle = await open(breakPath, "wx");
-			await handle.close();
-			break;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			try {
-				const breakStat = await stat(breakPath);
-				if (Date.now() - breakStat.mtimeMs > BREAK_LOCK_STALE_MS) {
-					await rm(breakPath, { force: true }).catch(() => undefined);
+		// Every ticket ahead of ours whose owner is alive blocks us; a dead or
+		// hung owner's ticket is removed by its own name.
+		if (!blocked) {
+			const ahead = names.filter((name) => name.startsWith(`${base}.t.`) && name < ticketName).sort();
+			for (const name of ahead) {
+				const path = join(dir, name);
+				if (await ownerIsGone(path, staleMs)) {
+					// Recorded only by the waiter whose rm actually removed it; the
+					// others saw the same dead ticket and removed nothing.
+					const holder = await describeLockHolder(path);
+					if (await removeIfPresent(path)) brokeStale = holder;
 					continue;
 				}
-			} catch {
-				continue;
+				blocked = true;
+				break;
 			}
-			if (Date.now() - startedAt > LOCK_TIMEOUT_MS) return undefined;
-			await sleep(LOCK_RETRY_MS);
 		}
+
+		if (!blocked) {
+			// Our own ticket must still be there: a waiter that judged us hung
+			// (the machine slept past staleMs) has already let someone in.
+			if (!(await pathExists(ticketPath))) return giveUp();
+			return {
+				release: async () => {
+					clearInterval(heartbeat);
+					await rm(ticketPath, { force: true }).catch(() => undefined);
+				},
+				...(brokeStale && { brokeStale }),
+			};
+		}
+
+		if (Date.now() - startedAt > timeoutMs) return giveUp();
+		await sleep(LOCK_RETRY_MS);
 	}
+}
+
+/**
+ * Remove `path`; true when this call removed it, false when it was already
+ * gone. `unlink`, not `rm`: `fs.promises.rm` reports success to every one
+ * of several concurrent callers, and the point here is to know which one
+ * actually took the file away.
+ */
+async function removeIfPresent(path: string): Promise<boolean> {
 	try {
-		return await remove();
+		await unlink(path);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
+
+/** Create `path` exclusively with `content`; the descriptor is closed either way (#131). */
+async function writeExclusive(path: string, content: string): Promise<void> {
+	const handle = await open(path, "wx");
+	try {
+		await handle.writeFile(content, "utf8");
 	} finally {
-		await rm(breakPath, { force: true }).catch(() => undefined);
+		await handle.close().catch(() => undefined);
 	}
 }
 
 /**
- * Remove a lock older than {@link STALE_LOCK_MS}, under the removal lock and
- * only if it is still that old there: the holder may have released and a
- * new one acquired between the caller's stat and this one. Resolves to the
- * broken lock's holder, or null when nothing was removed.
+ * Whether the owner of a ticket or marker is dead (its pid no longer
+ * exists) or has stopped refreshing it for `staleMs`. A pid that exists but
+ * cannot be signalled (another user's process) counts as alive. A file that
+ * vanished while we looked is gone, and so is its owner's claim.
  */
-async function breakStaleLock(lockPath: string): Promise<LockHandle["brokeStale"] | null> {
-	const broken = await withRemovalLock(lockPath, async () => {
-		let lockStat;
-		try {
-			lockStat = await stat(lockPath);
-		} catch {
-			return null;
-		}
-		if (Date.now() - lockStat.mtimeMs <= STALE_LOCK_MS) return null;
-		const holder = await describeLockHolder(lockPath);
-		await rm(lockPath, { force: true }).catch(() => undefined);
-		return holder;
-	});
-	return broken ?? null;
-}
-
-/**
- * Remove the lock at `lockPath` only if it is still ours. A lock that vanished
- * (someone broke it as stale) or that now carries another holder's token is
- * left alone; one whose content cannot be read is left to go stale rather
- * than removed unverified.
- */
-async function releaseOwnedLock(lockPath: string, token: string): Promise<void> {
-	const removeIfOwned = async (): Promise<true> => {
-		let content: string;
-		try {
-			content = await readFile(lockPath, "utf8");
-		} catch {
-			return true;
-		}
-		if (content.split(/\r?\n/)[2] !== token) return true;
-		await rm(lockPath, { force: true }).catch(() => undefined);
+async function ownerIsGone(path: string, staleMs: number): Promise<boolean> {
+	let fileStat;
+	try {
+		fileStat = await stat(path);
+	} catch {
 		return true;
-	};
-	// Serialized with stale breaks so a break in progress cannot land on a
-	// lock this release has already replaced (#342). A removal lock that
-	// cannot be had in time falls back to the token-checked removal alone —
-	// the guarantee before #342, never less.
-	if ((await withRemovalLock(lockPath, removeIfOwned)) === undefined) await removeIfOwned();
+	}
+	if (Date.now() - fileStat.mtimeMs > staleMs) return true;
+	const { pid } = await describeLockHolder(path);
+	if (pid === null || pid === process.pid) return false;
+	try {
+		process.kill(pid, 0);
+		return false;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ESRCH";
+	}
 }
 
 async function describeLockHolder(lockPath: string): Promise<NonNullable<LockHandle["brokeStale"]>> {
