@@ -1473,6 +1473,7 @@ export async function handleBroadside(args: {
 			candidates: verified.candidates,
 			totalCost: verified.totalCost,
 			...(verified.stoppedByCost && { stoppedByCost: true }),
+			redactedValues: verified.redactedValues,
 			findings: verified.findings,
 		});
 	}

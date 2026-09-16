@@ -222,7 +222,10 @@ is about the *presence* of a hardcoded credential at that location; the
 value was never sent. This is a safety net against an accidental upload
 with deliberately low-false-positive patterns, not a secret scanner:
 anything it does not recognise goes as written. `redact_secrets: false` in
-`config.yaml` turns the content pass off (the by-name skip stays).
+`config.yaml` turns the content pass off (the by-name skip stays). The same
+pass runs over every line `verify`'s read-only tools hand the model — a key in
+an ordinary source file is exactly what a finding points a verifier at — and
+the verify report says how many values it redacted.
 
 The `max_cost` guardrail is an **estimate-based pre-flight limit**, distinct
 from OpenRouter's runtime cost tracking: it predicts from file sizes before

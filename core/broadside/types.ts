@@ -239,6 +239,8 @@ export type BroadsideVerifyEntry = {
 	confirmed: number;
 	cost: number;
 	at: string;
+	/** Secret-like values redacted from the pass's tool output before upload (#358); absent on passes from before it. */
+	redactedValues?: number;
 };
 
 /** The truncation retry pass of one run: one batch per model (#206). */

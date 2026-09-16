@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Broad-Side `verify` redacts what its tools hand the model.** The pass's `read_file` and `grep` returned raw lines, so a key in an ordinary source file — exactly what a finding points a verifier at — was uploaded in cleartext, with `redact_secrets: true` in the config, which `verify` never read. The reader now runs every line through the redaction pass `submit` runs over its slices, honours `redact_secrets` the same way, and the verify report, `verified.md`, the run record, and the MCP result say how many values were redacted and from which files. A pattern the model greps for can still tell it a line matched; the line it sees is redacted. Found by the 2026-09-15 self-audit (#358).
+
 ### Changed
 
 - **`core/broadside.ts` is now a barrel over `core/broadside/`** — fourteen modules, one per concern (`constants`, `types`, `schemas`, `lenses`, `repo`, `requests`, `state`, `models`, `client`, `submit`, `results`, `verify`, `collect`, `render`), with an acyclic import graph at runtime; `core/broadside-verify.ts` moved to `core/broadside/verify.ts`. No behaviour change: every name the old module exported is exported by the barrel, `core/index.ts` re-exports it as before, and the test suite is unchanged. Fourteen helpers that crossed a module boundary are now exported (`SCHEMAS`, `sanitizeId`, `gitHead`, `parseSynthesisTopFindings`, …); the provider-error explanations moved beside the batch client. #339.
