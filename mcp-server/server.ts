@@ -68,6 +68,7 @@ import {
 	type LibraryVisibility,
 	listBatchModels,
 	listEntries,
+	listEntriesWithIndexState,
 	listGuideTopics,
 	loadBroadsideConfig,
 	modelsText,
@@ -946,7 +947,7 @@ export async function handleLibraryList(args: Record<string, unknown>) {
 	if (typeof args.slug === "string" && args.slug !== "") filter.slug = args.slug;
 	if (typeof args.source_repo === "string" && args.source_repo !== "") filter.source_repo = args.source_repo;
 
-	const entries = await listEntries(libraryPath, filter);
+	const { entries, indexState } = await listEntriesWithIndexState(libraryPath, filter);
 	// Computed over the listed entries only, read-only: one readdir per entry
 	// plus one small metadata read per older version.
 	const conflicts = await detectProvenanceConflicts(libraryPath, entries);
@@ -963,12 +964,18 @@ export async function handleLibraryList(args: Record<string, unknown>) {
 			}),
 			...provenanceConflictLines(conflicts),
 		].join("\n");
+	// A list never writes the index (#357): say when it answered from the
+	// entry directories instead, so the caller can run a reindex.
+	const indexNote = indexState === "indexed"
+		? ""
+		: `\nindex.yaml is ${indexState}; this listing was built from the entry directories. Run codecarto_library_reindex to rebuild it.`;
 
-	return textResult(summary, {
+	return textResult(`${summary}${indexNote}`, {
 		libraryPath,
 		libraryName: marker.name,
 		namespaced: marker.namespaced,
 		count: entries.length,
+		indexState,
 		entries,
 		provenance_conflicts: conflicts,
 	});

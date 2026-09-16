@@ -685,7 +685,7 @@ export async function publishEntry(
 			const provenance = input.provenance ?? (await readRecordedProvenance(libraryRoot, namespace, input.slug, latestVersion));
 			const metadata = buildMetadata({ ...input, provenance }, latestVersion);
 			await atomicWriteYaml(join(latestVersionDir, METADATA_FILE), metadata);
-			if (!opts.skipReindex) await reindex(libraryRoot);
+			if (!opts.skipReindex) await reindex(libraryRoot, { holdingLock: true });
 			return {
 				slug: input.slug,
 				namespace,
@@ -721,7 +721,7 @@ export async function publishEntry(
 		}
 
 		await writeLatestPointer(entryDir, `v${nextVersion}`);
-		if (!opts.skipReindex) await reindex(libraryRoot);
+		if (!opts.skipReindex) await reindex(libraryRoot, { holdingLock: true });
 
 		return {
 			slug: input.slug,
@@ -909,28 +909,48 @@ export interface ListEntriesFilter {
 	source_repo?: string;
 }
 
+/** How `listEntries` found the index it answered from (#357). */
+export type LibraryIndexState = "indexed" | "missing" | "unparseable";
+
 export async function listEntries(
 	libraryRoot: string,
 	filter: ListEntriesFilter = {},
 ): Promise<LibraryIndexEntry[]> {
-	const marker = await readMarker(libraryRoot);
-	if (!marker) return [];
+	return (await listEntriesWithIndexState(libraryRoot, filter)).entries;
+}
 
-	// Prefer the index if it's present; fall back to a fresh reindex if not.
+/**
+ * The entries plus where they came from. A list is read-only: when
+ * `index.yaml` is missing or does not parse, the entries are built from the
+ * entry directories in memory and `indexState` says so, so a caller can ask
+ * for a reindex — the list itself never writes the index, which is the
+ * publisher's under the publish lock (#357; it used to rewrite a corrupt
+ * index unlocked, racing a publish for the same file).
+ */
+export async function listEntriesWithIndexState(
+	libraryRoot: string,
+	filter: ListEntriesFilter = {},
+): Promise<{ entries: LibraryIndexEntry[]; indexState: LibraryIndexState }> {
+	const marker = await readMarker(libraryRoot);
+	if (!marker) return { entries: [], indexState: "missing" };
+
 	const indexPath = join(libraryRoot, LIBRARY_INDEX_FILE);
 	let index: LibraryIndex;
+	let indexState: LibraryIndexState = "indexed";
 	if (await pathExists(indexPath)) {
 		try {
 			const raw = await readFile(indexPath, "utf8");
 			index = normalizeIndex(parseSimpleYaml(raw), marker);
 		} catch {
-			index = await reindex(libraryRoot);
+			index = await scanLibrary(libraryRoot, marker);
+			indexState = "unparseable";
 		}
 	} else {
-		index = await reindex(libraryRoot);
+		index = await scanLibrary(libraryRoot, marker);
+		indexState = "missing";
 	}
 
-	return index.entries.filter((e) => {
+	const entries = index.entries.filter((e) => {
 		if (filter.namespace !== undefined && e.namespace !== filter.namespace) return false;
 		if (filter.slug !== undefined && e.slug !== filter.slug) return false;
 		// Same equivalence the publish guard applies: `.git`, scheme, userinfo,
@@ -940,16 +960,39 @@ export async function listEntries(
 		if (filter.tag !== undefined && !e.tags.includes(filter.tag)) return false;
 		return true;
 	});
+	return { entries, indexState };
 }
 
 // ─── Reindex ────────────────────────────────────────────────────────────────
 
-export async function reindex(libraryRoot: string): Promise<ReindexResult> {
+/**
+ * Rebuild `index.yaml` and `INDEX.md` from the entry directories. Every
+ * writer of the index takes the publish lock: a reindex that scanned the
+ * directories before a publish's rename and wrote after the publish's own
+ * reindex used to drop the new version from the index until the next
+ * reindex (#357). `holdingLock` is for the publisher, which already has it.
+ */
+export async function reindex(libraryRoot: string, opts: { holdingLock?: boolean } = {}): Promise<ReindexResult> {
 	const marker = await readMarker(libraryRoot);
 	if (!marker) {
 		throw new Error(`Not a CodeCartographer library: ${LIBRARY_MARKER_FILE} missing at ${libraryRoot}`);
 	}
+	const lock = opts.holdingLock ? null : await acquireLock(join(libraryRoot, PUBLISH_LOCK_FILE));
+	try {
+		const index = await scanLibrary(libraryRoot, marker);
+		await atomicWriteYaml(join(libraryRoot, LIBRARY_INDEX_FILE), index);
+		await writeIndexMarkdown(libraryRoot, index, marker);
+		// Reported, not written. The index files above are ABI, so the conflict
+		// list travels on the return value only (see ReindexResult).
+		const provenance_conflicts = await detectProvenanceConflicts(libraryRoot, index.entries);
+		return { ...index, provenance_conflicts };
+	} finally {
+		await lock?.release();
+	}
+}
 
+/** The index as the entry directories would have it — a read, nothing written. */
+async function scanLibrary(libraryRoot: string, marker: LibraryMarker): Promise<LibraryIndex> {
 	const entries: LibraryIndexEntry[] = [];
 	const namespacesSeen = new Set<string>();
 	const entriesRoot = join(libraryRoot, ENTRIES_DIR);
@@ -988,7 +1031,7 @@ export async function reindex(libraryRoot: string): Promise<ReindexResult> {
 		return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
 	});
 
-	const index: LibraryIndex = {
+	return {
 		schema_version: INDEX_SCHEMA_VERSION,
 		library_name: marker.name,
 		generated_at: new Date().toISOString(),
@@ -996,14 +1039,6 @@ export async function reindex(libraryRoot: string): Promise<ReindexResult> {
 		namespaces: [...namespacesSeen].sort(),
 		entries,
 	};
-
-	await atomicWriteYaml(join(libraryRoot, LIBRARY_INDEX_FILE), index);
-	await writeIndexMarkdown(libraryRoot, index, marker);
-
-	// Reported, not written. The index files above are ABI, so the conflict
-	// list travels on the return value only (see ReindexResult).
-	const provenance_conflicts = await detectProvenanceConflicts(libraryRoot, entries);
-	return { ...index, provenance_conflicts };
 }
 
 async function buildIndexEntry(

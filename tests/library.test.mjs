@@ -39,6 +39,7 @@ process.env.GIT_CONFIG_SYSTEM = ABSENT_GIT_CONFIG;
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const lib = await import(pathToFileURL(`${REPO_ROOT}/core/library.ts`).href);
+const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const {
 	LIBRARY_MARKER_FILE,
 	LIBRARY_INDEX_FILE,
@@ -433,6 +434,40 @@ test("listEntries returns all entries from a fresh reindex", async () => {
 		assert.equal(all[1].slug, "alpha");
 		assert.equal(all[2].namespace, "james");
 		assert.equal(all[2].slug, "beta");
+	} finally {
+		await cleanup();
+	}
+});
+
+test("a list never writes the index: a missing or corrupt index.yaml is answered from the entry directories and named as such (#357)", async () => {
+	const { libraryRoot, cleanup } = await makeLibrary();
+	try {
+		await publishEntry(libraryRoot, "# a\n", sampleInput({ slug: "alpha" }));
+		const indexPath = join(libraryRoot, "index.yaml");
+		const good = await readFile(indexPath, "utf8");
+		assert.deepEqual(await core.listEntriesWithIndexState(libraryRoot), { entries: (await listEntries(libraryRoot)), indexState: "indexed" });
+
+		await writeFile(indexPath, "schema_version: 1\nschema_version: 2\n", "utf8"); // a duplicate key: the one construct the parser refuses
+		const corrupt = await core.listEntriesWithIndexState(libraryRoot);
+		assert.equal(corrupt.indexState, "unparseable");
+		assert.equal(corrupt.entries.length, 1, "the entries still come back, built from the directories");
+		assert.equal(await readFile(indexPath, "utf8"), "schema_version: 1\nschema_version: 2\n", "list left the corrupt index exactly as it was");
+
+		await rm(indexPath);
+		const missing = await core.listEntriesWithIndexState(libraryRoot);
+		assert.equal(missing.indexState, "missing");
+		assert.equal(missing.entries.length, 1);
+		assert.equal(await core.pathExists(indexPath), false, "and wrote no index");
+
+		// Only reindex writes it, and it does so under the publish lock.
+		const lock = await core.acquireLock(join(libraryRoot, ".publish.lock"));
+		const reindexing = core.reindex(libraryRoot);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.equal(await core.pathExists(indexPath), false, "reindex waits for the publish lock");
+		await lock.release();
+		await reindexing;
+		const stamped = (text) => text.replace(/generated_at: .*/, "generated_at: X");
+		assert.equal(stamped(await readFile(indexPath, "utf8")), stamped(good), "the rebuilt index is the one publish wrote");
 	} finally {
 		await cleanup();
 	}
