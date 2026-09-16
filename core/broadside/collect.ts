@@ -193,7 +193,7 @@ function buildTriageRequest(findingsText: string, truncatedNote: string, model: 
 
 function parseTriageItems(content: string): TriageItem[] {
 	try {
-		const parsed = JSON.parse(content) as Record<string, unknown>;
+		const parsed = (parseLensJson(content) ?? {}) as Record<string, unknown>;
 		const items = Array.isArray(parsed.items) ? (parsed.items as Array<Record<string, unknown>>) : [];
 		return items
 			.filter((item) => typeof item.title === "string")
@@ -647,14 +647,26 @@ export async function runBroadsideCollect(
 					pass.entry.cost = cost;
 					const results = Array.isArray(batch.results) ? (batch.results as Array<Record<string, unknown>>) : [];
 					const content = results.length > 0 ? extractContent(results[0]) : null;
-					if (content !== null) {
-						await writeFile(join(runDir, `${pass.kind}.json`), `${content}\n`, "utf8");
-						await writeFile(join(runDir, `${pass.kind}.md`), renderFindingsMarkdown(content), "utf8");
+					// The same tolerance the lens path has (#366): a reply wrapped in
+					// a code fence is JSON; one that is not JSON at all — cut off at
+					// the output cap, or prose — is a failed pass that says so, not a
+					// completed one with nothing in it.
+					const parsed = content !== null ? parseLensJson(content) : null;
+					if (content !== null && parsed !== null) {
+						const normalized = JSON.stringify(parsed, null, "\t");
+						await writeFile(join(runDir, `${pass.kind}.json`), `${normalized}\n`, "utf8");
+						await writeFile(join(runDir, `${pass.kind}.md`), renderFindingsMarkdown(normalized), "utf8");
 						if (pass.kind === "synthesis") {
-							topFindings = parseSynthesisTopFindings(content);
+							topFindings = parseSynthesisTopFindings(normalized);
 						} else {
-							topTriageItems = parseTriageItems(content);
+							topTriageItems = parseTriageItems(normalized);
 						}
+					} else {
+						pass.entry.status = "failed";
+						pass.entry.error = content === null
+							? "the batch completed without a result body"
+							: "the reply was not a JSON object — cut off at the output cap, or prose; the raw text is saved beside the run";
+						if (content !== null) await writeFile(join(runDir, `${pass.kind}.raw.txt`), `${content}\n`, "utf8");
 					}
 				} else if (BROADSIDE_DEAD_BATCH_STATUSES.includes(String(batch.status))) {
 					// The batch will never produce a result, so retire the pass.
