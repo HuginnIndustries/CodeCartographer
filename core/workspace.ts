@@ -378,6 +378,8 @@ export type RefreshScaffoldResult = {
 	scaffoldVersionBefore?: string;
 	/** The running framework version the scaffold now matches. */
 	scaffoldVersionAfter: string;
+	/** False when THREAD_LOG already carried this version transition's line (#356). */
+	threadLogEntryAppended: boolean;
 };
 
 async function listTemplateFiles(dir: string, declaredOutputs: Set<string>, relativeDir = ""): Promise<string[]> {
@@ -428,36 +430,58 @@ export async function listScaffoldRefreshFiles(sourceWorkspaceDir: string = pack
  * version transition.
  */
 export async function refreshScaffold(cwd: string): Promise<RefreshScaffoldResult> {
-	const state = await getWorkspaceState(cwd);
-	if (!state) throw new Error("CodeCartographer workspace not found. Run /codecarto-init first.");
+	const located = await getWorkspaceState(cwd);
+	if (!located) throw new Error("CodeCartographer workspace not found. Run /codecarto-init first.");
 	if (!existsSync(packagedWorkspaceDir)) {
 		throw new Error("Packaged .codecarto template is missing. Reinstall codecartographer-pi.");
 	}
-	const scaffoldVersionBefore = state.scaffoldVersion;
-	const files = await listScaffoldRefreshFiles();
-	for (const relativePath of files) {
-		const target = join(state.workspaceDir, relativePath);
-		await mkdir(dirname(target), { recursive: true });
-		await copyFile(join(packagedWorkspaceDir, relativePath), target);
-	}
-	// Workspaces initialised from an npm install before the rules shipped as a
-	// template have no .gitignore at all; give them one without touching an
-	// existing (user-owned) file.
-	await ensureWorkspaceGitignore(state.workspaceDir);
-	const entry = `- ${new Date().toISOString().slice(0, 10)} — scaffold-refresh — Refreshed ${files.length} framework-owned file(s) from the packaged template (${scaffoldVersionBefore ?? "unversioned"} → ${PACKAGE_VERSION}); project state, user config, and session outputs untouched.`;
-	const threadLogPath = join(state.workspaceDir, "THREAD_LOG.md");
-	let currentLog = "";
+	// Under the status lock: a completion in flight re-reads the active
+	// pipeline inside it, and this rewrites every pipeline (#356). Everything
+	// is read before anything is written, so a template that cannot be read
+	// leaves the scaffold as it was; each file then lands atomically, and a
+	// failure between two files leaves a partial refresh that re-running
+	// completes — the copy is idempotent.
+	const lock = await acquireLock(join(located.workspaceDir, "workflow", "status.yaml.lock"));
 	try {
-		currentLog = await readFile(threadLogPath, "utf8");
-	} catch {
-		// Created by the append when absent (pre-template scaffolds).
+		const state = (await getWorkspaceState(cwd)) ?? located;
+		const scaffoldVersionBefore = state.scaffoldVersion;
+		const files = await listScaffoldRefreshFiles();
+		const staged = new Map<string, string>();
+		for (const relativePath of files) {
+			staged.set(relativePath, await readFile(join(packagedWorkspaceDir, relativePath), "utf8"));
+		}
+		for (const [relativePath, content] of staged) {
+			const target = join(state.workspaceDir, relativePath);
+			await mkdir(dirname(target), { recursive: true });
+			await atomicWriteFile(target, content);
+		}
+		// Workspaces initialised from an npm install before the rules shipped as a
+		// template have no .gitignore at all; give them one without touching an
+		// existing (user-owned) file.
+		await ensureWorkspaceGitignore(state.workspaceDir);
+		// One THREAD_LOG line per version change, like completion's and
+		// amendment's link-deduped entries: re-running the refresh at the same
+		// version regenerates the files and adds nothing to the index.
+		const transition = `(${scaffoldVersionBefore ?? "unversioned"} → ${PACKAGE_VERSION})`;
+		const entry = `- ${new Date().toISOString().slice(0, 10)} — scaffold-refresh — Refreshed ${files.length} framework-owned file(s) from the packaged template ${transition}; project state, user config, and session outputs untouched.`;
+		const threadLogPath = join(state.workspaceDir, "THREAD_LOG.md");
+		let currentLog = "";
+		try {
+			currentLog = await readFile(threadLogPath, "utf8");
+		} catch {
+			// Created by the append when absent (pre-template scaffolds).
+		}
+		const alreadyLogged = currentLog.split(/\r?\n/).some((line) => line.includes("— scaffold-refresh —") && line.includes(transition));
+		if (!alreadyLogged) await appendFile(threadLogPath, `${newlineIfUnterminated(currentLog)}${entry}\n`, "utf8");
+		return {
+			written: files,
+			...(scaffoldVersionBefore !== undefined && { scaffoldVersionBefore }),
+			scaffoldVersionAfter: PACKAGE_VERSION,
+			threadLogEntryAppended: !alreadyLogged,
+		};
+	} finally {
+		await lock.release();
 	}
-	await appendFile(threadLogPath, `${newlineIfUnterminated(currentLog)}${entry}\n`, "utf8");
-	return {
-		written: files,
-		...(scaffoldVersionBefore !== undefined && { scaffoldVersionBefore }),
-		scaffoldVersionAfter: PACKAGE_VERSION,
-	};
 }
 
 // Numeric x.y.z comparison; null when either side is not a plain dotted triple.

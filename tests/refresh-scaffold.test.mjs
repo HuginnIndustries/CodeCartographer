@@ -68,7 +68,32 @@ test("refresh restores framework-owned files byte-identically to the packaged te
 test("findings outputs beside restored SKILL stubs survive a second refresh", async () => {
 	const result = await handleRefreshScaffold({ cwd: WORKSPACE });
 	assert.match(await readFile(join(CODECARTO, "findings", "architecture", "architecture-map.md"), "utf8"), /My findings/);
+	// The index line is keyed on the version transition (#356): the first
+	// refresh was "unversioned → current", this one is "current → current" —
+	// a restore, logged once — and a third identical run adds nothing.
+	const lines = async () => (await readFile(join(CODECARTO, "THREAD_LOG.md"), "utf8")).split("\n").filter((line) => line.includes("— scaffold-refresh —"));
+	assert.equal((await lines()).length, 2);
+	assert.equal(result.structuredContent.threadLogEntryAppended, true);
+	const third = await handleRefreshScaffold({ cwd: WORKSPACE });
+	assert.equal((await lines()).length, 2, "a repeated transition is not logged again");
+	assert.equal(third.structuredContent.threadLogEntryAppended, false);
+	// Atomic writes leave no temp files behind.
+	const { readdir } = await import("node:fs/promises");
+	assert.deepEqual((await readdir(join(CODECARTO, "workflow"))).filter((name) => name.endsWith(".tmp")), []);
 	assert.ok(result.structuredContent.written.includes("findings/architecture/SKILL.md"), "framework SKILL stubs refresh");
+});
+
+test("refresh runs under the status lock: a completion holding it makes the refresh wait (#356)", async () => {
+	const { acquireLock } = core;
+	const lock = await acquireLock(join(CODECARTO, "workflow", "status.yaml.lock"));
+	const guideBefore = await readFile(join(CODECARTO, "GUIDE.md"), "utf8");
+	await writeFile(join(CODECARTO, "GUIDE.md"), "# dirtied while locked\n", "utf8");
+	const refreshing = handleRefreshScaffold({ cwd: WORKSPACE });
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	assert.equal(await readFile(join(CODECARTO, "GUIDE.md"), "utf8"), "# dirtied while locked\n", "nothing is rewritten while the lock is held");
+	await lock.release();
+	await refreshing;
+	assert.equal(await readFile(join(CODECARTO, "GUIDE.md"), "utf8"), guideBefore, "restored once the lock was free");
 });
 
 test("refresh without a workspace fails loudly", async () => {

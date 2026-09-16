@@ -1735,7 +1735,7 @@ export default function codeCartographerExtension(pi: ExtensionAPI) {
 				lastFeedbackLines = [
 					`Refreshed ${result.written.length} framework-owned file(s) from the packaged template (${transition}).`,
 					"Project state, user config, findings outputs, scratch, closeouts, and orchestrator files were not touched.",
-					"THREAD_LOG.md: one scaffold-refresh entry appended.",
+					result.threadLogEntryAppended ? "THREAD_LOG.md: one scaffold-refresh entry appended." : "THREAD_LOG.md: already carries this refresh; nothing appended.",
 				];
 				// Re-read state so the widget's staleness line clears with the marker.
 				await refreshWorkspaceUi(ctx, lastFeedbackLines);

@@ -1230,6 +1230,7 @@ export async function handleRefreshScaffold(args: { cwd: string }) {
 		written: result.written,
 		scaffoldVersionBefore: result.scaffoldVersionBefore,
 		scaffoldVersionAfter: result.scaffoldVersionAfter,
+		threadLogEntryAppended: result.threadLogEntryAppended,
 	});
 }
 
