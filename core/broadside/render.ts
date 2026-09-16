@@ -9,6 +9,7 @@ import { type BroadsideCollectResult, type BroadsideIncrementalOutcome, type Bro
 import { type LensDefinition } from "./lenses.ts";
 import { type BatchEndpointRecord, baseSlug } from "./models.ts";
 import { explainBatchError } from "./client.ts";
+import { parseLensJson } from "./results.ts";
 
 // ---------- rendering ----------
 
@@ -16,7 +17,7 @@ export function parseSynthesisTopFindings(
 	content: string,
 ): BroadsideCollectResult["topFindings"] {
 	try {
-		const parsed = JSON.parse(content) as Record<string, unknown>;
+		const parsed = (parseLensJson(content) ?? {}) as Record<string, unknown>;
 		const findings = Array.isArray(parsed.top_findings)
 			? (parsed.top_findings as Array<Record<string, unknown>>)
 			: [];

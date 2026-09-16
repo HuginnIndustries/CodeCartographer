@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- **A synthesis or triage reply gets the JSON tolerance lens results have, and one that is not JSON fails the pass instead of completing it empty.** The post-passes parsed their reply with a raw `JSON.parse`; a reply wrapped in a code fence — which the lens path strips — read as a "completed" pass with no top findings and no work order, silently. Both passes now parse through the same fence-tolerant reader, the stored `synthesis.json`/`triage.json` is the JSON with the fence gone, and a reply that is not a JSON object at all (cut off at the output cap, or prose) marks the pass `failed` with that reason, keeps the raw text beside the run (`<pass>.raw.txt`), and says so in the collect report. Found by the 2026-09-15 self-audit (#366).
+
 - **A `__proto__` key in a YAML sequence item is an entry, as it already was in a mapping.** The mapping parser assigns through `Object.defineProperty` precisely so a `__proto__` key becomes an own entry; the sequence-item path plain-assigned both the item's first key and the keys merged from its nested mapping, so a `- __proto__:` block — handoffs and amendments are model-written YAML — set the item's prototype and vanished from its own keys. Both sites now use the same guard. Found by the 2026-09-15 self-audit (#365).
 
 - **`codecarto_publish` reads the `spec_path` it checked.** The containment check ran on the canonical (symlink-resolved) path and the read then used the original string, which a symlink swap between the two could re-point outside the allowed roots; the read now goes through the canonical path. Found by the 2026-09-15 self-audit (#362).

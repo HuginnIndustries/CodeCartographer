@@ -44,7 +44,7 @@ function response(status, body) {
  * see which request produced which file. `hold` keeps named kinds in
  * progress until released.
  */
-function instantFetcher({ hold = new Set() } = {}) {
+function instantFetcher({ hold = new Set(), wrap = (kind, json) => json } = {}) {
 	const posted = [];
 	const fetcher = async (url, init) => {
 		if (init?.method === "POST") {
@@ -58,9 +58,9 @@ function instantFetcher({ hold = new Set() } = {}) {
 		if (hold.has(kind)) return response(200, { id: `batch-${index + 1}`, status: "in_progress", request_counts: { completed: 0, total: 1 } });
 		const withVerdicts = /## Verification verdicts/.test(payload.requests[0].body.messages[1].content);
 		const content = kind === "synthesis"
-			? JSON.stringify({ executive_summary: withVerdicts ? "built from verdicts" : "unverified", severity_summary: { critical: 0, high: 0, medium: 1, low: 0 }, top_findings: [{ title: withVerdicts ? "verified: confirmed — the lock" : "the lock", severity: "medium", source_lens: "defect", summary: "s" }] })
+			? wrap(kind, JSON.stringify({ executive_summary: withVerdicts ? "built from verdicts" : "unverified", severity_summary: { critical: 0, high: 0, medium: 1, low: 0 }, top_findings: [{ title: withVerdicts ? "verified: confirmed — the lock" : "the lock", severity: "medium", source_lens: "defect", summary: "s" }] }))
 			: kind === "triage"
-				? JSON.stringify({ summary: withVerdicts ? "built from verdicts" : "unverified", items: [{ title: "the lock", severity: "medium", module: "core", impact: "high", difficulty: "low", priority: "P1", rationale: withVerdicts ? "verified: confirmed — trigger" : "unverified" }] })
+				? wrap(kind, JSON.stringify({ summary: withVerdicts ? "built from verdicts" : "unverified", items: [{ title: "the lock", severity: "medium", module: "core", impact: "high", difficulty: "low", priority: "P1", rationale: withVerdicts ? "verified: confirmed — trigger" : "unverified" }] }))
 				: LENS_JSON;
 		return response(200, {
 			id: `batch-${index + 1}`,
@@ -303,5 +303,35 @@ test("/codecarto-broadside collect --regenerate rebuilds the passes from the ver
 			assert.match(shown, /regenerated: synthesis, triage/);
 			assert.match(shown, /built from 3 verdicts/);
 		});
+	});
+});
+
+// ---------- #366: post-pass replies get the lens path's JSON tolerance ----------
+
+test("a fenced post-pass reply is read as JSON; one that is not JSON fails the pass and says so", async () => {
+	await withRepo(async (dir) => {
+		// Fenced: both passes parse and the top items are populated.
+		const fenced = instantFetcher({ wrap: (kind, json) => "```json\n" + json + "\n```" });
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher: fenced.fetcher, maxCost: 0 });
+		const ok = await runBroadsideCollect(dir, "sk-fake", { fetcher: fenced.fetcher, pollIntervalMs: 10, waitMs: 5_000 });
+		assert.equal(ok.synthesis.status, "completed");
+		assert.deepEqual(ok.topFindings.map((f) => f.title), ["the lock"]);
+		assert.equal(ok.topTriageItems.length, 1);
+		const { runDir } = await runDirOf(dir);
+		assert.doesNotMatch(await readFile(join(runDir, "synthesis.json"), "utf8"), /```/, "the stored file is the JSON, fence stripped");
+	});
+	await withRepo(async (dir) => {
+		// Prose: the pass is failed with a reason, the raw text kept, no empty "completed".
+		const prose = instantFetcher({ wrap: (kind) => `I could not produce the ${kind} report in time.` });
+		await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher: prose.fetcher, maxCost: 0 });
+		const bad = await runBroadsideCollect(dir, "sk-fake", { fetcher: prose.fetcher, pollIntervalMs: 10, waitMs: 5_000 });
+		assert.equal(bad.synthesis.status, "failed");
+		assert.match(bad.synthesis.error, /was not a JSON object/);
+		assert.equal(bad.triage.status, "failed");
+		assert.deepEqual(bad.topFindings, []);
+		const { runDir } = await runDirOf(dir);
+		assert.match(await readFile(join(runDir, "synthesis.raw.txt"), "utf8"), /could not produce the synthesis/);
+		assert.equal((await import("node:fs")).existsSync(join(runDir, "synthesis.json")), false);
+		assert.match(collectResultText(bad), /synthesis: failed — the reply was not a JSON object/);
 	});
 });
