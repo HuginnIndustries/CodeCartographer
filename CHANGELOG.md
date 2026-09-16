@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+
+- **CI runs the suite on Windows, reporting rather than gating.** Four of the 2026-09-15 self-audit's findings are claims about Windows filesystem semantics — rename-over-existing in `atomicWriteFile`, the lock's exclusive create and mtime staleness, path containment's case-fold and realpath walk, bare-`git` output parsing — that reading cannot settle. A `windows-latest` job now answers them on every PR; it does not block, a failure becomes an issue with a reproduction, and the job graduates to a gate once green (#372).
+- **The module graph points one way, and a test keeps it that way.** `core/dashboard-writer.ts` imported its bindings back from `core/index.ts`, the barrel that re-exports it — a cycle that resolved only because every binding was read at call time — and `core/broadside/state.ts` imported the terminal-status sets from `client.ts`, a module above it in the layer order. The writer imports from the modules that define its bindings; the two status sets live in `constants.ts`; `tests/module-graph.test.mjs` pins that no `core/` module imports the barrel, that neither directory has a runtime import cycle, and that `core/broadside/` imports only downward through the layers its barrel documents. Found by the 2026-09-15 self-audit (#371).
+
 ### Fixed
 
 - **The phase sub-agent's write guard is documented as what it is: `.codecarto/` alone.** Its comment claimed "the same containment as the parent extension's hook" and the README said "same rules apply to phase sub-agents", but the child guard never admitted the configured library root the orchestrator's hook does — correctly, since a phase writes findings and handoffs and never publishes. The comment, the README, and a test now say so. Found by the 2026-09-15 self-audit (#364).
