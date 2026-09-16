@@ -3,6 +3,8 @@
 // Split out of core/broadside.ts (#339); the barrel there re-exports every
 // name, so `core/index.ts` and the tests see one module as before.
 
+import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BROADSIDE_DIR, BROADSIDE_LENS_IDS, BROADSIDE_MODEL, type BroadsideLensId } from "./constants.ts";
@@ -15,6 +17,15 @@ import { recordBatchEndpoints, resolveCatalogEntry } from "./models.ts";
 import { type FetchLike, submitBatch } from "./client.ts";
 
 // ---------- run orchestration ----------
+
+/** `<ISO timestamp with : and . as ->-<4 hex>`, unused by any recorded run or run directory. */
+function uniqueRunId(taken: string[], broadsideDir: string): string {
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+	for (;;) {
+		const candidate = `${stamp}-${randomBytes(2).toString("hex")}`;
+		if (!taken.includes(candidate) && !existsSync(join(broadsideDir, candidate))) return candidate;
+	}
+}
 
 export async function runBroadsideSubmit(
 	cwd: string,
@@ -250,8 +261,12 @@ export async function runBroadsideSubmit(
 
 	// Read before anything is posted: a state.json that cannot be read refuses
 	// the run here (#233), while persistBroadsideRun below merges by run id.
-	await loadBroadsideState(broadsideDir);
-	const runId = new Date().toISOString().replace(/[:.]/g, "-");
+	const existing = await loadBroadsideState(broadsideDir);
+	// The timestamp alone collided when two submits landed in one millisecond
+	// (#367): the second run's record replaced the first's and both shared an
+	// output directory. A short random suffix, checked against the runs on
+	// record and the directories on disk, keeps every run its own.
+	const runId = uniqueRunId(existing.runs.map((candidate) => candidate.id), broadsideDir);
 	const run: BroadsideRun = {
 		id: runId,
 		createdAt: new Date().toISOString(),

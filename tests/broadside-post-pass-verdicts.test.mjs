@@ -335,3 +335,22 @@ test("a fenced post-pass reply is read as JSON; one that is not JSON fails the p
 		assert.match(collectResultText(bad), /synthesis: failed — the reply was not a JSON object/);
 	});
 });
+
+// ---------- #367: two submits in one millisecond are two runs ----------
+
+test("run ids carry a random suffix, so two submits in the same millisecond are two runs with two directories", async () => {
+	await withRepo(async (dir) => {
+		const { fetcher } = instantFetcher();
+		const [a, b] = await Promise.all([
+			runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher, maxCost: 0 }),
+			runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher, maxCost: 0 }),
+		]);
+		assert.notEqual(a.runId, b.runId);
+		assert.match(a.runId, /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{4}$/);
+		const runs = (await loadBroadsideState(broadsideDirFor(dir))).runs.map((r) => r.id);
+		assert.deepEqual(new Set(runs).size, 2, "both runs are on record");
+		const { readdir } = await import("node:fs/promises");
+		const dirs = (await readdir(broadsideDirFor(dir))).filter((name) => name.endsWith("Z") || /Z-[0-9a-f]{4}$/.test(name));
+		assert.equal(dirs.length, 2, "each run has its own directory");
+	});
+});
