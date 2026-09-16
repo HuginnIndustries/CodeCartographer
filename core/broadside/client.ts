@@ -4,7 +4,7 @@
 // name, so `core/index.ts` and the tests see one module as before.
 
 import { sleep } from "../utils.ts";
-import { BROADSIDE_BATCH_URL, BROADSIDE_DEFAULT_POLL_BUDGET_MS, BROADSIDE_MODEL, BROADSIDE_POLL_INTERVAL_MS, type BroadsideLensId } from "./constants.ts";
+import { BROADSIDE_BATCH_URL, BROADSIDE_DEAD_BATCH_STATUSES, BROADSIDE_DEFAULT_POLL_BUDGET_MS, BROADSIDE_MODEL, BROADSIDE_POLL_INTERVAL_MS, type BroadsideLensId } from "./constants.ts";
 import { type BatchRequest } from "./types.ts";
 
 // ---------- batch client ----------
@@ -64,24 +64,6 @@ export async function fetchBatch(
 	data.http_status = resp.status;
 	return data;
 }
-
-/**
- * Batch statuses that will never produce a result.
- *
- * Deliberately excludes the synthetic `timeout` this module returns when a poll
- * budget expires: that batch is still running server-side and has already been
- * charged, so callers must come back for it rather than retire it.
- */
-export const BROADSIDE_DEAD_BATCH_STATUSES: string[] = ["failed", "expired", "cancelled", "auth-failed"];
-
-/**
- * Batch entry statuses collect never polls again: the dead ones above, plus
- * `completed`, plus the two a submit assigns without a batch (`skipped`: no
- * matching files; `rejected`: the provider refused it). The 0.19.1 changelog
- * called the dead set "a named constant rather than two hand-maintained
- * lists"; this set was still three literal copies (self-audit sem 5.8).
- */
-export const BROADSIDE_TERMINAL_ENTRY_STATUSES: string[] = ["completed", ...BROADSIDE_DEAD_BATCH_STATUSES, "skipped", "rejected"];
 
 export async function pollBatchUntilTerminal(
 	batchId: string,

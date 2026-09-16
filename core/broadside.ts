@@ -33,10 +33,15 @@
 // served by codecarto_skill under the name `broadside` (see readBroadsideSkill).
 //
 // The implementation lives in core/broadside/ (#339), one module per concern,
-// with an acyclic import graph at runtime: constants → types → schemas →
-// lenses → repo → requests → state / models / client → submit → results →
-// verify → collect → render. This file is the barrel; `core/index.ts`
-// re-exports it, so both surfaces and the tests import one module.
+// with an acyclic import graph at runtime that points one way through these
+// layers (tests/module-graph.test.mjs pins it, #371):
+//   constants, types, schemas, repo
+//   → lenses, requests, results, state, client
+//   → models, verify
+//   → submit, render
+//   → collect
+// This file is the barrel; `core/index.ts` re-exports it, so both surfaces
+// and the tests import one module.
 
 export * from "./broadside/constants.ts";
 export * from "./broadside/types.ts";

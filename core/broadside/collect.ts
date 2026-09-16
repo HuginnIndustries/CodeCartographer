@@ -6,13 +6,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathExists } from "../utils.ts";
-import { BROADSIDE_DEFAULT_POLL_BUDGET_MS, type BroadsideLensId } from "./constants.ts";
+import { BROADSIDE_DEAD_BATCH_STATUSES, BROADSIDE_DEFAULT_POLL_BUDGET_MS, BROADSIDE_TERMINAL_ENTRY_STATUSES, type BroadsideLensId } from "./constants.ts";
 import { type BatchRequest, type BroadsideCollectResult, type BroadsideRunSlot, type BroadsideStateFile, type BroadsideSynthesisEntry, type TriageItem, retryReasoningFor } from "./types.ts";
 import { SCHEMAS } from "./schemas.ts";
 import { getLens } from "./lenses.ts";
 import { sanitizeId } from "./repo.ts";
 import { broadsideDirFor, claimRunSlot, loadBroadsideState, persistBroadsideRunMerging, resetRunPostPasses } from "./state.ts";
-import { BROADSIDE_DEAD_BATCH_STATUSES, BROADSIDE_TERMINAL_ENTRY_STATUSES, type FetchLike, explainBatchError, pollBatchesConcurrently, submitBatch } from "./client.ts";
+import { type FetchLike, explainBatchError, pollBatchesConcurrently, submitBatch } from "./client.ts";
 import { type StoredLensResult, extractContent, loadSavedLensResults, loadStoredRequests, parseLensJson, renderFindingsMarkdown, saveLensResults } from "./results.ts";
 import { parseSynthesisTopFindings } from "./render.ts";
 
