@@ -11,20 +11,15 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import {
-	atomicWriteFile,
-	DASHBOARD_RELATIVE_PATH,
-	type DashboardCloseoutEntry,
-	type DashboardInputs,
-	type DashboardNarration,
-	getWorkspaceState,
-	loadUsage,
-	NARRATION_CACHE_RELATIVE_PATH,
-	type OutputAvailability,
-	parseSimpleYaml,
-	pathExists,
-	renderDashboard,
-} from "./index.ts";
+// From the modules that define them, not the barrel: `core/index.ts`
+// re-exports this file, and a module that imports the barrel that exports it
+// is a cycle that only resolves because every binding is read at call time
+// (#371).
+import { DASHBOARD_RELATIVE_PATH, type DashboardCloseoutEntry, type DashboardInputs, type DashboardNarration, NARRATION_CACHE_RELATIVE_PATH, type OutputAvailability, renderDashboard } from "./dashboard.ts";
+import { loadUsage } from "./usage.ts";
+import { atomicWriteFile, pathExists } from "./utils.ts";
+import { getWorkspaceState } from "./workspace.ts";
+import { parseSimpleYaml } from "./yaml.ts";
 
 const CLOSEOUT_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})-(.+)\.md$/;
 

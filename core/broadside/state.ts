@@ -10,9 +10,8 @@ import { atomicWriteFile, pathExists } from "../utils.ts";
 import { acquireLock } from "../status.ts";
 import { loadYamlFile } from "../yaml.ts";
 import { packagedWorkspaceDir } from "../workspace.ts";
-import { BROADSIDE_CONFIG_FILE, BROADSIDE_DEFAULT_MAX_COST, BROADSIDE_DIR, BROADSIDE_LENS_IDS, BROADSIDE_MODEL, BROADSIDE_STATE_FILE, BROADSIDE_STATE_SCHEMA_VERSION, type BroadsideLensId } from "./constants.ts";
+import { BROADSIDE_CONFIG_FILE, BROADSIDE_TERMINAL_ENTRY_STATUSES, BROADSIDE_DEFAULT_MAX_COST, BROADSIDE_DIR, BROADSIDE_LENS_IDS, BROADSIDE_MODEL, BROADSIDE_STATE_FILE, BROADSIDE_STATE_SCHEMA_VERSION, type BroadsideLensId } from "./constants.ts";
 import { type BroadsideBatchEntry, type BroadsideConfig, BroadsideConfigError, type BroadsideReasoning, type BroadsideRetryEntry, type BroadsideRun, type BroadsideRunSlot, BroadsideStateError, type BroadsideStateFile, type BroadsideSynthesisEntry } from "./types.ts";
-import { BROADSIDE_TERMINAL_ENTRY_STATUSES } from "./client.ts";
 
 // ---------- state & config ----------
 

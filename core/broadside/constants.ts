@@ -63,3 +63,24 @@ export const BROADSIDE_DEFAULT_POLL_BUDGET_MS = 25 * 60 * 1000;
  * to 0 for no limit.
  */
 export const BROADSIDE_DEFAULT_MAX_COST = 1;
+
+// Batch and entry status sets, here rather than beside the client that
+// produces them so the state module can rank entries without importing a
+// module above it in the layer order (#371).
+/**
+ * Batch statuses that will never produce a result.
+ *
+ * Deliberately excludes the synthetic `timeout` this module returns when a poll
+ * budget expires: that batch is still running server-side and has already been
+ * charged, so callers must come back for it rather than retire it.
+ */
+export const BROADSIDE_DEAD_BATCH_STATUSES: string[] = ["failed", "expired", "cancelled", "auth-failed"];
+
+/**
+ * Batch entry statuses collect never polls again: the dead ones above, plus
+ * `completed`, plus the two a submit assigns without a batch (`skipped`: no
+ * matching files; `rejected`: the provider refused it). The 0.19.1 changelog
+ * called the dead set "a named constant rather than two hand-maintained
+ * lists"; this set was still three literal copies (self-audit sem 5.8).
+ */
+export const BROADSIDE_TERMINAL_ENTRY_STATUSES: string[] = ["completed", ...BROADSIDE_DEAD_BATCH_STATUSES, "skipped", "rejected"];
