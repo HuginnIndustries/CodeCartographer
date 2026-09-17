@@ -1,106 +1,83 @@
-# CodeCartographer — Roadmap
+# CodeCartographer — product roadmap
 
-This document tracks future-facing work. For the current shipped surface, see [README.md](../README.md).
+This is the **product-level roadmap**. Start implementation sessions at [Engineering evolution — start here](engineering/README.md). The root [Broad-Side roadmap](../ROADMAP.md) remains its subsystem tracker; the [synthesis roadmap](synthesis-roadmap.md) preserves implementation history. GitHub issues carry live task status, not this document's prose.
 
-## Where We Are (v0.12.3)
+## Shipped baseline
 
-Already shipped:
+At the v0.26.0 planning baseline, CodeCartographer provides selectable repository-analysis pipelines, phase artifacts/handoffs and validation, Pi/MCP delivery surfaces, a versioned spec library, reference-backed forward synthesis, and Broad-Side scouting/verification. See [README](../README.md), [CHANGELOG](../CHANGELOG.md), and [client surface requirements](client-surfaces.md) for current released behavior.
 
-- **Template**: pure Markdown + YAML pipeline definitions in `.codecarto/`. LLM-agnostic.
-- **`core/`**: pipeline state machine, YAML validators, prompt templates, workspace utilities, workspace-config loader (`orchestrator-config.ts`), local usage log (`usage.ts`).
-- **Pi extension** (`extensions/codecarto/`):
-  - Slash commands: `/codecarto-init`, `/codecarto-status`, `/codecarto-next` (with `--llm-steer` / `--no-llm-steer` flags), `/codecarto-validate`, `/codecarto-complete`, `/codecarto-phase`, `/codecarto-skill`, `/codecarto-usage`.
-  - Tool interception: blocks `bash` outright and `edit`/`write` outside `.codecarto/`.
-  - **Phase sub-agents (0.2.0).** `/codecarto-next` spawns each phase as a parallel `AgentSession` with a live "Agents" widget above the editor. Orchestrator's TUI stays responsive; phase context window is isolated from the orchestrator's.
-  - **File-backed sessions (0.3.0).** Phase transcripts persist under `~/.pi/agent/sessions/<encoded-cwd>/` with a `CodeCartographer phase: <id>` display name and `parentSession` lineage; visible in `/resume`, `/tree`, `/export`.
-  - **Phase-completion summary (0.4.0).** Markdown closeout block injected into the orchestrator's session via `pi.sendMessage` on every phase finish. No auto-trigger; user-controlled.
-  - **LLM-steered seed prompt (0.5.0).** Opt-in via `orchestrator.llm_steer_next_phase` in `.codecarto/workflow/config.yaml` or `--llm-steer` per invocation. Reads the previous phase's closeout and customizes the next phase's seed prompt; falls back to the stock prompt on any failure.
-  - **Local usage log (0.6.0).** Append-only `.usage.local.yaml` per workspace; `/codecarto-usage` renders cumulative + per-phase totals.
-- **MCP server** (`mcp-server/`): workflow primitives exposed to any MCP host (Claude Code, Claude Desktop) plus experimental library publish / list / reindex tools. Imports the same `core/` as the Pi extension, so phase prompts and validation are byte-identical. The phase-orchestration features above are Pi-only — the MCP path returns prompt text for the host to dispatch and never runs sub-agents itself.
-- **Pipelines**: `architecture-only`, `lite`, `defect-scan`, `full`, `full-with-audit`, and `full-with-deep-audit` (default). The deep-audit variant splits the defect scan into a mechanical early pass and a semantic late pass.
-- **Forward synthesis**: a four-phase Pi/MCP workflow turns a product vision and explicitly confirmed, versioned library specifications into a conflict-aware `project-plan.md` with decision-level provenance. Runtime preflight enforces the human confirmation gate before merge or finalization.
-- **CI**: invariant tests (`tests/`) catch cross-wrapper drift between the template, Pi extension, and MCP server. Release pipeline is tag-driven (`v*` tag pushes only) — see `CONTRIBUTING.md` for the maintainer release process.
+It does **not** yet provide the engineering lifecycle described below. The [dogfood trial](engineering/dogfood-2026-09-17.md) exercised current handlers and selected existing tests, not a completed Traverse loop.
 
-## What's Next
+## Product direction
 
-The original implementation plan called for a standalone CLI. That role is now filled by the Pi extension and MCP server, both of which delegate file access and LLM invocation to the host. We don't plan to ship a separate CLI unless a clear user need surfaces.
+Help an agent make a specific, verifiable change to a repository, keep its evidence valid as work evolves, and improve reusable project knowledge afterward.
 
-Open future-facing items:
+Three entry paths share engineering primitives without identical prerequisites:
 
-### Launch proof package (active)
+- Understand a system with selectable analysis depth.
+- Change an existing system using repository-local evidence and **zero or more** external references.
+- Build from a vision and deliberately selected reusable specifications.
 
-The v0.12.3 npm, GitHub, website, and official MCP Registry release gates are
-complete. The next launch milestone is durable, inspectable proof before any
-short-lived promotional channel:
+Preserve existing synthesis confirmation gates. An ordinary feature/bug request is a separate path, not a reason to force library publication or a full reimplementation spec.
 
-1. [ ] Publish the CodeCartographer self-analysis case study from an immutable
-       v0.12.3 checkout using `full-with-deep-audit`, with configuration,
-       artifacts, verified claims, reproduction commands, validation results,
-       runtime, and available token/cost data.
-2. [ ] Publish the forward-synthesis case study, visibly demonstrating the
-       unchecked proposal, blocked transition, human confirmation, exact input
-       versions, conflict dispositions, complete provenance path, and final
-       project plan.
-3. [ ] Capture the real dashboard, proposal, conflict, provenance, and plan
-       visuals; export channel-ready variants and complete the 90–150 second
-       walkthrough/video.
-4. [ ] Pass the Show HN readiness checklist and launch it independently of
-       Product Hunt account readiness.
-5. [ ] Publish the pinned `sindresorhus/p-map` analysis before Product Hunt.
-6. [ ] Prepare DevHunt, OpenAI Developer Community, and Product Hunt only after
-       each channel's proof, asset, and account-readiness gate passes.
+## Staged outcomes
 
-The authoritative requirements, reproduction metadata, status, and channel
-sequencing live in the
-[v0.12.x discoverability and launch plan](plans/2026-07-21-v0.12.1-discoverability-launch.md).
+| Stage | User-visible outcome | Evidence required to claim it | Status |
+|---|---|---|---|
+| Foundation | Existing specs/plans expose useful slice/scenario links and verification seams | Real phase output plus invariant/compatibility tests, not only template edits | Planned: E09–E10 |
+| Engineering contracts | Changes, attempts, snapshots, proof, review, and human authority have one usable contract | Executable schemas and reviewed authority design; no generic agent approval flag | Planned: E01 |
+| First local loop | A host can plan, implement, verify, review, and present a bounded change without a library | Real fix and feature; failed attempt/resume, stale-proof refusal, actual acceptance, second-change history | Planned: E02–E08, E11 |
+| Reuse and refreshed knowledge | A proven capability transfers to a second repository without confusing design with current facts | Explicit source/version, applicability, conflict disposition, safe publication, and new project proof | Later design gate |
+| Integrated host/team experience | Supported hosts present one coherent workflow; teams can hand off safely | Capability-specific end-to-end runs and permission boundaries; no silent Pi guard relaxation | Later design gate |
+| Delivery lifecycle | PR/CI/release/rollout records connect to accepted changes | Separate authorization and exact-revision evidence at each external boundary | Later design gate |
 
-### Forward-flow synthesis (shipped in v0.12.0)
+[Implementation tasks and dependency graph](engineering/implementation-plan.md#task-index) define the first buildout. A stage is not complete merely because its schemas exist, CI passes, or a document says PASS.
 
-A library + synthesis pipeline turns CodeCartographer from analysis-only into analysis + synthesis: accumulate `reimplementation-spec.md` artifacts in a git-trackable library, then synthesize a `project-plan.md` from a vision plus explicitly confirmed, version-pinned entries.
+## First buildout principles
 
-- **M0 ✅ Docs + design freeze.** `docs/library-format.md` (experimental schema), surface-priority reframe in README + CLAUDE.md, `synthesis-roadmap.md` tracker.
-- **M1 ✅ Library foundations.** `core/library.ts` with publish / read / list / reindex / commit primitives. User-global `~/.codecarto/config.yaml` plumbing in `core/orchestrator-config.ts`. 23 new library tests + 7 new config tests (119 → 156).
-- **M2a ✅ MCP library tools.** `codecarto_publish` / `codecarto_library_list` / `codecarto_library_reindex` expose the library primitives to MCP-capable hosts.
-- **M2b ✅ Pi publish UX.** Pi `/codecarto-publish` exposes the shared library primitives with confirmation and write-boundary handling.
-- **M3 ✅ Synthesis pipeline.** `vision-capture` → `goal-synthesis-propose` (markdown-checkbox confirmation gate) → `spec-merge` → `goal-synthesis-finalize`, with shared Pi/MCP preflight.
-- **M5 ✅ Initial release polish.** v0.12.0 shipped the implementation, regression suite, demo fixture, Build Week documentation, and website positioning.
+- Host-executed, framework-tracked. No arbitrary target command execution added to MCP.
+- Supervised first. A host without a trusted human-acceptance path stops honestly.
+- Basic identity/freshness before accepted execution, not after an autonomous loop has shipped.
+- Local change package is the initial delivery boundary. A plan does not authorize push, merge, release, deployment, or provider spend.
+- Small main-targeted PRs, additive experimental surfaces, and opt-in variants. No long-lived `dev` fork or wholesale rewrite is required.
+- Separate current facts, intended changes, proposed designs, and verified outcomes. Publish useful knowledge deliberately, not every execution log.
+- Keep old workspace ABI and analysis guards. New phase lists arrive as new variants, not changes that reopen completed workspaces.
 
-Remaining synthesis work:
+## Parallel and deferred workstreams
 
-- Dashboard library-state surfacing.
-- **M4:** `pipeline-spec-mutate.yaml` — apply deltas to an existing spec and republish as a new library version.
-- Live-LLM semantic evaluation of plan quality beyond the tested runtime, prompt, and artifact contracts.
-- Library schema stabilization before v2.
+### Reviewed reference synthesis
 
-### Validation hardening
+Retain the [Helix/Traverse design history](plans/2026-09-17-helix-patterns.md): a new reviewed synthesis variant can place provenance/conflict review between spec merge and plan finalization. It is not a dependency of ordinary zero-library changes. Its exact objection-disposition/approval and revision-binding design must be reviewed before implementation; a recorded owner or checked box is not itself resolution.
 
-- Automated structural pre-checks (section presence, evidence-tag coverage, table completeness) before LLM self-assessment, so a structurally broken output fails fast without burning tokens on self-grading.
-- Output path verification against the active pipeline definition.
+### Validation and recovery
 
-### Concurrency
+New engineering gates must distinguish claims, structural validation, observed results, review, and acceptance. Existing analysis validation hardening remains useful but is separate, backward-compatible work: section/criterion checks, source citation checks, output-path checks, and conservative invalidation. Do not retrospectively label legacy completed phases invalid without a versioned migration policy.
 
-- Per-phase state files to remove contention on `status.yaml` when running parallel-eligible phases (currently `contracts` and `protocols`).
-- Atomic teardown / crash reconciliation: detect outputs that exist without a corresponding `complete` status and offer to reconcile.
+Retain the earlier backlog for phase concurrency, interrupted-completion reconciliation, cascade invalidation, scoped/incremental analysis, and optional structured findings. Implement only when an issue has a bounded contract and observed need; do not combine those projects with engineering state storage.
 
-### Additional host integrations
+### Library and knowledge
 
-- Aider custom commands.
-- Cursor MCP rules.
-- OpenCode plugin (likely thin if it adopts Claude Code's plugin spec).
+Library schema stabilization, original-analysis-versus-import provenance, descriptive/prescriptive claim status, dashboard library visibility, and mutation/publication workflows remain candidates. The historical `pipeline-spec-mutate.yaml` proposal is not shipped; post-pipeline `spec-delta-application` exists and must not be confused with that proposal. Avoid creating a broad new entry taxonomy before real reuse demonstrates its value.
 
-### Pipeline features
+### Existing compatibility work
 
-- Cascade invalidation on phase re-run, with `--no-cascade` opt-out.
-- Incremental analysis for very large codebases: chunk source by architecture-map priorities, stitch partial outputs.
-- Optional structured-JSON sidecar alongside the Markdown findings.
+The engineering evolution does not absorb these separately tracked issues:
 
-## Open Design Questions
+- [#393](https://github.com/HuginnIndustries/CodeCartographer/issues/393): Windows atomic replacement behavior.
+- [#394](https://github.com/HuginnIndustries/CodeCartographer/issues/394): Pi write-guard path behavior on Windows.
+- [#395](https://github.com/HuginnIndustries/CodeCartographer/issues/395): POSIX-specific test expectations.
+- [#185](https://github.com/HuginnIndustries/CodeCartographer/issues/185): MCP SDK/spec upgrade.
 
-1. **State format.** `status.yaml` is human-readable but YAML parsing has edge cases. Worth migrating mutable state to JSON while keeping pipeline definitions in YAML? (Read both, write JSON going forward.)
-2. **Cascade default.** When `contracts` is re-run, should `porting` and `reimplementation-spec` auto-invalidate? Leaning yes.
-3. **Defect-scan placement.** The two-pass split (mechanical early, semantic late) is now the default. Worth surfacing a tunable threshold so users can opt back into the single early scan for codebases where the second pass adds little?
+Check live issue state before working. Do not interpret this list as a new assignment or as permission to fold compatibility changes into a documentation PR.
 
-## Non-goals
+### Distribution and launch evidence
 
-- A bundled LLM provider. The host owns the LLM connection.
-- Replacing the template. The template remains the documentation source and the fallback mode for environments without Pi or MCP.
+Keep release verification and discovery work independent from feature claims. The [launch plan](plans/2026-07-21-v0.12.1-discoverability-launch.md), public self-audits, and synthesis demonstrations are historical/evidence inputs; validate their current status before scheduling promotional work. No release/tag is implied by merging this roadmap.
+
+## How to advance this roadmap
+
+1. Complete and independently review one dependency-ready task.
+2. Verify the exact candidate and the relevant real host boundary; label unverified surfaces.
+3. Update its GitHub issue with commit/PR, commands, observed results, and remaining limits.
+4. Advance an outcome row only when its full acceptance scenario is demonstrated.
+5. Write a new bounded design before opening later-stage implementation work. Deferred questions are decisions to revisit, not worker permission to invent architecture.

@@ -1,5 +1,7 @@
 # Roadmap — Broad-Side
 
+For the overall product direction and staged engineering lifecycle, see the [product roadmap](docs/ROADMAP.md) and [engineering handoff](docs/engineering/README.md). This file remains the Broad-Side subsystem tracker.
+
 Broad-Side is CodeCartographer's batch reconnaissance feature: a cheap,
 unattended multi-lens scan over the OpenRouter Batch API that produces
 unverified scouting leads for the interactive pipeline to confirm. Shipped via PR #144 (branch `feat/103-broadside`, MCP surface first).
