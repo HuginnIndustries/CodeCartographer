@@ -240,7 +240,9 @@ test("codecarto_library_init does not switch the publish gate on, and says what 
 		const libraryPath = join(dir, "new-library");
 		const result = await server.handleLibraryInit({ library_path: libraryPath });
 		assert.match(result.content[0].text, /Wrote library\.path to .*config\.yaml; other keys untouched\.$/);
-		assert.equal(await readFile(userConfigPath, "utf8"), `library:\n  path: ${libraryPath}\n`);
+		// The parsed value, not the emitted line: a path with backslashes is
+		// correctly written as a quoted scalar with those backslashes escaped.
+		assert.deepEqual(core.parseSimpleYaml(await readFile(userConfigPath, "utf8")), { library: { path: libraryPath } });
 
 		// Straight to publish with no confirm: the gate is off, as #162 intended
 		// for a host that never configured it.
@@ -373,7 +375,7 @@ test("/codecarto-library-init refuses a --namespace with no name instead of drop
 		const libraryPath = join(dir, "pi-library");
 		const refusals = [
 			[`${libraryPath} --namespace`, /^--namespace needs a name\. Usage:/],
-			[`--namespace ${libraryPath}`, /^Invalid namespace "\/.*pi-library" \(lowercase ASCII, starts with a letter, max 64 chars\)\. Usage:/],
+			[`--namespace ${libraryPath}`, `Invalid namespace "${libraryPath}" (lowercase ASCII, starts with a letter, max 64 chars). Usage:`],
 			[`${libraryPath} --namespace Team`, /^Invalid namespace "Team"/],
 			[`${libraryPath} --namespace --force`, /^--namespace needs a name\. Usage:/],
 			[`${libraryPath} --namespaced team`, /^Unknown flag --namespaced\. Usage:/],
@@ -382,7 +384,11 @@ test("/codecarto-library-init refuses a --namespace with no name instead of drop
 		];
 		for (const [args, pattern] of refusals) {
 			await commands.get("codecarto-library-init").handler(args, ctx);
-			assert.match(ui.notifications.at(-1).message, pattern, args);
+			const { message } = ui.notifications.at(-1);
+			// A string is a literal prefix: a path is not a pattern, and on Windows
+			// its backslashes and drive colon would read as regex syntax.
+			if (typeof pattern === "string") assert.ok(message.startsWith(pattern), `${args}: got ${message}`);
+			else assert.match(message, pattern, args);
 			assert.equal(ui.notifications.at(-1).level, "warning", args);
 		}
 		assert.equal(existsSync(libraryPath), false, "nothing was created by a refused command");
@@ -406,6 +412,6 @@ test("/codecarto-library-init names what it wrote", async () => {
 		await commands.get("codecarto-library-init").handler(libraryPath, ctx);
 		assert.equal(ui.notifications.at(-1).level, "info");
 		assert.equal(ui.notifications.at(-1).message, `Wrote library.path to ${userConfigPath}; other keys untouched`);
-		assert.equal(await readFile(userConfigPath, "utf8"), `library:\n  path: ${libraryPath}\n`);
+		assert.deepEqual(core.parseSimpleYaml(await readFile(userConfigPath, "utf8")), { library: { path: libraryPath } });
 	});
 });

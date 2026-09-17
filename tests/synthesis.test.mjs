@@ -9,6 +9,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const {
 	buildPhasePrompt,
+	ENTRIES_DIR,
 	getWorkspaceState,
 	hasMeaningfulVisionContent,
 	parseConfirmedProposalEntries,
@@ -144,7 +145,7 @@ test("confirmed proposal preflight implicitly initializes the library", async ()
 	const result = await runPhasePreflight(state, phase);
 	assert.equal(result.libraryPath, library);
 	assert.deepEqual(result.confirmedEntries, ["event-router"]);
-	assert.match(result.confirmedSelections[0].specPath, /event-router\/v1\/reimplementation-spec\.md$/);
+	assert.equal(result.confirmedSelections[0].specPath, join(library, ENTRIES_DIR, "event-router", "v1", "reimplementation-spec.md"));
 });
 
 test("checked proposal unlocks merge and finalization with confirmed refs in the prompt", async () => {

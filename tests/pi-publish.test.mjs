@@ -33,6 +33,7 @@ const { default: codeCartographerExtension } = await import(
 	pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href
 );
 const { writeMarker, deriveSlug, ENTRIES_DIR, METADATA_FILE } = await import(pathToFileURL(`${REPO_ROOT}/core/library.ts`).href);
+const { parseSimpleYaml } = await import(pathToFileURL(`${REPO_ROOT}/core/yaml.ts`).href);
 
 // The command merges the user-global config under the workspace's. Keep the
 // developer's real ~/.codecarto/config.yaml out of it; each test file runs in
@@ -143,7 +144,7 @@ test("records the origin remote as source_repo, verbatim, and derives the slug f
 
 		const meta = await fx.metadata("whisper-fixture", 1);
 		assert.match(meta, /^source_repo: "?https:\/\/github\.com\/acme\/Whisper-Fixture\.git"?$/m, "stored as git reports it — case and .git kept");
-		assert.doesNotMatch(meta, new RegExp(fx.cwd.replaceAll("\\", "\\\\")), "the local path is not the provenance");
+		assert.notEqual(parseSimpleYaml(meta).source_repo, fx.cwd, "the local path is not the provenance");
 	} finally {
 		await fx.cleanup();
 	}
@@ -158,7 +159,9 @@ test("a directory that is not a git repository still records its path", async ()
 		assert.doesNotMatch(ui.confirmations[0].body, /git remote/);
 		assert.match(ui.notifications.at(-1).message, /^Published whisper-fixture v1\./);
 		assert.equal(deriveSlug(fx.cwd), "whisper-fixture");
-		assert.match(await fx.metadata("whisper-fixture", 1), new RegExp(`^source_repo: "?${fx.cwd.replaceAll("\\", "\\\\")}"?$`, "m"));
+		// The parsed value: a path with backslashes is emitted as a quoted scalar
+		// with those backslashes escaped, which no raw-line pattern should chase.
+		assert.equal(parseSimpleYaml(await fx.metadata("whisper-fixture", 1)).source_repo, fx.cwd);
 	} finally {
 		await fx.cleanup();
 	}
@@ -172,7 +175,7 @@ test("a recorded path meeting an incoming remote asks whether the repository mov
 	const fx = await publishableFixture();
 	try {
 		await publish(fx.cwd);
-		assert.match(await fx.metadata("whisper-fixture", 1), /^source_repo: "?\//m, "v1 records the path");
+		assert.equal(parseSimpleYaml(await fx.metadata("whisper-fixture", 1)).source_repo, fx.cwd, "v1 records the path");
 
 		await git(fx.cwd, "init", "-q");
 		await git(fx.cwd, "remote", "add", "origin", ORIGIN);

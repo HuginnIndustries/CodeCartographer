@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Git fixtures must not inherit the developer's git configuration. A global
@@ -1054,7 +1054,7 @@ test("submit persists request bodies for truncated-slice recovery", async () => 
 		const fetcher = async (url, init) =>
 			init.method === "POST" ? fakeResponse(202, { id: "batch-x", status: "validating" }) : fakeResponse(200, { id: "x", status: "in_progress" });
 		const result = await runBroadsideSubmit(dir, "sk-fake", { lenses: ["architecture"], fetcher });
-		const runDir = join(dir, ".codecarto", "broadside", result.outputDir.split("/").pop());
+		const runDir = join(dir, ".codecarto", "broadside", basename(result.outputDir));
 		const requests = JSON.parse(await readFile(join(runDir, "requests.json"), "utf8"));
 		assert.ok(requests["architecture-root"], "architecture request must be persisted");
 		assert.equal(requests["architecture-root"].body.model, BROADSIDE_MODEL);

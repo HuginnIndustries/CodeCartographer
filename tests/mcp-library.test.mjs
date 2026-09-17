@@ -376,7 +376,12 @@ test("handlePublish refuses without confirm when publish_confirm is configured, 
 					assertPublishConfirmRefusal(error);
 					// The preview is what Pi's dialog shows: where, what, and which
 					// branch of the version history it would take.
-					assert.match(error.message, new RegExp(`Would publish james/sample to ${libraryPath}`));
+					// includes, not a RegExp: a Windows path's backslashes would read as
+					// escapes in the pattern source (\b even becomes a word boundary).
+					assert.ok(
+						error.message.includes(`Would publish james/sample to ${libraryPath}`),
+						error.message,
+					);
 					assert.match(error.message, /Version: v1 \(first version of a new entry\)/);
 					assert.match(error.message, /Source repo: https:\/\/github\.com\/myorg\/sample/);
 					assert.match(error.message, /Headline: Sample library entry\./);
