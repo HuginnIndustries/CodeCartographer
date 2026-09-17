@@ -89,3 +89,18 @@ lock discipline was introduced. The one thing the previous audit's own findings 
 carry forward is its D-M23 ("repository content uploaded without secret scanning"): the
 redaction pass it asked for shipped for `submit`, and this run found that `verify` bypasses
 it.
+
+## Outcome (2026-09-16)
+
+All eighteen issues are resolved. Sixteen were fixed in **v0.26.0** (PRs #375–#392), each
+re-verified against the code first; fourteen landed with a test that fails on the previous
+code. Two of the eighteen changed shape under that verification: #364 (5.1) was a correct,
+deliberately narrower guard with a wrong comment — fixed as documentation — and **#363
+(4.2) was closed as designed**, because `tests/pi-extension-activation.test.mjs` pins the
+guard staying off until `/codecarto-open`. #372 became the `test-windows` CI job, whose
+first run settled the four `verify at runtime` rows: 6.1 (`atomicWriteFile` `EPERM` under
+concurrent writers) is real and filed as #393; 6.3 (the write guard refusing a phase's own
+`.codecarto/findings/…` write) is real and filed as #394; 6.2 and 6.4 produced no failure —
+the lock suite and the git-listing tests pass on Windows, which is the evidence the job can
+give, not a proof; eight tests carry POSIX path expectations, filed as #395. The closeout is
+[`docs/history/2026-09-15-self-audit-closeout.md`](../../docs/history/2026-09-15-self-audit-closeout.md).
