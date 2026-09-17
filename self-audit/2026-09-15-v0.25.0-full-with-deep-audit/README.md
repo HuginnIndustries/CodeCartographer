@@ -6,7 +6,8 @@ pipeline **on this repository**, driven headlessly through the Pi extension with
 of one run, kept outside `.codecarto/` on purpose: the template directory is the framework's
 ABI and must not carry the outputs of an evaluation run.
 
-Nothing in here is consumed by the build, the tests, or the npm package.
+Nothing in here is consumed by the build, the tests, or the npm package. What became of the
+findings is the last section of [`REVIEW.md`](REVIEW.md): v0.26.0 shipped the batch.
 
 ## What was audited
 

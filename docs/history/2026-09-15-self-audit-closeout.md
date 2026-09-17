@@ -48,7 +48,46 @@ added code and in two paths nothing had audited for locking since the lock disci
 - **Nothing was released.** The refactor, the folder, and the hero are not user-facing
   changes; they ride the next release, which the self-audit issues will earn.
 
+## Outcome — 2026-09-16
+
+The batch shipped as **v0.26.0** the next day (PRs #375–#392, release #396). Every issue was
+re-verified against the code before it was touched, and the verification changed the outcome
+three times:
+
+- **Sixteen fixed.** Fourteen landed with a test that fails on the previous code — #358
+  `verify` redaction, #355 the lock redesign (per-waiter tickets, bakery numbers, pid
+  liveness, a heartbeat; the `.break` removal lock is gone), #356, #357, #359, #360, #361,
+  #365, #366, #367, #368, #369, #370, #371. The other two turned out to be words rather than
+  code: #362 is a one-liner with the fix pinned at the source, and #364 was a *correct*
+  narrower guard with a wrong comment and README line, so the docs changed and a test now
+  pins the behaviour they describe.
+- **#363 closed as designed**, with the evidence: `tests/pi-extension-activation.test.mjs`
+  pins that the write guard is off until `/codecarto-open`, because a repository that ships
+  `.codecarto/` must not silently sandbox every Pi session opened in it, and no phase can
+  start before activation anyway.
+- **#372 became the `test-windows` job** (reporting, not gating), and its first run answered
+  the four "verify at runtime" rows: 925/935. Two are product defects — #393 concurrent
+  `atomicWriteFile` renames fail with `EPERM` on Windows (the audit's one *high*, confirmed),
+  and #394 the write guard refuses a phase's own `.codecarto/findings/…` write, so the Pi
+  surface does not work on Windows at all. Eight are POSIX-shaped test expectations (#395).
+  The other two rows (the lock's `O_EXCL`/mtime assumptions, `git` output parsing) produced
+  no failure, which is as far as a passing suite can settle them.
+
+Two corrections of the batch's own work came out of the same discipline: the first lock
+rewrite (#376) took wall-clock ticket numbers and its own suite showed a same-millisecond
+double hold one run in three, so #379 takes bakery numbers (`max + 1` of what a waiter can
+see); and the layer order the #353 barrel documented was aspirational, so #391 pins the
+measured one in `tests/module-graph.test.mjs`.
+
+Release verification on the tarball from a clean `dist/`: MCP smoke 9/9 and a round trip;
+a Pi phase on `deepseek-v4.1-flash` (19 turns, PASS, no lock tickets left behind); a Codex
+round trip.
+
 ## Open
 
-#185 (parked) and #355–#372. Still owed when a key exists: a live `verify` →
-`collect --regenerate` on a real run.
+#185 (parked) and the Windows batch the job surfaced: #393 (retry the rename on
+`EPERM`/`EBUSY`/`EACCES` with a bounded backoff; the failing test is the reproduction),
+#395 (make the eight expectations platform-neutral), #394 (needs a run on Windows with both
+resolved paths printed before a fix is chosen); then `continue-on-error` comes off the
+`test-windows` job. Each is proven by that job's log rather than locally. Still owed when a
+key exists: a live `verify` → `collect --regenerate` on a real run.
