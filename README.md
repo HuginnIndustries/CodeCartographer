@@ -604,6 +604,8 @@ The MCP server does steps 1–3 directly; the Pi extension wraps them as slash c
 
 ## Contributing
 
+For future engineering lifecycle work, start with the [product roadmap](docs/ROADMAP.md) and [agent-ready engineering handoff](docs/engineering/README.md). These describe planned capabilities, not features already shipped.
+
 Bug reports, feature requests, and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, branch model, and the maintainer release process. All participants are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). For security issues, follow [SECURITY.md](SECURITY.md) instead of filing a public issue.
 
 ## License

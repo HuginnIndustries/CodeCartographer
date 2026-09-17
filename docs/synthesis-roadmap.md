@@ -1,5 +1,7 @@
 # CodeCartographer Synthesis + Library Upgrade — Implementation Roadmap
 
+> Historical implementation tracker. For new engineering lifecycle work, start with the [engineering handoff](engineering/README.md) and [product roadmap](ROADMAP.md). The ordinary in-place change path is separate from this library-backed synthesis workflow. Historical unchecked boxes below are not authoritative shipped-status claims.
+
 Working tracker for the synthesis-phases upgrade. Supersedes the
 implementation plan in [`docs/design-synthesis-phases.md`](./design-synthesis-phases.md)
 (kept as the historical record of the original proposal).
