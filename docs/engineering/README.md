@@ -10,13 +10,15 @@
 4. [Incremental implementation plan](implementation-plan.md): bounded tasks, prerequisites, paths, tests, and acceptance criteria.
 5. [Product roadmap](../ROADMAP.md): outcome-level sequencing and links to other workstreams.
 
+For E11 evaluation, read the [preregistered pilot tasks](pilot-selection.md) and [evaluation rubric](evaluation-rubric.md). These are planning and measurement documents, not permission to execute pilots or start held tasks.
+
 The [Helix/Traverse discussion](../plans/2026-09-17-helix-patterns.md) is retained as design history. Its P1–P6 proposals are not all current implementation instructions; its precedence note identifies the adjustments made after dogfooding.
 
 ## A new agent session's handoff
 
 - Read this page, `CONTRIBUTING.md`, and the target issue in full. Use the live CodeCartographer guide when operating an analysis workspace; historical examples do not override it.
 - Fetch the repository and inspect the current branch, dirty/untracked files, open PRs, and dependency issues. Issue state is live; this document's status is not a substitute for checking it.
-- Choose one **unblocked** task from the implementation plan. Do not execute a dependent issue because its parent merely has a draft PR.
+- Choose one **unblocked and authorized** task from the implementation plan. Check the latest maintainer scheduling notes and holds in the issue and tracker; dependency eligibility is not permission to start. Do not execute a dependent issue because its parent merely has a draft PR.
 - E01 owns the record/API contract freeze. Downstream agents must consume its merged contract, not independently invent names, schemas, authority rules, or file layouts.
 - Preserve analysis pipelines, their state ABI, existing synthesis confirmation gates, and both Pi analysis guards. Use additive experimental surfaces. Do not repurpose `workflow/status.yaml` as engineering state.
 - Work in an isolated branch/worktree. Do not overwrite another agent's files or absorb unrelated untracked work. Shared-file changes in `core/index.ts`, MCP registration, and invariant tests must be rebased and reconciled, not duplicated.
