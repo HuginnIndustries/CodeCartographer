@@ -3,6 +3,11 @@
 // symlinked directory inside .codecarto/ that pointed outside the workspace
 // let a new file land outside. resolveExistingPrefix follows whatever exists
 // through symlinks first, then appends the unborn tail.
+//
+// The root gets the same treatment, not realpath alone (#394): realpath throws
+// on a .codecarto/ that does not exist yet, and the lexical fallback kept an
+// ancestor the target's side had already expanded, so a fresh workspace's first
+// write was judged outside it.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -84,6 +89,48 @@ test("a workspace root that is itself a symlink resolves to the same place as ta
 		await symlink(workspace, alias);
 		assert.equal(await isWithinPathResolved(join(alias, "findings", "new.md"), workspace), true);
 		assert.equal(await isWithinPathResolved(join(workspace, "findings", "new.md"), alias), true);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("a root that does not exist yet is canonicalized like its targets, not lexically (#394)", async () => {
+	// The workspace is reached through a symlinked ancestor, which realpath
+	// expands and a lexical resolve does not: the POSIX shape of the Windows
+	// runner's 8.3 short name (C:\Users\RUNNER~1\...) and of macOS' /var ->
+	// /private/var. Resolving the root with realpath alone threw for a
+	// .codecarto/ that does not exist yet and fell back to the spelled path, so
+	// root and target shared no prefix and a fresh workspace's first write was
+	// judged outside the one directory it is allowed to write.
+	const base = await realpath(await mkdtemp(join(tmpdir(), "cc-unborn-root-")));
+	try {
+		await mkdir(join(base, "real", "repo"), { recursive: true });
+		await mkdir(join(base, "outside"), { recursive: true });
+		await symlink(join(base, "real"), join(base, "link"));
+		const cwd = join(base, "link", "repo");
+		const workspace = join(cwd, ".codecarto");
+		const target = join(workspace, "findings", "contracts", "out.md");
+
+		assert.equal(await isWithinPathResolved(target, workspace), true, "the first write of a fresh workspace is inside it");
+		// And the answer does not change once the root exists on disk.
+		await mkdir(workspace, { recursive: true });
+		assert.equal(await isWithinPathResolved(target, workspace), true);
+
+		// Containment is not weakened by resolving the root: outside stays outside.
+		assert.equal(await isWithinPathResolved(join(base, "outside", "x.md"), workspace), false);
+		assert.equal(await isWithinPathResolved(join(cwd, "src", "source.ts"), workspace), false);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+	}
+});
+
+test("a relative target resolves against `base`, the way the Pi write guards pass one", async () => {
+	const { base, workspace, cleanup } = await fixture();
+	try {
+		assert.equal(await isWithinPathResolved(".codecarto/findings/new.md", workspace, base), true);
+		assert.equal(await isWithinPathResolved("elsewhere.md", workspace, base), false);
+		// The root may be spelled relatively too, and resolves the same way.
+		assert.equal(await isWithinPathResolved(".codecarto/findings/new.md", ".codecarto", base), true);
 	} finally {
 		await cleanup();
 	}
