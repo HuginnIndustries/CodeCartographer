@@ -1,0 +1,64 @@
+{
+	"description": "A host-supplied absolute path in a snapshot input is refused.",
+	"subject": "request",
+	"expect": [
+		{
+			"code": "invalid-path",
+			"path": "/baseline_snapshot/manifest/0/path"
+		}
+	],
+	"value": {
+		"action": "start-attempt",
+		"idempotency_key": "attempt-1",
+		"change_id": "chg_00000000000000000000c001",
+		"slice_id": "slc_00000000000000000000e001",
+		"baseline_snapshot": {
+			"repository": {
+				"vcs": "git",
+				"head": "0123456789abcdef0123456789abcdef01234567",
+				"dirty": false
+			},
+			"manifest": [
+				{
+					"path": "/abs/path",
+					"type": "file",
+					"digest": "sha256:a95aff40ca78c192eccafdab5939a6a1540e2164a03ad2ca29feb8aa74398f20",
+					"executable": false,
+					"size": 56
+				},
+				{
+					"path": "tests/widgets-count.test.mjs",
+					"type": "file",
+					"digest": "sha256:3ae10eedc6f36a3519747aa6cdc12e01142db25b04aa3282ca358afea8cdec75",
+					"executable": false,
+					"size": 17
+				}
+			],
+			"coverage": {
+				"excluded": [
+					{
+						"pattern": ".codecarto/engineering/**",
+						"reason": "engineering-namespace"
+					},
+					{
+						"pattern": "node_modules/**",
+						"reason": "ignored"
+					},
+					{
+						"pattern": "dist/**",
+						"reason": "generated"
+					}
+				],
+				"uncovered_relevant_inputs": []
+			},
+			"stability": "stable",
+			"collector": "host-observed",
+			"captured_at": "2026-09-17T10:10:05Z"
+		},
+		"inputs": {
+			"brief_digest": "sha256:32dd3ea09fe69f5a22d4cc1dd9d549ed808c48e42dd5ff683b1e1400d46247ae",
+			"plan_digest": "sha256:67d2de7f421a0b8104cad0aabfd6740aa11c7403618f9e7e33be5d8cbfc4da17",
+			"references": []
+		}
+	}
+}

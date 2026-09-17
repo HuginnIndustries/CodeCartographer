@@ -1,0 +1,52 @@
+{
+	"description": "A slice cannot depend on itself.",
+	"subject": "record",
+	"expect": [
+		{
+			"code": "invalid-value",
+			"path": "/depends_on/0"
+		}
+	],
+	"value": {
+		"schema_version": 1,
+		"kind": "slice",
+		"id": "slc_00000000000000000000e001",
+		"created_at": "2026-09-17T10:05:00Z",
+		"change_id": "chg_00000000000000000000c001",
+		"revision": 1,
+		"title": "Fix the count and prove both scenarios",
+		"deliverable": "countWidgets() counts archived widgets by default; a regression test pins both behaviors.",
+		"scenario_ids": [
+			"S1",
+			"S2"
+		],
+		"depends_on": [
+			"slc_00000000000000000000e001"
+		],
+		"proof_obligations": [
+			{
+				"id": "O1",
+				"scenario_id": "S1",
+				"check_kind": "test",
+				"description": "tests/widgets-count.test.mjs passes with the archived case added",
+				"minimum_collector": "host-observed"
+			},
+			{
+				"id": "O2",
+				"scenario_id": "S2",
+				"check_kind": "test",
+				"description": "the includeArchived: false case still passes",
+				"minimum_collector": "host-observed"
+			}
+		],
+		"permitted_scope": {
+			"paths": [
+				"src/widgets/**",
+				"tests/widgets-count.test.mjs"
+			],
+			"description": "the counting module and its test"
+		},
+		"state": "active",
+		"updated_at": "2026-09-17T10:05:00Z"
+	}
+}

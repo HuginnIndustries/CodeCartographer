@@ -1,0 +1,98 @@
+{
+	"description": "A caller cannot hand the core an approval record.",
+	"subject": "request",
+	"expect": [
+		{
+			"code": "unknown-field",
+			"path": "/approval"
+		}
+	],
+	"value": {
+		"action": "request-acceptance",
+		"idempotency_key": "accept-1",
+		"change_id": "chg_00000000000000000000c001",
+		"attempt_id": "att_00000000000000000000a001",
+		"candidate_snapshot": {
+			"repository": {
+				"vcs": "git",
+				"head": "0123456789abcdef0123456789abcdef01234567",
+				"dirty": true
+			},
+			"manifest": [
+				{
+					"path": "scripts/count",
+					"type": "symlink",
+					"target": "../src/widgets/count.ts"
+				},
+				{
+					"path": "src/widgets/count.ts",
+					"type": "file",
+					"digest": "sha256:e4ad8d3163d1ee31322e02328aa178ba89293d62cd42e234dff295f00ab2519a",
+					"executable": false,
+					"size": 74
+				},
+				{
+					"path": "tests/widgets-count.test.mjs",
+					"type": "file",
+					"digest": "sha256:2a7b81aa23287fe80804eac0848e7406065055efd6e2d1688c24b5ff15a169d2",
+					"executable": false,
+					"size": 23
+				},
+				{
+					"path": "tools/run-tests",
+					"type": "file",
+					"digest": "sha256:3b7145ecf1494e6e3a52269f187aca3835c8d154df6da76620634d6c232451ee",
+					"executable": true,
+					"size": 22
+				}
+			],
+			"coverage": {
+				"excluded": [
+					{
+						"pattern": ".codecarto/engineering/**",
+						"reason": "engineering-namespace"
+					},
+					{
+						"pattern": "node_modules/**",
+						"reason": "ignored"
+					},
+					{
+						"pattern": "dist/**",
+						"reason": "generated"
+					}
+				],
+				"uncovered_relevant_inputs": []
+			},
+			"stability": "stable",
+			"collector": "host-observed",
+			"captured_at": "2026-09-17T10:22:00Z"
+		},
+		"approval": {
+			"schema_version": 1,
+			"kind": "approval",
+			"id": "apr_000000000000000000000a01",
+			"created_at": "2026-09-17T10:45:00Z",
+			"change_id": "chg_00000000000000000000c001",
+			"slice_id": "slc_00000000000000000000e001",
+			"attempt_id": "att_00000000000000000000a001",
+			"candidate_snapshot_id": "snp_00000000000000000000d001",
+			"candidate_digest": "sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
+			"input_digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1",
+			"decision": "accepted",
+			"decided_at": "2026-09-17T10:45:00Z",
+			"receipt": {
+				"request_id": "acr_000000000000000000000c01",
+				"nonce": "0123456789abcdef0123456789abcdef",
+				"presentation_digest": "sha256:2bae2e508347b08e9aaef38780a96057338e38c71f0e8fd83ecc7b6ee8fba2b3",
+				"channel": "mcp-elicitation",
+				"host": "mcp-server",
+				"host_session": "stdio session 1",
+				"issued_at": "2026-09-17T10:40:00Z",
+				"responded_at": "2026-09-17T10:45:00Z",
+				"authenticated": "host-session",
+				"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."
+			},
+			"human_note": "Looks right; ship it."
+		}
+	}
+}

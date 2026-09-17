@@ -1,0 +1,51 @@
+{
+	"schema_version": 1,
+	"kind": "snapshot",
+	"id": "snp_00000000000000000000b001",
+	"created_at": "2026-09-17T10:10:05Z",
+	"change_id": "chg_00000000000000000000c001",
+	"attempt_id": "att_00000000000000000000a001",
+	"role": "baseline",
+	"repository": {
+		"vcs": "git",
+		"head": "0123456789abcdef0123456789abcdef01234567",
+		"dirty": false
+	},
+	"manifest": [
+		{
+			"path": "src/widgets/count.ts",
+			"type": "file",
+			"digest": "sha256:a95aff40ca78c192eccafdab5939a6a1540e2164a03ad2ca29feb8aa74398f20",
+			"executable": false,
+			"size": 56
+		},
+		{
+			"path": "tests/widgets-count.test.mjs",
+			"type": "file",
+			"digest": "sha256:3ae10eedc6f36a3519747aa6cdc12e01142db25b04aa3282ca358afea8cdec75",
+			"executable": false,
+			"size": 17
+		}
+	],
+	"coverage": {
+		"excluded": [
+			{
+				"pattern": ".codecarto/engineering/**",
+				"reason": "engineering-namespace"
+			},
+			{
+				"pattern": "node_modules/**",
+				"reason": "ignored"
+			},
+			{
+				"pattern": "dist/**",
+				"reason": "generated"
+			}
+		],
+		"uncovered_relevant_inputs": []
+	},
+	"stability": "stable",
+	"collector": "host-observed",
+	"captured_at": "2026-09-17T10:10:05Z",
+	"digest": "sha256:0680d4b07be8a15216c35cc583f2f5047aa72e41b3b3e200a716ceb63cbfb5dd"
+}

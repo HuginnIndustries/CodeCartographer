@@ -1,0 +1,72 @@
+{
+	"description": "There is no field through which a caller can approve; `approve: true` is an unknown field.",
+	"subject": "request",
+	"expect": [
+		{
+			"code": "unknown-field",
+			"path": "/approve"
+		}
+	],
+	"value": {
+		"action": "request-acceptance",
+		"idempotency_key": "accept-1",
+		"change_id": "chg_00000000000000000000c001",
+		"attempt_id": "att_00000000000000000000a001",
+		"candidate_snapshot": {
+			"repository": {
+				"vcs": "git",
+				"head": "0123456789abcdef0123456789abcdef01234567",
+				"dirty": true
+			},
+			"manifest": [
+				{
+					"path": "scripts/count",
+					"type": "symlink",
+					"target": "../src/widgets/count.ts"
+				},
+				{
+					"path": "src/widgets/count.ts",
+					"type": "file",
+					"digest": "sha256:e4ad8d3163d1ee31322e02328aa178ba89293d62cd42e234dff295f00ab2519a",
+					"executable": false,
+					"size": 74
+				},
+				{
+					"path": "tests/widgets-count.test.mjs",
+					"type": "file",
+					"digest": "sha256:2a7b81aa23287fe80804eac0848e7406065055efd6e2d1688c24b5ff15a169d2",
+					"executable": false,
+					"size": 23
+				},
+				{
+					"path": "tools/run-tests",
+					"type": "file",
+					"digest": "sha256:3b7145ecf1494e6e3a52269f187aca3835c8d154df6da76620634d6c232451ee",
+					"executable": true,
+					"size": 22
+				}
+			],
+			"coverage": {
+				"excluded": [
+					{
+						"pattern": ".codecarto/engineering/**",
+						"reason": "engineering-namespace"
+					},
+					{
+						"pattern": "node_modules/**",
+						"reason": "ignored"
+					},
+					{
+						"pattern": "dist/**",
+						"reason": "generated"
+					}
+				],
+				"uncovered_relevant_inputs": []
+			},
+			"stability": "stable",
+			"collector": "host-observed",
+			"captured_at": "2026-09-17T10:22:00Z"
+		},
+		"approve": true
+	}
+}

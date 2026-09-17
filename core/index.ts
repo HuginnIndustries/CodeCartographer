@@ -22,3 +22,4 @@ export * from "./synthesis.ts";
 export * from "./broadside.ts";
 export * from "./secrets.ts";
 export * from "./dashboard-writer.ts";
+export * from "./engineering/index.ts";

@@ -1,0 +1,22 @@
+{
+	"schema_version": 1,
+	"kind": "change",
+	"id": "chg_00000000000000000000c002",
+	"created_at": "2026-09-17T10:00:00Z",
+	"revision": 1,
+	"title": "Untitled investigation",
+	"mode": "investigation",
+	"state": "draft",
+	"requested_outcome": "Find out why the nightly job is slow.",
+	"baseline": {
+		"vcs": "none"
+	},
+	"scope": {
+		"in_scope": [],
+		"non_goals": []
+	},
+	"preserved_contracts": [],
+	"acceptance_scenarios": [],
+	"references": [],
+	"updated_at": "2026-09-17T10:00:00Z"
+}

@@ -1,0 +1,52 @@
+{
+	"description": "A record from a future schema is refused, not partially read.",
+	"subject": "record",
+	"expect": [
+		{
+			"code": "unsupported-schema-version",
+			"path": "/schema_version"
+		}
+	],
+	"value": {
+		"schema_version": 2,
+		"kind": "change",
+		"id": "chg_00000000000000000000c001",
+		"created_at": "2026-09-17T10:00:00Z",
+		"revision": 2,
+		"title": "Widget count includes archived widgets",
+		"mode": "fix",
+		"state": "active",
+		"requested_outcome": "`countWidgets()` returns archived widgets too, as the API documentation already says it does.",
+		"baseline": {
+			"vcs": "git",
+			"head": "0123456789abcdef0123456789abcdef01234567",
+			"description": "main as of the report"
+		},
+		"scope": {
+			"in_scope": [
+				"src/widgets/count.ts",
+				"tests/widgets-count.test.mjs"
+			],
+			"non_goals": [
+				"Changing the archived-widget storage format"
+			]
+		},
+		"preserved_contracts": [
+			"`countWidgets({ includeArchived: false })` keeps returning only live widgets"
+		],
+		"acceptance_scenarios": [
+			{
+				"id": "S1",
+				"kind": "behavior",
+				"description": "Counting with the default options includes archived widgets."
+			},
+			{
+				"id": "S2",
+				"kind": "preserved",
+				"description": "Counting with includeArchived: false excludes archived widgets."
+			}
+		],
+		"references": [],
+		"updated_at": "2026-09-17T10:05:00Z"
+	}
+}

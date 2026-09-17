@@ -6,7 +6,7 @@
 
 1. [Product vision and decision register](vision.md): intent, constraints, settled direction, provisional defaults, and deferred decisions.
 2. [Sanitized dogfood findings](dogfood-2026-09-17.md): what actually ran, what did not, and why the roadmap changed.
-3. [Engineering record contract](record-contract.md): proposed common vocabulary, state boundaries, proof/approval trust model, and schema-freeze gate.
+3. [Engineering record contract](record-contract.md): the frozen v1 vocabulary, record schemas, operation API, and proof/approval trust model (E01; executable in `core/engineering/` with fixtures under `tests/fixtures/engineering/v1/`).
 4. [Incremental implementation plan](implementation-plan.md): bounded tasks, prerequisites, paths, tests, and acceptance criteria.
 5. [Product roadmap](../ROADMAP.md): outcome-level sequencing and links to other workstreams.
 

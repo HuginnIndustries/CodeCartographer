@@ -1,0 +1,15 @@
+{
+	"description": "There is no `approve` action.",
+	"subject": "request",
+	"expect": [
+		{
+			"code": "invalid-action",
+			"path": "/action"
+		}
+	],
+	"value": {
+		"action": "approve",
+		"change_id": "chg_00000000000000000000c001",
+		"attempt_id": "att_00000000000000000000a001"
+	}
+}

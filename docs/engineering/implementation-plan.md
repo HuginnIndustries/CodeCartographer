@@ -57,6 +57,8 @@ Expected successful outcome: every targeted assertion passes and the repository'
 
 **Objective:** give downstream agents one reviewed, executable contract, including an honest host-approval boundary.
 
+**Status:** implemented and locally verified on the branch for [#399](https://github.com/HuginnIndustries/CodeCartographer/issues/399); the issue records the PR, the reviewed commit, and whether the approval-channel decision in the contract's [decision record](record-contract.md#decision-record) is settled. Files as listed below plus `core/engineering/ids.ts`, `core/engineering/digest.ts`, and the fixture generator `tests/fixtures/engineering/v1/generate.mjs`.
+
 **Depends on:** none. **Read:** `docs/engineering/record-contract.md`, `core/types.ts`, `core/utils.ts`, `core/status.ts`, `core/secrets.ts`, `core/synthesis.ts`, existing guard and closure tests.
 
 **Files:** create `core/engineering/types.ts`, `core/engineering/validation.ts`, `core/engineering/index.ts`, `tests/engineering-contract.test.mjs`, `tests/fixtures/engineering/v1/`; update `docs/engineering/record-contract.md` and the minimal `core/index.ts` export when needed.

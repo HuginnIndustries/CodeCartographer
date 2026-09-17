@@ -1,0 +1,43 @@
+{
+	"schema_version": 1,
+	"id": "acr_000000000000000000000c01",
+	"change_id": "chg_00000000000000000000c001",
+	"slice_id": "slc_00000000000000000000e001",
+	"attempt_id": "att_00000000000000000000a001",
+	"candidate_snapshot_id": "snp_00000000000000000000d001",
+	"candidate_digest": "sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
+	"input_digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1",
+	"nonce": "0123456789abcdef0123456789abcdef",
+	"issued_at": "2026-09-17T10:40:00Z",
+	"expires_at": "2026-09-17T11:40:00Z",
+	"presentation": {
+		"title": "Widget count includes archived widgets",
+		"requested_outcome": "`countWidgets()` returns archived widgets too, as the API documentation already says it does.",
+		"slice_deliverable": "countWidgets() counts archived widgets by default; a regression test pins both behaviors.",
+		"candidate_summary": "4 manifest entries (3 files, 1 symlinks); dirty tree at 01234567; digest sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
+		"proof_summary": [
+			{
+				"obligation_id": "O1",
+				"result": "passed",
+				"collector": "host-observed"
+			},
+			{
+				"obligation_id": "O2",
+				"result": "passed",
+				"collector": "host-observed"
+			}
+		],
+		"review_summary": [
+			{
+				"review_id": "rvw_000000000000000000000e01",
+				"separation": "declared-separate",
+				"remaining_blockers": 0
+			}
+		],
+		"limitations": [
+			"Proof was host-observed on the workstation; no CI run exists for this candidate.",
+			"Reviewer separation is declared by the host, not authenticated."
+		]
+	},
+	"presentation_digest": "sha256:2bae2e508347b08e9aaef38780a96057338e38c71f0e8fd83ecc7b6ee8fba2b3"
+}

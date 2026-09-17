@@ -1,0 +1,371 @@
+{
+	"description": "A proof discharges an obligation the slice declares.",
+	"subject": "bundle",
+	"expect": [
+		{
+			"code": "unknown-reference",
+			"path": "/proofs/0/obligation_id"
+		}
+	],
+	"value": {
+		"change": {
+			"schema_version": 1,
+			"kind": "change",
+			"id": "chg_00000000000000000000c001",
+			"created_at": "2026-09-17T10:00:00Z",
+			"revision": 2,
+			"title": "Widget count includes archived widgets",
+			"mode": "fix",
+			"state": "active",
+			"requested_outcome": "`countWidgets()` returns archived widgets too, as the API documentation already says it does.",
+			"baseline": {
+				"vcs": "git",
+				"head": "0123456789abcdef0123456789abcdef01234567",
+				"description": "main as of the report"
+			},
+			"scope": {
+				"in_scope": [
+					"src/widgets/count.ts",
+					"tests/widgets-count.test.mjs"
+				],
+				"non_goals": [
+					"Changing the archived-widget storage format"
+				]
+			},
+			"preserved_contracts": [
+				"`countWidgets({ includeArchived: false })` keeps returning only live widgets"
+			],
+			"acceptance_scenarios": [
+				{
+					"id": "S1",
+					"kind": "behavior",
+					"description": "Counting with the default options includes archived widgets."
+				},
+				{
+					"id": "S2",
+					"kind": "preserved",
+					"description": "Counting with includeArchived: false excludes archived widgets."
+				}
+			],
+			"references": [],
+			"updated_at": "2026-09-17T10:05:00Z"
+		},
+		"slices": [
+			{
+				"schema_version": 1,
+				"kind": "slice",
+				"id": "slc_00000000000000000000e001",
+				"created_at": "2026-09-17T10:05:00Z",
+				"change_id": "chg_00000000000000000000c001",
+				"revision": 1,
+				"title": "Fix the count and prove both scenarios",
+				"deliverable": "countWidgets() counts archived widgets by default; a regression test pins both behaviors.",
+				"scenario_ids": [
+					"S1",
+					"S2"
+				],
+				"depends_on": [],
+				"proof_obligations": [
+					{
+						"id": "O1",
+						"scenario_id": "S1",
+						"check_kind": "test",
+						"description": "tests/widgets-count.test.mjs passes with the archived case added",
+						"minimum_collector": "host-observed"
+					},
+					{
+						"id": "O2",
+						"scenario_id": "S2",
+						"check_kind": "test",
+						"description": "the includeArchived: false case still passes",
+						"minimum_collector": "host-observed"
+					}
+				],
+				"permitted_scope": {
+					"paths": [
+						"src/widgets/**",
+						"tests/widgets-count.test.mjs"
+					],
+					"description": "the counting module and its test"
+				},
+				"state": "active",
+				"updated_at": "2026-09-17T10:05:00Z"
+			}
+		],
+		"attempts": [
+			{
+				"schema_version": 1,
+				"kind": "attempt",
+				"id": "att_00000000000000000000a001",
+				"created_at": "2026-09-17T10:10:00Z",
+				"change_id": "chg_00000000000000000000c001",
+				"slice_id": "slc_00000000000000000000e001",
+				"inputs": {
+					"brief_digest": "sha256:32dd3ea09fe69f5a22d4cc1dd9d549ed808c48e42dd5ff683b1e1400d46247ae",
+					"plan_digest": "sha256:67d2de7f421a0b8104cad0aabfd6740aa11c7403618f9e7e33be5d8cbfc4da17",
+					"references": [],
+					"digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1"
+				},
+				"baseline_snapshot_id": "snp_00000000000000000000b001",
+				"candidate_snapshot_id": "snp_00000000000000000000d001",
+				"outcome": "needs-human-acceptance",
+				"started_at": "2026-09-17T10:10:00Z",
+				"ended_at": "2026-09-17T10:45:01Z"
+			}
+		],
+		"snapshots": [
+			{
+				"schema_version": 1,
+				"kind": "snapshot",
+				"id": "snp_00000000000000000000b001",
+				"created_at": "2026-09-17T10:10:05Z",
+				"change_id": "chg_00000000000000000000c001",
+				"attempt_id": "att_00000000000000000000a001",
+				"role": "baseline",
+				"repository": {
+					"vcs": "git",
+					"head": "0123456789abcdef0123456789abcdef01234567",
+					"dirty": false
+				},
+				"manifest": [
+					{
+						"path": "src/widgets/count.ts",
+						"type": "file",
+						"digest": "sha256:a95aff40ca78c192eccafdab5939a6a1540e2164a03ad2ca29feb8aa74398f20",
+						"executable": false,
+						"size": 56
+					},
+					{
+						"path": "tests/widgets-count.test.mjs",
+						"type": "file",
+						"digest": "sha256:3ae10eedc6f36a3519747aa6cdc12e01142db25b04aa3282ca358afea8cdec75",
+						"executable": false,
+						"size": 17
+					}
+				],
+				"coverage": {
+					"excluded": [
+						{
+							"pattern": ".codecarto/engineering/**",
+							"reason": "engineering-namespace"
+						},
+						{
+							"pattern": "node_modules/**",
+							"reason": "ignored"
+						},
+						{
+							"pattern": "dist/**",
+							"reason": "generated"
+						}
+					],
+					"uncovered_relevant_inputs": []
+				},
+				"stability": "stable",
+				"collector": "host-observed",
+				"captured_at": "2026-09-17T10:10:05Z",
+				"digest": "sha256:0680d4b07be8a15216c35cc583f2f5047aa72e41b3b3e200a716ceb63cbfb5dd"
+			},
+			{
+				"schema_version": 1,
+				"kind": "snapshot",
+				"id": "snp_00000000000000000000d001",
+				"created_at": "2026-09-17T10:22:00Z",
+				"change_id": "chg_00000000000000000000c001",
+				"attempt_id": "att_00000000000000000000a001",
+				"role": "candidate",
+				"repository": {
+					"vcs": "git",
+					"head": "0123456789abcdef0123456789abcdef01234567",
+					"dirty": true
+				},
+				"manifest": [
+					{
+						"path": "scripts/count",
+						"type": "symlink",
+						"target": "../src/widgets/count.ts"
+					},
+					{
+						"path": "src/widgets/count.ts",
+						"type": "file",
+						"digest": "sha256:e4ad8d3163d1ee31322e02328aa178ba89293d62cd42e234dff295f00ab2519a",
+						"executable": false,
+						"size": 74
+					},
+					{
+						"path": "tests/widgets-count.test.mjs",
+						"type": "file",
+						"digest": "sha256:2a7b81aa23287fe80804eac0848e7406065055efd6e2d1688c24b5ff15a169d2",
+						"executable": false,
+						"size": 23
+					},
+					{
+						"path": "tools/run-tests",
+						"type": "file",
+						"digest": "sha256:3b7145ecf1494e6e3a52269f187aca3835c8d154df6da76620634d6c232451ee",
+						"executable": true,
+						"size": 22
+					}
+				],
+				"coverage": {
+					"excluded": [
+						{
+							"pattern": ".codecarto/engineering/**",
+							"reason": "engineering-namespace"
+						},
+						{
+							"pattern": "node_modules/**",
+							"reason": "ignored"
+						},
+						{
+							"pattern": "dist/**",
+							"reason": "generated"
+						}
+					],
+					"uncovered_relevant_inputs": []
+				},
+				"stability": "stable",
+				"collector": "host-observed",
+				"captured_at": "2026-09-17T10:22:00Z",
+				"digest": "sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0"
+			}
+		],
+		"proofs": [
+			{
+				"schema_version": 1,
+				"kind": "proof",
+				"id": "prf_00000000000000000000f001",
+				"created_at": "2026-09-17T10:21:30Z",
+				"change_id": "chg_00000000000000000000c001",
+				"attempt_id": "att_00000000000000000000a001",
+				"snapshot_id": "snp_00000000000000000000d001",
+				"obligation_id": "O9",
+				"scenario_ids": [
+					"S1"
+				],
+				"check": {
+					"kind": "test",
+					"command": "node --test tests/widgets-count.test.mjs",
+					"working_directory": "."
+				},
+				"collector": "host-observed",
+				"result": "passed",
+				"exit_code": 0,
+				"started_at": "2026-09-17T10:20:00Z",
+				"ended_at": "2026-09-17T10:21:30Z",
+				"artifacts": [
+					{
+						"id": "art_00000000000000000000aa01",
+						"label": "test stdout",
+						"media_type": "text/plain",
+						"raw_digest": "sha256:21aa5f19ab93e4d479e998dc4a1981c98197500dbd31438b18d320e5981d5119",
+						"raw_size": 17,
+						"sanitized_digest": "sha256:21aa5f19ab93e4d479e998dc4a1981c98197500dbd31438b18d320e5981d5119",
+						"retained": true
+					}
+				],
+				"environment": {
+					"summary": "linux x64, node 24",
+					"digest": "sha256:9c88ec3d30445acb71370d51c4433795a74061ecbd1be34656950450ca3936d6"
+				},
+				"provenance": {
+					"source": "mcp:claude-code"
+				}
+			},
+			{
+				"schema_version": 1,
+				"kind": "proof",
+				"id": "prf_00000000000000000000f002",
+				"created_at": "2026-09-17T10:21:30Z",
+				"change_id": "chg_00000000000000000000c001",
+				"attempt_id": "att_00000000000000000000a001",
+				"snapshot_id": "snp_00000000000000000000d001",
+				"obligation_id": "O2",
+				"scenario_ids": [
+					"S2"
+				],
+				"check": {
+					"kind": "test",
+					"command": "node --test tests/widgets-count.test.mjs",
+					"working_directory": "."
+				},
+				"collector": "host-observed",
+				"result": "passed",
+				"exit_code": 0,
+				"started_at": "2026-09-17T10:20:00Z",
+				"ended_at": "2026-09-17T10:21:30Z",
+				"artifacts": [],
+				"provenance": {
+					"source": "mcp:claude-code"
+				}
+			}
+		],
+		"reviews": [
+			{
+				"schema_version": 1,
+				"kind": "review",
+				"id": "rvw_000000000000000000000e01",
+				"created_at": "2026-09-17T10:30:00Z",
+				"change_id": "chg_00000000000000000000c001",
+				"attempt_id": "att_00000000000000000000a001",
+				"candidate_snapshot_id": "snp_00000000000000000000d001",
+				"candidate_digest": "sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
+				"input_digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1",
+				"reviewer": {
+					"context": "separate-session",
+					"separation": "declared-separate",
+					"label": "review session 2",
+					"note": "fresh session, no author transcript"
+				},
+				"objections": [
+					{
+						"id": "R1",
+						"severity": "blocking",
+						"statement": "The archived case asserted the count before the fixture loaded archived widgets.",
+						"evidence": "tests/widgets-count.test.mjs line 14 awaited nothing; the assertion ran against the live-only fixture.",
+						"disposition": "resolved",
+						"resolution_evidence": "Candidate snapshot moves the assertion after `await loadArchived()`; proof prf_…f001 ran against that snapshot."
+					},
+					{
+						"id": "R2",
+						"severity": "advisory",
+						"statement": "The option name `includeArchived` is not documented in README.",
+						"evidence": "README.md has no mention of the option.",
+						"disposition": "deferred",
+						"disposition_note": "Documentation follow-up outside this slice's permitted scope."
+					}
+				],
+				"remaining_blockers": [],
+				"summary": "Both scenarios are exercised by the test; the ordering defect found on first read was fixed before proof."
+			}
+		],
+		"approvals": [
+			{
+				"schema_version": 1,
+				"kind": "approval",
+				"id": "apr_000000000000000000000a01",
+				"created_at": "2026-09-17T10:45:00Z",
+				"change_id": "chg_00000000000000000000c001",
+				"slice_id": "slc_00000000000000000000e001",
+				"attempt_id": "att_00000000000000000000a001",
+				"candidate_snapshot_id": "snp_00000000000000000000d001",
+				"candidate_digest": "sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
+				"input_digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1",
+				"decision": "accepted",
+				"decided_at": "2026-09-17T10:45:00Z",
+				"receipt": {
+					"request_id": "acr_000000000000000000000c01",
+					"nonce": "0123456789abcdef0123456789abcdef",
+					"presentation_digest": "sha256:2bae2e508347b08e9aaef38780a96057338e38c71f0e8fd83ecc7b6ee8fba2b3",
+					"channel": "mcp-elicitation",
+					"host": "mcp-server",
+					"host_session": "stdio session 1",
+					"issued_at": "2026-09-17T10:40:00Z",
+					"responded_at": "2026-09-17T10:45:00Z",
+					"authenticated": "host-session",
+					"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."
+				},
+				"human_note": "Looks right; ship it."
+			}
+		]
+	}
+}
