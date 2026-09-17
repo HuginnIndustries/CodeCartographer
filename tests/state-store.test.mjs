@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
-const { acquireLock, atomicWriteFile, uniqueTempSuffix, STALE_LOCK_MS } = core;
+const { acquireLock, atomicWriteFile, retryOnTransientFsError, uniqueTempSuffix, STALE_LOCK_MS } = core;
 const { appendUsageRun, loadUsage, USAGE_RELATIVE_PATH } = await import(pathToFileURL(`${REPO_ROOT}/core/usage.ts`).href);
 const { publishEntry, writeMarker } = core;
 
@@ -53,6 +53,72 @@ test("atomicWriteFile removes its temp file and propagates the error when the re
 	} finally {
 		await cleanup();
 	}
+});
+
+// ---------- the rename retries while a holder blocks it (#393) ----------
+
+// atomicWriteFile's rename is wrapped in this retry because on Windows a
+// concurrent writer of the same file makes it fail with EPERM instead of
+// serializing. A POSIX rename cannot be made to fail that way from a test, so
+// the loop is exercised directly here and the wiring is proven end to end by
+// the forty-writer test above running on the windows-latest job.
+
+/** An fs failure shaped the way Node reports one: a message plus a `code`. */
+function fsError(code) {
+	return Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+}
+
+for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+	test(`retryOnTransientFsError retries a ${code} and returns the attempt that lands`, async () => {
+		let attempts = 0;
+		const result = await retryOnTransientFsError(async () => {
+			attempts += 1;
+			if (attempts < 3) throw fsError(code);
+			return "renamed";
+		});
+		assert.equal(result, "renamed");
+		assert.equal(attempts, 3, `${code} should have been retried until the rename landed`);
+	});
+}
+
+test("retryOnTransientFsError propagates the last transient error once the budget is spent", async () => {
+	let attempts = 0;
+	const started = Date.now();
+	await assert.rejects(
+		retryOnTransientFsError(async () => {
+			attempts += 1;
+			throw fsError("EPERM");
+		}, 250),
+		/EPERM/,
+	);
+	assert.ok(attempts > 1, `a holder that never lets go should still have been retried, got ${attempts} attempt(s)`);
+	assert.ok(Date.now() - started < 5000, "the budget must bound the wait rather than retrying forever");
+});
+
+test("retryOnTransientFsError propagates a permanent error on the first attempt", async () => {
+	for (const code of ["ENOENT", "ENOSPC", "EISDIR", "EXDEV"]) {
+		let attempts = 0;
+		await assert.rejects(
+			retryOnTransientFsError(async () => {
+				attempts += 1;
+				throw fsError(code);
+			}),
+			new RegExp(code),
+		);
+		assert.equal(attempts, 1, `${code} is permanent and must not cost the budget`);
+	}
+});
+
+test("retryOnTransientFsError propagates something thrown that is not an Error", async () => {
+	let attempts = 0;
+	await assert.rejects(
+		retryOnTransientFsError(async () => {
+			attempts += 1;
+			throw "not an Error";
+		}),
+		(thrown) => thrown === "not an Error",
+	);
+	assert.equal(attempts, 1);
 });
 
 // ---------- the lock is a queue of owned tickets (#227, #342, #355) ----------

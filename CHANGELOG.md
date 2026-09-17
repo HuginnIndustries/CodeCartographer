@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Windows: a rename that loses a race retries instead of failing the write.** `atomicWriteFile` writes a uniquely named sibling temp file and renames it over the destination; on Windows that rename fails with `EPERM` while another writer holds or is replacing the same file, so two concurrent writers — two MCP hosts, Pi and MCP, the usage log appending as a phase completes — lost a write with an error rather than serializing. Every canonical write in the framework goes through that function (`status.yaml`, the usage log, Broad-Side `state.json`, the library index). The rename now retries on `EPERM`, `EBUSY` and `EACCES` within a bounded, jittered budget and still propagates any other error on the first attempt; the temp-file cleanup is unchanged. Confirmed by the `test-windows` job's first run (#393).
+
 ## [0.26.0] — 2026-09-16
 
 The self-audit's batch: sixteen of its eighteen findings fixed, verified one by one against the code before each change, plus the audit itself, the module split, and a Windows CI job that turned four claims into two confirmed defects and eight platform-specific tests.

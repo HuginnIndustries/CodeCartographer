@@ -34,17 +34,66 @@ export function uniqueTempSuffix(): string {
 }
 
 /**
+ * The codes a rename over an existing file returns on Windows while another
+ * handle holds the destination: a concurrent writer's own rename in flight, or
+ * an antivirus or search indexer reading the file it just saw appear. They say
+ * "not yet", not "never" — the holder closes and the rename lands. A POSIX
+ * rename-over-existing is a single atomic syscall that does not report them for
+ * contention, so retrying on them costs nothing there and the loop stays one
+ * behavior on every platform rather than a `win32` branch (#393).
+ */
+const TRANSIENT_FS_ERROR_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+
+/** Bounded on purpose: contention clears in milliseconds, a real EPERM never. */
+const TRANSIENT_FS_RETRY_BUDGET_MS = 500;
+const TRANSIENT_FS_RETRY_MAX_DELAY_MS = 50;
+
+/**
+ * Run `operation`, retrying while it fails with one of
+ * {@link TRANSIENT_FS_ERROR_CODES} and the budget has time left. Any other
+ * error, and the last transient one once the budget is spent, propagates
+ * unchanged — the caller cannot tell a retried success from a first-try one,
+ * and a permanent failure still fails.
+ */
+export async function retryOnTransientFsError<T>(
+	operation: () => Promise<T>,
+	budgetMs: number = TRANSIENT_FS_RETRY_BUDGET_MS,
+): Promise<T> {
+	const deadline = Date.now() + budgetMs;
+	let delay = 2;
+	for (;;) {
+		try {
+			return await operation();
+		} catch (error) {
+			const code = (error as { code?: unknown } | null)?.code;
+			if (typeof code !== "string" || !TRANSIENT_FS_ERROR_CODES.has(code)) throw error;
+			if (Date.now() >= deadline) throw error;
+			// Jittered: forty writers of one file must not retry in lockstep.
+			await sleep(delay * (0.5 + Math.random()));
+			delay = Math.min(delay * 2, TRANSIENT_FS_RETRY_MAX_DELAY_MS);
+		}
+	}
+}
+
+/**
  * Write `content` to `path` atomically: a uniquely named sibling temp file,
  * then a rename over the target. Readers see the old bytes or the new bytes,
  * never a truncated file. On failure the temp file is removed best-effort and
  * the error propagates. Every framework file that is rewritten in place goes
  * through this so no caller hand-rolls the temp name.
+ *
+ * The rename retries within a bounded budget
+ * ({@link retryOnTransientFsError}): on Windows two writers of one file — two
+ * MCP hosts, Pi and MCP, the usage log appending as a phase completes — make
+ * each other's rename fail with `EPERM` rather than serializing, and every
+ * canonical write in the framework (`status.yaml`, the usage log, Broad-Side
+ * `state.json`, the library index) lands through this function (#393).
  */
 export async function atomicWriteFile(path: string, content: string): Promise<void> {
 	const tempPath = `${path}.${uniqueTempSuffix()}.tmp`;
 	try {
 		await writeFile(tempPath, content, "utf8");
-		await rename(tempPath, path);
+		await retryOnTransientFsError(() => rename(tempPath, path));
 	} catch (error) {
 		await rm(tempPath, { force: true }).catch(() => undefined);
 		throw error;
