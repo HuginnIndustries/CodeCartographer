@@ -397,7 +397,7 @@ test("/codecarto-library-init refuses a --namespace with no name instead of drop
 		// The flag works in either position when it is complete.
 		await commands.get("codecarto-library-init").handler(`--namespace team ${libraryPath}`, ctx);
 		assert.equal(ui.notifications.at(-1).message, `Wrote library.path and library.namespace to ${userConfigPath}; other keys untouched`);
-		assert.equal(await readFile(userConfigPath, "utf8"), `library:\n  path: ${libraryPath}\n  namespace: team\n`);
+		assert.deepEqual(core.parseSimpleYaml(await readFile(userConfigPath, "utf8")), { library: { path: libraryPath, namespace: "team" } });
 		const marker = JSON.parse(await readFile(join(libraryPath, ".codecarto-library"), "utf8"));
 		assert.equal(marker.namespaced, true);
 	});

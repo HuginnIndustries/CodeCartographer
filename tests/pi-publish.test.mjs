@@ -195,7 +195,7 @@ test("a recorded path meeting an incoming remote asks whether the repository mov
 
 		assert.deepEqual((await readdir(fx.entryDir("whisper-fixture"))).sort(), ["latest", "v1", "v2"]);
 		assert.match(await fx.metadata("whisper-fixture", 2), /^source_repo: "?https:\/\/github\.com\/acme\/Whisper-Fixture\.git"?$/m);
-		assert.match(await fx.metadata("whisper-fixture", 1), /^source_repo: "?\//m, "history is appended to, not rewritten");
+		assert.equal(parseSimpleYaml(await fx.metadata("whisper-fixture", 1)).source_repo, fx.cwd, "history is appended to, not rewritten");
 	} finally {
 		await fx.cleanup();
 	}
