@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { compact, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { atomicWriteFile, canonicalPath, getWorkspaceState, isWithinPath, resolveExistingPrefix } from "../../core/index.ts";
+import { atomicWriteFile, getWorkspaceState, isWithinPathResolved } from "../../core/index.ts";
 
 const PHASE_SESSION_PREFIX = "CodeCartographer phase: ";
 
@@ -75,15 +75,14 @@ export function phaseCompactionExtension(pi: ExtensionAPI): void {
 		if (event.toolName === "edit" || event.toolName === "write") {
 			const inputPath = typeof event.input.path === "string" ? event.input.path : "";
 			const strippedPath = inputPath.startsWith("@") ? inputPath.slice(1) : inputPath;
-			// The same symlink-aware containment as the parent extension's hook
-			// (#223) — follow the existing prefix through symlinks, then append
-			// the unborn tail — over a narrower root on purpose: a phase writes
-			// findings, handoffs, and checkpoints under .codecarto/ and never
-			// publishes, so the configured library the orchestrator's hook admits
-			// is not admitted here (#364).
-			const targetPath = await resolveExistingPrefix(strippedPath, ctx.cwd);
-			const allowedRoot = await canonicalPath(join(ctx.cwd, ".codecarto"));
-			if (!isWithinPath(targetPath, allowedRoot)) {
+			// The same symlink-aware containment as the parent extension's hook,
+			// through the same primitive (#223, #394): each operand's existing
+			// prefix is followed through symlinks before the unborn tail is
+			// appended. The root is narrower on purpose — a phase writes findings,
+			// handoffs, and checkpoints under .codecarto/ and never publishes, so
+			// the configured library the orchestrator's hook admits is not
+			// admitted here (#364).
+			if (!(await isWithinPathResolved(strippedPath, join(ctx.cwd, ".codecarto"), ctx.cwd))) {
 				return {
 					block: true,
 					reason: `CodeCartographer phase sessions only allow ${event.toolName} within .codecarto/`,

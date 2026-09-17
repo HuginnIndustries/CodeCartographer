@@ -169,13 +169,25 @@ export async function resolveExistingPrefix(path: string, base: string = process
 
 /**
  * Symlink-aware version of isWithinPath for paths that may not exist yet:
- * the existing prefix of `path` is resolved through symlinks
- * ({@link resolveExistingPrefix}), the root through `realpath`, and the two
- * are compared lexically. A symlinked ancestor that points outside the root
- * fails whether or not the target file exists.
+ * the existing prefix of each operand is resolved through symlinks
+ * ({@link resolveExistingPrefix}), the unborn tail is appended lexically, and
+ * the two are compared. A symlinked ancestor that points outside the root
+ * fails whether or not the target file exists. Relative operands resolve
+ * against `base`.
+ *
+ * The root goes through the same resolution as the target rather than
+ * `realpath` alone. `realpath` throws on a root that does not exist yet —
+ * `.codecarto/` before a fresh workspace's first write — and the lexical
+ * fallback then kept an ancestor the target's side had already expanded: a
+ * Windows runner's 8.3 short name (`C:\Users\RUNNER~1\…`), macOS' `/var` →
+ * `/private/var`. The two spellings shared no prefix, so a write to the one
+ * directory a phase is allowed to write was judged outside it (#394).
  */
-export async function isWithinPathResolved(path: string, root: string): Promise<boolean> {
-	const [resolvedPath, resolvedRoot] = await Promise.all([resolveExistingPrefix(path), canonicalPath(root)]);
+export async function isWithinPathResolved(path: string, root: string, base: string = process.cwd()): Promise<boolean> {
+	const [resolvedPath, resolvedRoot] = await Promise.all([
+		resolveExistingPrefix(path, base),
+		resolveExistingPrefix(root, base),
+	]);
 	return isWithinPath(resolvedPath, resolvedRoot);
 }
 
