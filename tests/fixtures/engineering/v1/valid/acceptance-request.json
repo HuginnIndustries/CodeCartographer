@@ -40,9 +40,9 @@
 			}
 		],
 		"limitations": [
-			"Reviewer separation is declared by the host, not authenticated.",
+			"Reviewer separation is declared by the review's author, not authenticated.",
 			"No CI run exists for this candidate."
 		]
 	},
-	"presentation_digest": "sha256:047bb0ad4915f41145781a538f101043e6811faf75dd7635004eca486d8d4fa1"
+	"presentation_digest": "sha256:aaf8742f01787b9eb3dbbb7d26122bc66270a4258e7342630625f337507f0000"
 }

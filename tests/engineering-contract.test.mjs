@@ -408,9 +408,10 @@ test("buildAcceptanceRequest reproduces the fixture request byte for byte and re
 // ---------- proof and review semantics ----------
 
 test("agent-claimed is a legal collector that satisfies no obligation, and deferred blockers still block", () => {
-	const claimed = { ...valid.proof, collector: "agent-claimed", check: { kind: "test" } };
+	const claimed = { ...valid.proofClaimed, collector: "agent-claimed", check: { kind: "test" } };
 	delete claimed.exit_code;
 	assert.equal(validateRecord(claimed).ok, true, "a claim is kept so it can be contradicted");
+	assert.equal(validateRecord({ ...valid.proof, collector: "agent-claimed", check: { kind: "test" }, exit_code: undefined }).ok, false, "a tool layer cannot attest an agent claim");
 	assert.ok(!OBSERVED_COLLECTORS.includes("agent-claimed"));
 	assert.deepEqual(codesAt(validateRecord({ ...valid.slice, proof_obligations: [{ ...valid.slice.proof_obligations[0], minimum_collector: "agent-claimed" }] })), ["invalid-enum /proof_obligations/0/minimum_collector"]);
 	assert.deepEqual(COLLECTOR_RANK, { "host-observed": 3, "ci-reported": 2, "manual-observation": 1, "agent-claimed": 0 });
@@ -443,6 +444,9 @@ test("a collector label never elevates a caller-reported record: authority comes
 	assert.equal(proofDischarges(valid.proof, obligation, "verified"), true);
 	// An observing attestation does not launder an agent-claimed collector, a failure, or the wrong obligation.
 	assert.equal(proofAuthority({ ...valid.proof, collector: "agent-claimed" }), "claimed");
+	// And the attestation must be able to vouch for that kind of check: a tool layer sees tool results only, the adapter runs nothing.
+	assert.deepEqual(codesAt(validateRecord({ ...valid.proof, collector: "ci-reported", provenance: { ...valid.proof.provenance, run_reference: "run 1" } })), ["invalid-value /provenance/attested_by"]);
+	assert.deepEqual(codesAt(validateRecord({ ...valid.proof, provenance: { source: "mcp-server", attested_by: "adapter" } })), ["invalid-value /provenance/attested_by"]);
 	assert.equal(proofDischarges({ ...valid.proof, result: "failed" }, obligation, "cooperative"), false);
 	assert.equal(proofDischarges(valid.proof, valid.slice.proof_obligations[1], "cooperative"), false);
 	// Only the separately-approved cooperative policy lets a claim discharge, and it never becomes "observed".
@@ -474,23 +478,46 @@ test("a trusted channel is a proposal until the host/client pair passes the inte
 
 test("channel trust and at-rest trust are separate: a real UI decision in a writable namespace is cooperative", () => {
 	assert.deepEqual(ASSURANCE_POLICIES, ["verified", "cooperative"]);
-	const ctx = (boundary) => ({ ...receiptContext(), current_storage_boundary: boundary });
-	assert.deepEqual(classifyAcceptance(valid.approval, ctx("host-enforced")), { class: "verified", reasons: [] });
+	const enforced = { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z" };
+	const registry = [{ host: "mcp-server", client: "claude-code", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
+	const ctx = (storage, extra = {}) => ({ ...receiptContext(), current_storage: storage, ...extra });
+	// Against the contract's own (empty) registry nothing is verified today, even the fixture approval.
+	const today = classifyAcceptance(valid.approval, ctx(enforced));
+	assert.equal(today.class, "cooperative");
+	assert.match(today.reasons[0], /not in VERIFIED_ACCEPTANCE_INTEGRATIONS now/);
+	// With the pair registered and a boundary enforced before the decision, the full path holds.
+	assert.deepEqual(classifyAcceptance(valid.approval, ctx(enforced, { integrations: registry })), { class: "verified", reasons: [] });
 	// The same record read by a host whose namespace agent tools can write.
-	const now = classifyAcceptance(valid.approval, ctx("none"));
+	const now = classifyAcceptance(valid.approval, ctx({ boundary: "none" }, { integrations: registry }));
 	assert.equal(now.class, "cooperative");
 	assert.match(now.reasons[0], /not host-enforced now/);
+	// A boundary enforced after the decision does not retroactively protect the record: its storage fields were self-reported.
+	const late = classifyAcceptance(valid.approval, ctx({ boundary: "host-enforced", enforced_since: "2026-09-17T11:00:00Z" }, { integrations: registry }));
+	assert.equal(late.class, "cooperative");
+	assert.match(late.reasons[0], /before the boundary was enforced/);
+	// A forged record claiming host-enforced storage and a verified integration is still cooperative under a boundary that post-dates it or is absent.
+	const forged = { ...valid.approval, storage: { boundary: "host-enforced", note: "forged" } };
+	assert.equal(classifyAcceptance(forged, ctx({ boundary: "none" }, { integrations: registry })).class, "cooperative");
+	assert.equal(classifyAcceptance(forged, ctx({ boundary: "host-enforced", enforced_since: "2026-09-17T11:00:00Z" }, { integrations: registry })).class, "cooperative");
+	// A de-verified pair downgrades old approvals: the receipt's own boolean is not trusted.
+	assert.equal(classifyAcceptance(valid.approval, ctx(enforced, { integrations: [{ ...registry[0], client: "other-client" }] })).class, "cooperative");
+	// Malformed current storage fails closed.
+	assert.equal(classifyAcceptance(valid.approval, ctx({ boundary: "host-enforced" }, { integrations: registry })).class, "cooperative");
+	assert.equal(classifyAcceptance(valid.approval, ctx(undefined, { integrations: registry })).class, "cooperative");
 	// A record minted over an unprotected namespace cannot even be written as verified …
 	assert.deepEqual(codesAt(validateRecord({ ...valid.approval, storage: { boundary: "none", note: "n" } })), ["invalid-value /storage/boundary"]);
 	// … and the honestly-labelled cooperative record is valid, binds correctly, and classifies as cooperative everywhere.
 	assert.equal(validateRecord(valid.approvalCooperative).ok, true);
 	assert.deepEqual(evaluateApprovalReceipt(valid.approvalCooperative, receiptContext()), { ok: true, accepted: true }, "the receipt binding itself is sound");
-	const coop = classifyAcceptance(valid.approvalCooperative, ctx("host-enforced"));
+	const coop = classifyAcceptance(valid.approvalCooperative, ctx(enforced, { integrations: registry }));
 	assert.equal(coop.class, "cooperative");
 	assert.equal(coop.reasons.length, 3, "unverified integration, cooperative policy, unprotected at mint");
 	// A receipt that does not bind is invalid, not cooperative.
-	assert.equal(classifyAcceptance({ ...valid.approval, decision: "rejected" }, ctx("host-enforced")).class, "invalid");
-	assert.equal(classifyAcceptance(valid.approval, { ...ctx("host-enforced"), consumed_nonces: [valid.approval.receipt.nonce] }).class, "invalid");
+	assert.equal(classifyAcceptance({ ...valid.approval, decision: "rejected" }, ctx(enforced, { integrations: registry })).class, "invalid");
+	assert.equal(classifyAcceptance(valid.approval, ctx(enforced, { integrations: registry, consumed_nonces: [valid.approval.receipt.nonce] })).class, "invalid");
+	// The presentation discloses a candidate that could not bind a verified acceptance.
+	const weak = standardLimitations({ proofs: [], reviews: [], candidate: { ...valid.candidate, attested_by: "caller" }, assurance: "verified", storage_boundary: "host-enforced" });
+	assert.match(weak[0], /candidate snapshot is caller-attested/);
 	// "verified" is the only spelling of verified: the presentation carries the policy and every proof's authority.
 	assert.equal(valid.request.presentation.assurance, "verified");
 	assert.ok(valid.request.presentation.proof_summary.every((p) => p.authority === "observed"));

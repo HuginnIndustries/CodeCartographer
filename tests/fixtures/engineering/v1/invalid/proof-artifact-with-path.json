@@ -47,7 +47,8 @@
 		},
 		"provenance": {
 			"source": "claude-code:post-tool-use-hook",
-			"attested_by": "host-tool-result"
+			"attested_by": "host-tool-result",
+			"tool_call_id": "toolu_01example"
 		}
 	}
 }

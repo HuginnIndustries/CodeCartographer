@@ -223,7 +223,7 @@ const proof = {
 		{ id: ID.artifact, label: "test stdout", media_type: "text/plain", raw_digest: sha("# pass 2\n# fail 0\n"), raw_size: 17, sanitized_digest: sha("# pass 2\n# fail 0\n"), retained: true },
 	],
 	environment: { summary: "linux x64, node 24", digest: digestOf({ node: "24", platform: "linux", arch: "x64" }) },
-	provenance: { source: "claude-code:post-tool-use-hook", attested_by: "host-tool-result" },
+	provenance: { source: "claude-code:post-tool-use-hook", attested_by: "host-tool-result", tool_call_id: "toolu_01example" },
 };
 
 const proof2 = {
@@ -288,7 +288,7 @@ const presentation = {
 		{ obligation_id: "O2", result: "passed", collector: "host-observed", attested_by: "host-tool-result", authority: "observed" },
 	],
 	review_summary: [{ review_id: ID.review, separation: "declared-separate", remaining_blockers: 0 }],
-	limitations: ["Reviewer separation is declared by the host, not authenticated.", "No CI run exists for this candidate."],
+	limitations: ["Reviewer separation is declared by the review's author, not authenticated.", "No CI run exists for this candidate."],
 };
 const acceptanceRequest = {
 	schema_version: 1,
@@ -325,6 +325,7 @@ const approval = {
 		presentation_digest: acceptanceRequest.presentation_digest,
 		channel: "mcp-elicitation",
 		host: "mcp-server",
+		client: { name: "claude-code", version: "2.1.0" },
 		host_session: "stdio session 1",
 		issued_at: T.issued,
 		responded_at: T.responded,
@@ -1118,6 +1119,56 @@ const invalid = {
 		value: (() => {
 			const v = clone(acceptanceRequest);
 			delete v.presentation.assurance;
+			return v;
+		})(),
+	},
+	"proof-host-tool-result-on-manual-check": {
+		description: "The host's tool layer only sees tool results; it cannot attest a manual procedure.",
+		subject: "record",
+		expect: [{ code: "invalid-value", path: "/provenance/attested_by" }],
+		value: withPatch(proof, { collector: "manual-observation", check: { kind: "manual-procedure", procedure: "open the page" }, observer: "someone", exit_code: undefined }),
+	},
+	"proof-adapter-attests-host-observed": {
+		description: "The adapter never runs a command, so it cannot attest a host-observed check.",
+		subject: "record",
+		expect: [{ code: "invalid-value", path: "/provenance/attested_by" }],
+		value: withPatch(proof, { provenance: { source: "mcp-server", attested_by: "adapter" } }),
+	},
+	"proof-host-tool-result-without-tool-call-id": {
+		description: "A host tool result names the tool call it came from.",
+		subject: "record",
+		expect: [{ code: "missing-field", path: "/provenance/tool_call_id" }],
+		value: withPatch(proof, { provenance: { source: "claude-code:post-tool-use-hook", attested_by: "host-tool-result" } }),
+	},
+	"proof-caller-with-tool-call-id": {
+		description: "A caller-reported record cannot borrow a tool-call id.",
+		subject: "record",
+		expect: [{ code: "invalid-value", path: "/provenance/tool_call_id" }],
+		value: withPatch(proofCallerReported, { provenance: { ...proofCallerReported.provenance, tool_call_id: "toolu_01example" } }),
+	},
+	"request-proof-tool-call-id-from-caller": {
+		description: "tool_call_id comes from the host payload, never from the request.",
+		subject: "request",
+		expect: [{ code: "unknown-field", path: "/proof/provenance/tool_call_id" }],
+		value: (() => {
+			const v = clone(requests["record-proof"]);
+			v.proof.provenance.tool_call_id = "toolu_01example";
+			return v;
+		})(),
+	},
+	"snapshot-host-tool-result-attestation": {
+		description: "A snapshot is never a tool result; only adapter or caller can attest it.",
+		subject: "record",
+		expect: [{ code: "invalid-enum", path: "/attested_by" }],
+		value: withPatch(candidate, { attested_by: "host-tool-result" }),
+	},
+	"approval-missing-client": {
+		description: "A receipt names the client so the integration can be re-derived at read time.",
+		subject: "record",
+		expect: [{ code: "missing-field", path: "/receipt/client" }],
+		value: (() => {
+			const v = clone(approval);
+			delete v.receipt.client;
 			return v;
 		})(),
 	},

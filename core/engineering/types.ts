@@ -117,6 +117,15 @@ export const SCENARIO_KINDS = ["behavior", "preserved", "non-functional"] as con
 export type ScenarioKind = (typeof SCENARIO_KINDS)[number];
 
 /**
+ * What a reader knows about the namespace now. A host-enforced boundary
+ * carries the instant since which it has been continuously enforced, taken
+ * from host configuration outside the namespace (D3); an approval decided
+ * before that instant was written into an unprotected namespace and stays
+ * cooperative however it is labelled.
+ */
+export type CurrentStorage = { boundary: "host-enforced"; enforced_since: Timestamp } | { boundary: "none" };
+
+/**
  * How the acceptance a reader is looking at should be treated once channel,
  * integration, and storage boundary are all taken into account. `verified`
  * only when every one of them holds now, not just at mint time.
@@ -146,7 +155,8 @@ export const APPROVAL_DECISIONS = ["accepted", "rejected"] as const;
 export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
 
 /**
- * How a human decision reached the core.
+ * How a human decision reached the core. The first two are proposals: no
+ * host/client pair is verified yet (see VERIFIED_ACCEPTANCE_INTEGRATIONS).
  *
  * - `mcp-elicitation`: the MCP server sent `elicitation/create` to the
  *   connected client and the client — not the model — answered over the
@@ -160,7 +170,7 @@ export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
  */
 export const APPROVAL_CHANNELS = ["mcp-elicitation", "host-native", "cooperative-file", "agent-declared"] as const;
 export type ApprovalChannel = (typeof APPROVAL_CHANNELS)[number];
-/** The channels whose receipt may satisfy the human-acceptance gate in v1. */
+/** The channels proposed for the human-acceptance gate; a receipt on one satisfies nothing until its host/client pair is in {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}. */
 export const TRUSTED_APPROVAL_CHANNELS: readonly ApprovalChannel[] = ["mcp-elicitation", "host-native"];
 
 /**
@@ -181,8 +191,12 @@ export type ReceiptAuthentication = (typeof RECEIPT_AUTHENTICATIONS)[number];
  *   read from the CI system itself).
  * - `host-tool-result`: the host's own tool-execution layer delivered the
  *   observation — a hook or extension event that receives the tool's actual
- *   exit code and output — through a host-side ingestion entry, never through
- *   the model's tool-call arguments.
+ *   exit code and output — through a host-side ingestion entry the model's
+ *   tools cannot reach, configured somewhere agent tools cannot write. An
+ *   entry the model can invoke, or a hook the model can install, yields
+ *   `caller`. The host payload names the executed command, cwd, and tool
+ *   call; the adapter fills `check.command` and `provenance.tool_call_id`
+ *   from it, never from the caller.
  * - `caller`: the values arrived in a tool payload. They are the caller's
  *   claim, whatever `collector` says; see {@link proofAuthority}.
  */
@@ -403,8 +417,8 @@ export interface SnapshotRecord extends RecordEnvelope<"snapshot"> {
 	/** `unstable` when the tree moved during capture; an unstable candidate cannot be accepted. */
 	stability: SnapshotStability;
 	collector: Collector;
-	/** Adapter-set; a caller-attested candidate cannot bind an acceptance. */
-	attested_by: Attestation;
+	/** Adapter-set; `adapter` or `caller` only (a snapshot is never a tool result); a caller-attested candidate cannot bind an acceptance. */
+	attested_by: Exclude<Attestation, "host-tool-result">;
 	captured_at: Timestamp;
 	digest: Digest;
 }
@@ -454,12 +468,14 @@ export interface ProofRecord extends RecordEnvelope<"proof"> {
 		digest: Digest;
 	};
 	provenance: {
-		/** The collecting surface, e.g. `mcp:claude-code`, `github-actions`, `pi`. */
+		/** The collecting surface, e.g. `mcp:claude-code`, `github-actions`, `pi`. On a caller-reported record this is part of the claim. */
 		source: string;
 		/** Required for `ci-reported`: the run this result was read from. */
 		run_reference?: string;
 		/** Adapter-set: whether the adapter observed `collector`/`result` itself or ingested the caller's claim. */
 		attested_by: Attestation;
+		/** Required for `host-tool-result`: the host's identifier for the tool call whose result this is, taken from the host payload. */
+		tool_call_id?: string;
 	};
 }
 
@@ -511,15 +527,17 @@ export interface ApprovalReceipt {
 	channel: ApprovalChannel;
 	/** The adapter that obtained the decision, e.g. `mcp-server`, `pi`. */
 	host: string;
+	/** The connected client as the transport reported it; with `host` and `channel`, the key into {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}. */
+	client: { name: string; version?: string };
 	host_session?: string;
 	issued_at: Timestamp;
 	responded_at: Timestamp;
 	authenticated: ReceiptAuthentication;
 	/**
-	 * Whether this host/client pair is in {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}
-	 * at mint time. A client that merely advertises the capability is not
-	 * verified; an unverified pair stops at `needs-human-acceptance`, so a
-	 * receipt carrying `false` here was minted outside the pilot policy.
+	 * Whether this host/client pair was in {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}
+	 * at mint time. Informational: a reader re-derives it from `host`,
+	 * `client.name`, and `channel` against the current registry
+	 * (`classifyAcceptance`), so a de-verified pair downgrades old approvals.
 	 */
 	verified_integration: boolean;
 	/** The adapter's own statement of what it did and did not verify, for the human reader. */

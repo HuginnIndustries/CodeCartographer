@@ -207,7 +207,8 @@
 				},
 				"provenance": {
 					"source": "claude-code:post-tool-use-hook",
-					"attested_by": "host-tool-result"
+					"attested_by": "host-tool-result",
+					"tool_call_id": "toolu_01example"
 				}
 			},
 			{
@@ -235,7 +236,8 @@
 				"artifacts": [],
 				"provenance": {
 					"source": "claude-code:post-tool-use-hook",
-					"attested_by": "host-tool-result"
+					"attested_by": "host-tool-result",
+					"tool_call_id": "toolu_01example"
 				}
 			}
 		],
@@ -295,9 +297,13 @@
 				"receipt": {
 					"request_id": "acr_000000000000000000000c01",
 					"nonce": "0123456789abcdef0123456789abcdef",
-					"presentation_digest": "sha256:047bb0ad4915f41145781a538f101043e6811faf75dd7635004eca486d8d4fa1",
+					"presentation_digest": "sha256:aaf8742f01787b9eb3dbbb7d26122bc66270a4258e7342630625f337507f0000",
 					"channel": "mcp-elicitation",
 					"host": "mcp-server",
+					"client": {
+						"name": "claude-code",
+						"version": "2.1.0"
+					},
 					"host_session": "stdio session 1",
 					"issued_at": "2026-09-17T10:40:00Z",
 					"responded_at": "2026-09-17T10:45:00Z",

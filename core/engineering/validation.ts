@@ -72,6 +72,7 @@ import {
 	type ChangeRecord,
 	type ChangeRequest,
 	type Collector,
+	type CurrentStorage,
 	type EngineeringError,
 	type EngineeringErrorCode,
 	type EngineeringRecord,
@@ -147,15 +148,28 @@ export function acceptanceChannelSupported(capabilities: HostCapabilities): { su
  * stored where agent tools can write is `cooperative`, not `verified`: the
  * channel does not protect the file.
  */
-export function classifyAcceptance(approval: ApprovalRecord, context: ReceiptContext & { current_storage_boundary: StorageBoundary }): { class: AcceptanceClass; reasons: string[] } {
+export function classifyAcceptance(
+	approval: ApprovalRecord,
+	context: ReceiptContext & {
+		current_storage: CurrentStorage;
+		/** The registry to check the receipt's host/client/channel against; the contract's own unless a test supplies one. */
+		integrations?: typeof VERIFIED_ACCEPTANCE_INTEGRATIONS;
+	},
+): { class: AcceptanceClass; reasons: string[] } {
 	const receipt = evaluateApprovalReceipt(approval, context);
 	if (receipt.ok === false) return { class: "invalid", reasons: receipt.errors.map((e) => `${e.code} at ${e.path}`) };
 	if (!receipt.accepted) return { class: "invalid", reasons: ["decision is rejected"] };
 	const reasons: string[] = [];
-	if (!approval.receipt.verified_integration) reasons.push("receipt was minted on an unverified host/client integration");
+	const r = approval.receipt;
+	const registered = (context.integrations ?? VERIFIED_ACCEPTANCE_INTEGRATIONS).some((e) => e.host === r.host && e.client === r.client.name && e.channel === r.channel);
+	if (!registered) reasons.push(`${r.channel} on ${r.host} / ${r.client.name} is not in VERIFIED_ACCEPTANCE_INTEGRATIONS now`);
+	if (!r.verified_integration) reasons.push("receipt was minted on an unverified host/client integration");
 	if (approval.assurance !== "verified") reasons.push(`approval was minted under the ${approval.assurance} policy`);
 	if (approval.storage.boundary !== "host-enforced") reasons.push("storage boundary was not host-enforced when the approval was minted");
-	if (context.current_storage_boundary !== "host-enforced") reasons.push("storage boundary is not host-enforced now; the record could have been rewritten by an agent tool");
+	const current = context.current_storage;
+	if (!current || current.boundary !== "host-enforced") reasons.push("storage boundary is not host-enforced now; the record could have been rewritten by an agent tool");
+	else if (!isTimestamp(current.enforced_since)) reasons.push("the boundary's enforced_since instant is missing or malformed; continuity cannot be established");
+	else if (before(approval.decided_at, current.enforced_since)) reasons.push(`approval was decided at ${approval.decided_at}, before the boundary was enforced at ${current.enforced_since}; its storage fields are self-reported`);
 	return reasons.length === 0 ? { class: "verified", reasons: [] } : { class: "cooperative", reasons };
 }
 
@@ -439,7 +453,7 @@ const CHECK_SHAPE: Shape = { kind: req(oneOf(CHECK_KINDS)), command: opt(nonEmpt
 const ENVIRONMENT_SHAPE: Shape = { summary: req(nonEmptyString), digest: req(digest) };
 
 const PROVENANCE_INPUT_SHAPE: Shape = { source: req(nonEmptyString), run_reference: opt(nonEmptyString) };
-const PROVENANCE_SHAPE: Shape = { ...PROVENANCE_INPUT_SHAPE, attested_by: req(oneOf(ATTESTATIONS)) };
+const PROVENANCE_SHAPE: Shape = { ...PROVENANCE_INPUT_SHAPE, attested_by: req(oneOf(ATTESTATIONS)), tool_call_id: opt(nonEmptyString) };
 
 const REVIEWER_SHAPE: Shape = {
 	context: req(oneOf(REVIEWER_CONTEXTS)),
@@ -464,6 +478,7 @@ const RECEIPT_SHAPE: Shape = {
 	presentation_digest: req(digest),
 	channel: req(oneOf(APPROVAL_CHANNELS)),
 	host: req(nonEmptyString),
+	client: req(objectOf({ name: req(nonEmptyString), version: opt(nonEmptyString) })),
 	host_session: opt(nonEmptyString),
 	issued_at: req(timestamp),
 	responded_at: req(timestamp),
@@ -638,7 +653,7 @@ const SNAPSHOT_BODY: Shape = {
 	attempt_id: req(recordId("attempt")),
 	role: req(oneOf(SNAPSHOT_ROLES)),
 	...SNAPSHOT_INPUT_BODY,
-	attested_by: req(oneOf(ATTESTATIONS)),
+	attested_by: req(oneOf(["adapter", "caller"])),
 	digest: req(digest),
 };
 const IDENTITY_FIELDS = ["coverage", "manifest", "repository"];
@@ -686,8 +701,24 @@ function proofPost(obj: Record<string, unknown>, path: string, errors: Errors): 
 		if (check && check.procedure === undefined) errors.fail(at(at(path, "check"), "procedure"), "missing-field", "check.procedure is required for a manual observation");
 		if (obj.observer === undefined) errors.fail(at(path, "observer"), "missing-field", "observer is required for a manual observation");
 	}
-	if (collector === "ci-reported" && isPlainObject(obj.provenance) && obj.provenance.run_reference === undefined) {
+	const provenance = isPlainObject(obj.provenance) ? obj.provenance : null;
+	if (collector === "ci-reported" && provenance && provenance.run_reference === undefined) {
 		errors.fail(at(at(path, "provenance"), "run_reference"), "missing-field", "provenance.run_reference is required for a ci-reported result");
+	}
+	// The attestation must be one that can actually vouch for this kind of
+	// observation: the host's tool layer only sees tool results, and the
+	// adapter never runs a command.
+	if (provenance && collector !== null) {
+		const attestedBy = provenance.attested_by;
+		if (attestedBy === "host-tool-result") {
+			if (collector !== "host-observed") errors.fail(at(at(path, "provenance"), "attested_by"), "invalid-value", "host-tool-result can only attest a host-observed check");
+			if (provenance.tool_call_id === undefined) errors.fail(at(at(path, "provenance"), "tool_call_id"), "missing-field", "tool_call_id is required for a host-tool-result attestation");
+		} else if (provenance.tool_call_id !== undefined) {
+			errors.fail(at(at(path, "provenance"), "tool_call_id"), "invalid-value", "tool_call_id is only allowed with a host-tool-result attestation");
+		}
+		if (attestedBy === "adapter" && collector === "host-observed") {
+			errors.fail(at(at(path, "provenance"), "attested_by"), "invalid-value", "the adapter never runs a command; a host-observed check is attested by the host's tool layer or claimed");
+		}
 	}
 	if (result !== null) requiredWhen(obj, path, "block_reason", result === "blocked", "when result is blocked", errors);
 	if (isTimestamp(obj.started_at) && isTimestamp(obj.ended_at) && before(obj.ended_at, obj.started_at)) {
@@ -916,7 +947,7 @@ export function buildAcceptanceRequest(args: {
 		assurance: args.assurance,
 		proof_summary: args.proofs.map((p) => ({ obligation_id: p.obligation_id, result: p.result, collector: p.collector, attested_by: p.provenance.attested_by, authority: proofAuthority(p) })),
 		review_summary: args.reviews.map((r) => ({ review_id: r.id, separation: r.reviewer.separation, remaining_blockers: r.remaining_blockers.length })),
-		limitations: [...standardLimitations({ proofs: args.proofs, reviews: args.reviews, assurance: args.assurance, storage_boundary: args.storage_boundary }), ...args.limitations],
+		limitations: [...standardLimitations({ proofs: args.proofs, reviews: args.reviews, candidate, assurance: args.assurance, storage_boundary: args.storage_boundary }), ...args.limitations],
 	};
 	return {
 		schema_version: ENGINEERING_SCHEMA_VERSION,
@@ -939,8 +970,12 @@ export function buildAcceptanceRequest(args: {
  * The limitations every presentation carries, derived from the records: the
  * caller can add to them but cannot remove them.
  */
-export function standardLimitations(args: { proofs: ProofRecord[]; reviews: ReviewRecord[]; assurance: AssurancePolicy; storage_boundary: StorageBoundary }): string[] {
+export function standardLimitations(args: { proofs: ProofRecord[]; reviews: ReviewRecord[]; candidate?: SnapshotRecord; assurance: AssurancePolicy; storage_boundary: StorageBoundary }): string[] {
 	const lines: string[] = [];
+	const candidate = args.candidate;
+	if (candidate && (candidate.attested_by !== "adapter" || candidate.collector === "agent-claimed" || candidate.stability !== "stable")) {
+		lines.push(`The candidate snapshot is ${candidate.attested_by}-attested, ${candidate.collector}, ${candidate.stability}; only an adapter-captured, stable candidate can bind a verified acceptance.`);
+	}
 	const claimed = args.proofs.filter((p) => proofAuthority(p) === "claimed").length;
 	if (claimed > 0) {
 		lines.push(
@@ -949,7 +984,7 @@ export function standardLimitations(args: { proofs: ProofRecord[]; reviews: Revi
 	}
 	if (args.assurance === "cooperative") lines.push("This decision is being asked for under the cooperative policy; the result is cooperative, not verified.");
 	if (args.storage_boundary !== "host-enforced") lines.push("The engineering namespace is writable by agent tools; the stored record of this decision is cooperative, not verified.");
-	if (args.reviews.length > 0) lines.push("Reviewer separation is declared by the host, not authenticated.");
+	if (args.reviews.length > 0) lines.push("Reviewer separation is declared by the review's author, not authenticated.");
 	return lines;
 }
 
