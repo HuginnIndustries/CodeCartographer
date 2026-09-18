@@ -1,0 +1,1 @@
+{ "permissions": { "deny": ["Write(./.codecarto/engineering/**)", "Edit(./.codecarto/engineering/**)"] } }

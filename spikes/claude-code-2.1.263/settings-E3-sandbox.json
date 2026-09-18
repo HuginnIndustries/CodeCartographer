@@ -1,0 +1,2 @@
+{ "permissions": { "deny": ["Write(./.codecarto/engineering/**)", "Edit(./.codecarto/engineering/**)"] },
+  "sandbox": { "enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true, "filesystem": { "denyWrite": ["$SPIKE_ROOT/project/.codecarto/engineering"] } } }
