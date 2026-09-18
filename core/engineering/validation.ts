@@ -33,6 +33,7 @@ import {
 	ATTEMPT_OUTCOMES_REQUIRING_CANDIDATE,
 	ATTEMPT_OUTCOME_TRANSITIONS,
 	ATTESTATIONS,
+	ASSURANCE_POLICIES,
 	CHANGE_ACTIONS,
 	CHANGE_MODES,
 	CHANGE_STATES,
@@ -46,6 +47,7 @@ import {
 	OBJECTION_DISPOSITIONS,
 	OBJECTION_SEVERITIES,
 	OBSERVED_COLLECTORS,
+	OBSERVING_ATTESTATIONS,
 	PROOF_RESULTS,
 	RECEIPT_AUTHENTICATIONS,
 	RECORD_KINDS,
@@ -56,11 +58,15 @@ import {
 	SLICE_STATE_TRANSITIONS,
 	SNAPSHOT_ROLES,
 	SNAPSHOT_STABILITIES,
+	STORAGE_BOUNDARIES,
 	TRUSTED_APPROVAL_CHANNELS,
 	VCS_KINDS,
+	VERIFIED_ACCEPTANCE_INTEGRATIONS,
+	type AcceptanceClass,
 	type AcceptancePresentation,
 	type AcceptanceRequest,
 	type ApprovalRecord,
+	type AssurancePolicy,
 	type AttemptRecord,
 	type ChangeBundle,
 	type ChangeRecord,
@@ -69,13 +75,17 @@ import {
 	type EngineeringError,
 	type EngineeringErrorCode,
 	type EngineeringRecord,
+	type EvidenceAuthority,
+	type HostCapabilities,
 	type IdentifiedKind,
+	type ProofObligation,
 	type ProofRecord,
 	type RecordKind,
 	type ReviewRecord,
 	type SliceRecord,
 	type SnapshotInput,
 	type SnapshotRecord,
+	type StorageBoundary,
 	type ValidationOutcome,
 } from "./types.ts";
 
@@ -85,6 +95,68 @@ import {
 export function collectorSatisfies(actual: Collector, minimum: Collector): boolean {
 	if (actual === "agent-claimed" || minimum === "agent-claimed") return false;
 	return COLLECTOR_RANK[actual] >= COLLECTOR_RANK[minimum];
+}
+
+/**
+ * What a proof establishes. `observed` needs both: an observed collector and
+ * an attestation from the adapter or the host's tool layer. A caller-reported
+ * record is `claimed` however its `collector` is spelled — relabelling a
+ * claim does not make it an observation.
+ */
+export function proofAuthority(proof: Pick<ProofRecord, "collector" | "provenance">): EvidenceAuthority {
+	const observedCollector = OBSERVED_COLLECTORS.includes(proof.collector);
+	const observingAttestation = OBSERVING_ATTESTATIONS.includes(proof.provenance.attested_by);
+	return observedCollector && observingAttestation ? "observed" : "claimed";
+}
+
+/**
+ * Whether `proof` discharges `obligation` under `policy`. Under `verified`
+ * only an `observed` proof can; under `cooperative` a `claimed` one may, and
+ * the caller of this function is responsible for labelling the result
+ * cooperative. Neither policy lets a `failed`/`blocked` result, a wrong
+ * obligation, or a collector below the obligation's minimum discharge it.
+ */
+export function proofDischarges(proof: Pick<ProofRecord, "obligation_id" | "result" | "collector" | "provenance">, obligation: Pick<ProofObligation, "id" | "minimum_collector">, policy: AssurancePolicy): boolean {
+	if (proof.obligation_id !== obligation.id || proof.result !== "passed") return false;
+	if (!collectorSatisfies(proof.collector, obligation.minimum_collector)) return false;
+	return policy === "cooperative" || proofAuthority(proof) === "observed";
+}
+
+/**
+ * Whether an adapter may obtain a human decision at all. A trusted channel
+ * is necessary, not sufficient: the host/client pair must also be in
+ * {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}. Anything else stops at
+ * `needs-human-acceptance` with the reason spelled out.
+ */
+export function acceptanceChannelSupported(capabilities: HostCapabilities): { supported: true; channel: "mcp-elicitation" | "host-native" } | { supported: false; reason: string } {
+	if (capabilities.human_acceptance === "none") return { supported: false, reason: "the host declares no human-acceptance channel" };
+	const pair = `${capabilities.human_acceptance} on ${capabilities.label ?? "this host"} / ${capabilities.client?.name ?? "unknown client"}`;
+	const registered = VERIFIED_ACCEPTANCE_INTEGRATIONS.some(
+		(entry) => entry.channel === capabilities.human_acceptance && entry.host === capabilities.label && entry.client === capabilities.client?.name,
+	);
+	if (!registered) return { supported: false, reason: `${pair} is not a verified integration; a client advertising the capability is not enough` };
+	if (!capabilities.verified_integration) return { supported: false, reason: `${pair} is registered but the adapter did not declare it verified` };
+	return { supported: true, channel: capabilities.human_acceptance };
+}
+
+/**
+ * How to read an approval now. Every leg must hold for `verified`: the
+ * receipt evaluates cleanly, the integration was verified, the approval was
+ * minted under the `verified` policy over a host-enforced boundary, and the
+ * boundary is still host-enforced for the reader. A legitimate UI decision
+ * stored where agent tools can write is `cooperative`, not `verified`: the
+ * channel does not protect the file.
+ */
+export function classifyAcceptance(approval: ApprovalRecord, context: ReceiptContext & { current_storage_boundary: StorageBoundary }): { class: AcceptanceClass; reasons: string[] } {
+	const receipt = evaluateApprovalReceipt(approval, context);
+	if (receipt.ok === false) return { class: "invalid", reasons: receipt.errors.map((e) => `${e.code} at ${e.path}`) };
+	if (!receipt.accepted) return { class: "invalid", reasons: ["decision is rejected"] };
+	const reasons: string[] = [];
+	if (!approval.receipt.verified_integration) reasons.push("receipt was minted on an unverified host/client integration");
+	if (approval.assurance !== "verified") reasons.push(`approval was minted under the ${approval.assurance} policy`);
+	if (approval.storage.boundary !== "host-enforced") reasons.push("storage boundary was not host-enforced when the approval was minted");
+	if (context.current_storage_boundary !== "host-enforced") reasons.push("storage boundary is not host-enforced now; the record could have been rewritten by an agent tool");
+	return reasons.length === 0 ? { class: "verified", reasons: [] } : { class: "cooperative", reasons };
 }
 
 /** Whether `from → to` is an allowed transition for the kind's state machine; the same state is never a transition. */
@@ -396,6 +468,7 @@ const RECEIPT_SHAPE: Shape = {
 	issued_at: req(timestamp),
 	responded_at: req(timestamp),
 	authenticated: req(oneOf(RECEIPT_AUTHENTICATIONS)),
+	verified_integration: req(boolean),
 	attestation: req(nonEmptyString),
 };
 
@@ -404,7 +477,8 @@ const PRESENTATION_SHAPE: Shape = {
 	requested_outcome: req(nonEmptyString),
 	slice_deliverable: req(nonEmptyString),
 	candidate_summary: req(nonEmptyString),
-	proof_summary: req(arrayOf(objectOf({ obligation_id: req(localId), result: req(oneOf(PROOF_RESULTS)), collector: req(oneOf(COLLECTORS)), attested_by: req(oneOf(ATTESTATIONS)) }))),
+	assurance: req(oneOf(ASSURANCE_POLICIES)),
+	proof_summary: req(arrayOf(objectOf({ obligation_id: req(localId), result: req(oneOf(PROOF_RESULTS)), collector: req(oneOf(COLLECTORS)), attested_by: req(oneOf(ATTESTATIONS)), authority: req(oneOf(["observed", "claimed"])) }))),
 	review_summary: req(arrayOf(objectOf({ review_id: req(recordId("review")), separation: req(oneOf(REVIEWER_SEPARATIONS)), remaining_blockers: req(nonNegativeInteger) }))),
 	limitations: req(arrayOf(nonEmptyString)),
 };
@@ -671,6 +745,8 @@ const APPROVAL_BODY: Shape = {
 	decision: req(oneOf(APPROVAL_DECISIONS)),
 	decided_at: req(timestamp),
 	receipt: req(objectOf(RECEIPT_SHAPE)),
+	assurance: req(oneOf(ASSURANCE_POLICIES)),
+	storage: req(objectOf({ boundary: req(oneOf(STORAGE_BOUNDARIES)), note: req(nonEmptyString) })),
 	human_note: opt(nonEmptyString),
 };
 function approvalPost(obj: Record<string, unknown>, path: string, errors: Errors): void {
@@ -687,6 +763,17 @@ function approvalPost(obj: Record<string, unknown>, path: string, errors: Errors
 	}
 	if (trusted && receipt.authenticated !== "host-session") {
 		errors.fail(at(receiptPath, "authenticated"), "invalid-value", `a ${receipt.channel} receipt is bound to the host session that issued the request`);
+	}
+	// "verified" is a claim about the whole path; a record may not make it
+	// over an unprotected namespace or an unverified integration.
+	if (obj.assurance === "verified") {
+		const storage = isPlainObject(obj.storage) ? obj.storage : null;
+		if (storage && storage.boundary !== undefined && storage.boundary !== "host-enforced") {
+			errors.fail(at(at(path, "storage"), "boundary"), "invalid-value", "a verified approval needs a host-enforced storage boundary; label it cooperative");
+		}
+		if (receipt.verified_integration === false) {
+			errors.fail(at(receiptPath, "verified_integration"), "invalid-value", "a verified approval needs a verified host/client integration; label it cooperative");
+		}
 	}
 }
 
@@ -812,6 +899,8 @@ export function buildAcceptanceRequest(args: {
 	candidate: SnapshotRecord;
 	proofs: ProofRecord[];
 	reviews: ReviewRecord[];
+	assurance: AssurancePolicy;
+	storage_boundary: StorageBoundary;
 	limitations: string[];
 }): AcceptanceRequest {
 	const { change, slice, attempt, candidate } = args;
@@ -824,9 +913,10 @@ export function buildAcceptanceRequest(args: {
 		requested_outcome: change.requested_outcome,
 		slice_deliverable: slice.deliverable,
 		candidate_summary: `${candidate.manifest.length} manifest entries (${files} files, ${symlinks} symlinks); ${tree}; digest ${candidate.digest}`,
-		proof_summary: args.proofs.map((p) => ({ obligation_id: p.obligation_id, result: p.result, collector: p.collector, attested_by: p.provenance.attested_by })),
+		assurance: args.assurance,
+		proof_summary: args.proofs.map((p) => ({ obligation_id: p.obligation_id, result: p.result, collector: p.collector, attested_by: p.provenance.attested_by, authority: proofAuthority(p) })),
 		review_summary: args.reviews.map((r) => ({ review_id: r.id, separation: r.reviewer.separation, remaining_blockers: r.remaining_blockers.length })),
-		limitations: [...standardLimitations(args.proofs, args.reviews), ...args.limitations],
+		limitations: [...standardLimitations({ proofs: args.proofs, reviews: args.reviews, assurance: args.assurance, storage_boundary: args.storage_boundary }), ...args.limitations],
 	};
 	return {
 		schema_version: ENGINEERING_SCHEMA_VERSION,
@@ -849,13 +939,17 @@ export function buildAcceptanceRequest(args: {
  * The limitations every presentation carries, derived from the records: the
  * caller can add to them but cannot remove them.
  */
-export function standardLimitations(proofs: ProofRecord[], reviews: ReviewRecord[]): string[] {
+export function standardLimitations(args: { proofs: ProofRecord[]; reviews: ReviewRecord[]; assurance: AssurancePolicy; storage_boundary: StorageBoundary }): string[] {
 	const lines: string[] = [];
-	const callerAttested = proofs.filter((p) => p.provenance.attested_by === "caller").length;
-	if (callerAttested > 0) {
-		lines.push(`${callerAttested} of ${proofs.length} proofs are caller-attested: the host session reported the result; the framework did not observe the command.`);
+	const claimed = args.proofs.filter((p) => proofAuthority(p) === "claimed").length;
+	if (claimed > 0) {
+		lines.push(
+			`${claimed} of ${args.proofs.length} proofs are caller-reported claims: no observed execution backs them, whatever collector they name; under the verified policy they discharge nothing.`,
+		);
 	}
-	if (reviews.length > 0) lines.push("Reviewer separation is declared by the host, not authenticated.");
+	if (args.assurance === "cooperative") lines.push("This decision is being asked for under the cooperative policy; the result is cooperative, not verified.");
+	if (args.storage_boundary !== "host-enforced") lines.push("The engineering namespace is writable by agent tools; the stored record of this decision is cooperative, not verified.");
+	if (args.reviews.length > 0) lines.push("Reviewer separation is declared by the host, not authenticated.");
 	return lines;
 }
 

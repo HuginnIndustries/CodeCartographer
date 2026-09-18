@@ -1,8 +1,8 @@
 # Engineering records: v1 contract
 
-**Status:** v1 frozen by E01 ([#399](https://github.com/HuginnIndustries/CodeCartographer/issues/399)). The executable form is `core/engineering/` (`types.ts`, `ids.ts`, `digest.ts`, `validation.ts`, exported through `core/index.ts`) and the fixtures under `tests/fixtures/engineering/v1/`; `tests/engineering-contract.test.mjs` pins every rule below. Where this page and the code disagree, the code and its fixtures are the contract and this page has a bug. No later issue may independently redefine these shapes: a new field, enum value, or error code is a contract amendment that lands with a fixture and a change to this page. Read [vision](vision.md) and [implementation plan](implementation-plan.md) first.
+**Status:** candidate contract; **E01 acceptance pending** ([#399](https://github.com/HuginnIndustries/CodeCartographer/issues/399)). The executable form is `core/engineering/` (`types.ts`, `ids.ts`, `digest.ts`, `validation.ts`, exported through `core/index.ts`) and the fixtures under `tests/fixtures/engineering/v1/`; `tests/engineering-contract.test.mjs` pins every rule below. Where this page and the code disagree, the code and its fixtures are the contract and this page has a bug. Nothing here is frozen until #399 is closed: the [decision record](#decision-record) lists what is still open, and E02/E03 do not start before that. Once closed, a new field, enum value, or error code is a contract amendment that lands with a fixture and a change to this page. Read [vision](vision.md) and [implementation plan](implementation-plan.md) first.
 
-The design rationale that preceded the freeze is kept in [§ Design notes](#design-notes) at the end. The sections before it are normative.
+The design rationale that preceded this candidate is kept in [§ Design notes](#design-notes) at the end. The sections before it are normative for the candidate.
 
 ## Ownership and layout
 
@@ -152,14 +152,33 @@ The engineering namespace and generated evidence are excluded from the manifest 
 
 `agent-claimed` is a legal record so that a claim can be kept and later contradicted; it satisfies no obligation (`OBSERVED_COLLECTORS` excludes it, and no obligation may name it as its minimum). A record containing `result: passed` is a proof only by its collector, never by its text — and its collector is only as good as `provenance.attested_by` says.
 
-### Attestation: who vouches for `collector`, `result`, and `stability`
+### Claims, observation source, and attestation
 
-`collector`, `result`, `exit_code`, and `stability` are caller text on the tool path: a model calling `record-proof` can spell `host-observed`. The contract does not pretend otherwise; it labels it. `attested_by` is set by the adapter and is `unknown-field` on every input shape:
+Three things are kept apart on every proof, and only their combination says what the record establishes:
 
-- `adapter` — the adapter itself captured the snapshot with its read-only repository utilities (E03), or observed the command's exit (no v1 adapter does the latter; the MCP server never runs commands).
-- `caller` — the values arrived in a tool payload and are the caller's claim; the adapter recorded them as such.
+| Layer | Field | Who writes it | What it means |
+|---|---|---|---|
+| The claim | `collector`, `result`, `exit_code`, `check`, `artifacts` | whoever supplied the record — on the tool path, the caller | what is *said* to have happened and how it was *said* to be observed |
+| The attestation | `provenance.attested_by` | the adapter, never the payload (`unknown-field` on every input) | who can actually vouch for the claim: `adapter`, `host-tool-result`, or `caller` |
+| The authority | `proofAuthority(proof)` — derived, not stored | the validator | `observed` only when the collector is an observed kind **and** the attestation is `adapter` or `host-tool-result`; otherwise `claimed` |
 
-Rules: the acceptance gate requires the **candidate snapshot** to be `attested_by: adapter` — the adapter re-reads the tree itself (`request-acceptance` carries no snapshot; `capture-candidate`'s `snapshot` is ignored whenever the adapter can read the working directory, and a caller-supplied one is recorded `caller` and cannot bind acceptance). **Proofs** may be `caller`-attested — on MCP v1 they always are — and `buildAcceptanceRequest` then adds a fixed limitation line to the presentation ("*n* of *m* proofs are caller-attested: the host session reported the result; the framework did not observe the command."), so the person deciding sees exactly that. "Host-reported" is never spelled "independently authenticated" anywhere in a record or a presentation.
+A caller-reported record is `claimed` whatever `collector` it names. Relabelling `agent-claimed` as `host-observed` changes the claim, not the authority; the test suite pins this for every collector value. Claimed records are retained — they are useful, contradictable history — but under the default policy they discharge nothing.
+
+**What each attestation requires of the adapter:**
+
+- `adapter` — the adapter itself produced the observation with its own read-only utilities: a snapshot of the working directory (E03), or a CI run it read from the CI system rather than from the caller's text. The MCP server never runs commands, so an adapter never attests a command's exit code this way.
+- `host-tool-result` — the host's own tool-execution layer delivered the observation: a hook or extension event that receives the tool's actual exit code and output (for example a post-tool-use hook that invokes a host-side ingestion entry with the tool result, or a Pi `tool_result` event in a future build mode) and submits it *outside* the model's tool-call arguments. E05 defines that ingestion entry; this contract requires that it carry the exit code and an output digest from the host, that the adapter — not the model — set `attested_by`, and that a host without such a path leave every proof `caller`. CodeCartographer executes nothing on any surface.
+- `caller` — the values arrived in `record-proof`. On MCP v1 without a host hook this is every proof.
+
+**Discharge rule** (`proofDischarges(proof, obligation, policy)`): `result: passed`, the right `obligation_id`, `collectorSatisfies` the obligation's minimum, and — under the `verified` policy — authority `observed`. See § Assurance policy for the only way a claim can count.
+
+The **candidate snapshot** must be `attested_by: adapter`: the adapter re-reads the tree itself (`request-acceptance` carries no snapshot; a caller-supplied `capture-candidate.snapshot` is ignored whenever the adapter can read the working directory, is recorded `caller` otherwise, and never binds an acceptance).
+
+### Assurance policy
+
+`verified` is the default and the only meaning of "verified" in this contract: observed proof for every obligation, an adapter-captured candidate, a decision on a trusted channel whose host/client pair passed the integration check, and a host-enforced storage boundary at mint time and at read time.
+
+`cooperative` is a separate, weaker policy under which claimed proofs may discharge obligations and an unprotected namespace is tolerated. It exists so that a host with no tool-result path can still run the loop honestly. It is **not** the default, it is **never** spelled "verified", and it is chosen by the host operator in host/user-level configuration outside the workspace (`HostCapabilities.assurance_policy`) — a request cannot select it (`unknown-field`), and the pilot does not authorize it until the maintainer says so (§ Decision record). Every artifact produced under it says so: the presentation's `assurance`, the approval's `assurance`, `CheckResult.assurance`, and the `standardLimitations` lines.
 
 ### review (`rvw_`)
 
@@ -182,9 +201,11 @@ Rules: the acceptance gate requires the **candidate snapshot** to be `attested_b
 | `decision` | `accepted` \| `rejected` | |
 | `decided_at` | timestamp | |
 | `receipt` | see below | |
+| `assurance` | `verified` \| `cooperative` | adapter-set from `HostCapabilities.assurance_policy`; `verified` requires `storage.boundary: host-enforced` and `receipt.verified_integration: true`, else `invalid-value` — a record may not call itself verified over an unprotected namespace or an unverified integration |
+| `storage` | `{ boundary: host-enforced \| none, note }` | the boundary the adapter observed at mint time; readers re-check the current one (§ Channel trust versus at-rest trust) |
 | `human_note` | non-empty string | optional, verbatim from the person |
 
-`receipt`: `{ request_id: acr_…, nonce, presentation_digest, channel, host, host_session?, issued_at, responded_at, authenticated, attestation }`. `channel` ∈ `mcp-elicitation` | `host-native` | `cooperative-file` | `agent-declared`. `authenticated` ∈ `none` | `host-session` and is determined by the channel: a trusted channel (`mcp-elicitation`, `host-native`) must say `host-session`, an untrusted one must say `none`; either mislabel is `invalid-value`. A malformed nonce is `invalid-value` (not `invalid-id`). `responded_at` ≥ `issued_at`. `attestation` is the adapter's own plain-language statement of what it did and did not verify, shown to the reader of the record.
+`receipt`: `{ request_id: acr_…, nonce, presentation_digest, channel, host, host_session?, issued_at, responded_at, authenticated, verified_integration, attestation }`. `verified_integration` says whether the host/client pair was in `VERIFIED_ACCEPTANCE_INTEGRATIONS` at mint time. `channel` ∈ `mcp-elicitation` | `host-native` | `cooperative-file` | `agent-declared`. `authenticated` ∈ `none` | `host-session` and is determined by the channel: a trusted channel (`mcp-elicitation`, `host-native`) must say `host-session`, an untrusted one must say `none`; either mislabel is `invalid-value`. A malformed nonce is `invalid-value` (not `invalid-id`). `responded_at` ≥ `issued_at`. `attestation` is the adapter's own plain-language statement of what it did and did not verify, shown to the reader of the record.
 
 ## Acceptance request (`acr_`)
 
@@ -195,13 +216,14 @@ Not a record kind; the object the core issues (`buildAcceptanceRequest`, pure) a
   candidate_digest, input_digest, nonce, issued_at,
   expires_at (> issued_at, at most ACCEPTANCE_REQUEST_MAX_TTL_MS = 24 h later),
   presentation: { title, requested_outcome, slice_deliverable, candidate_summary,
-                  proof_summary: { obligation_id, result, collector, attested_by }[],
+                  assurance,
+                  proof_summary: { obligation_id, result, collector, attested_by, authority }[],
                   review_summary: { review_id, separation, remaining_blockers }[],
                   limitations: string[] },
   presentation_digest }
 ```
 
-`candidate_summary` is `"<n> manifest entries (<f> files, <s> symlinks); <dirty|clean> tree at <head8>|no VCS; digest <full digest>"`. `limitations` begin with the lines `standardLimitations` derives from the records (caller-attested proof count; "reviewer separation is declared, not authenticated") followed by whatever the gate adds; a caller can add lines, never remove the standard ones. The fixture `valid/acceptance-request.json` is byte-for-byte what `buildAcceptanceRequest` produces from the fixture bundle.
+`candidate_summary` is `"<n> manifest entries (<f> files, <s> symlinks); <dirty|clean> tree at <head8>|no VCS; digest <full digest>"`. `limitations` begin with the lines `standardLimitations` derives from the records and the host state — claimed-proof count ("…no observed execution backs them, whatever collector they name; under the verified policy they discharge nothing"), the cooperative policy when in force, an unprotected storage boundary, and "reviewer separation is declared, not authenticated" — followed by whatever the gate adds; a caller can add lines, never remove the standard ones. The fixture `valid/acceptance-request.json` is byte-for-byte what `buildAcceptanceRequest` produces from the fixture bundle.
 
 ## State transitions
 
@@ -227,11 +249,11 @@ For the store (E02): when re-checking an approval already on disk, `consumed_non
 | slice | state `active`; every `proof_obligations[].id` discharged |
 | attempt | outcome `ready-for-review` or `needs-human-acceptance`; `candidate_snapshot_id` set |
 | snapshot | baseline and candidate present; candidate `stability: stable`, `collector` ≠ `agent-claimed`, `attested_by: adapter`; `checkCandidateFreshness(candidate, reread)` passes against the tree the adapter re-reads at acceptance time |
-| proof | one per obligation with `result: passed`, `collector` at or above the obligation's `minimum_collector` (`COLLECTOR_RANK`: `host-observed` 3 > `ci-reported` 2 > `manual-observation` 1 > `agent-claimed` 0, which satisfies nothing; `collectorSatisfies`), `snapshot_id` = the candidate, `scenario_ids` naming the obligation's scenario; caller-attested proofs count and are disclosed in the presentation |
+| proof | one per obligation that `proofDischarges` it: `result: passed`, `collector` at or above the obligation's `minimum_collector` (`COLLECTOR_RANK`: `host-observed` 3 > `ci-reported` 2 > `manual-observation` 1 > `agent-claimed` 0; `collectorSatisfies`), `snapshot_id` = the candidate, `scenario_ids` naming the obligation's scenario, and — under `verified` — `proofAuthority` of `observed`; a caller-reported record is `claimed` whatever its label and discharges nothing under `verified` |
 | review | at least one with `separation: declared-separate`, bound to the candidate and input digests, `remaining_blockers` empty |
-| approval | `decision: accepted`; receipt passes `evaluateApprovalReceipt` (trusted channel, known request, unconsumed nonce, all bindings equal) |
+| approval | `decision: accepted`; receipt passes `evaluateApprovalReceipt` (trusted channel, known request, unconsumed nonce, all bindings equal); `classifyAcceptance` is `verified` — verified integration, `verified` policy, host-enforced boundary at mint and now — or, only under an operator-set `cooperative` policy, `cooperative` |
 
-Missing any row is `blocked`/`needs-human-acceptance`, never `failed`, and never `accepted`. Old acceptance stays historical; it is not current approval for different bytes.
+Missing any row is `blocked`/`needs-human-acceptance`, never `failed`, and never `accepted`. Old acceptance stays historical; it is not current approval for different bytes. An acceptance reached under `cooperative` is reported as cooperative in every result and record; "verified" is reserved for the full path.
 
 ## Validation API
 
@@ -247,6 +269,9 @@ All pure; all deterministic (the same value yields the same error list, in trave
 | `checkCandidateFreshness(candidate, reread)` | the adapter's re-read tree against the bound candidate: `digest-mismatch /digest` when the bytes moved |
 | `buildAcceptanceRequest(args)` / `standardLimitations(proofs, reviews)` | the request from bound records (throws if the candidate is not the attempt's); the limitation lines every presentation carries |
 | `isAllowedTransition(kind, from, to)` | the state tables |
+| `proofAuthority(proof)` / `proofDischarges(proof, obligation, policy)` | `observed` vs `claimed`; whether a proof discharges an obligation under a policy |
+| `acceptanceChannelSupported(capabilities)` | whether a decision may be asked for at all: a trusted channel **and** a registry entry in `VERIFIED_ACCEPTANCE_INTEGRATIONS` for this host/client pair |
+| `classifyAcceptance(approval, context + current_storage_boundary)` | `verified` / `cooperative` / `invalid` for the reader, now |
 
 Result shape: `{ ok: true, value }` or `{ ok: false, errors: { code, path, message }[] }`, `path` a JSON-pointer-like location (`/manifest/3/path`). Error codes (closed set, `ENGINEERING_ERROR_CODES`): `invalid-request`, `invalid-action`, `unsupported-schema-version`, `unknown-field`, `missing-field`, `invalid-type`, `invalid-id`, `invalid-local-id`, `invalid-path`, `invalid-enum`, `invalid-digest`, `invalid-timestamp`, `invalid-value`, `digest-mismatch`, `duplicate-id`, `unknown-reference`, `cross-change-reference`, `invalid-state`, `invalid-transition`, `stale-revision`, `idempotency-conflict`, `not-found`, `proof-not-observed`, `blocking-objection`, `receipt-unknown-request`, `receipt-replayed`, `receipt-mismatch`, `receipt-expired`, `untrusted-channel`, `needs-human-acceptance`. `invalid-state`, `invalid-transition`, `stale-revision`, `idempotency-conflict`, `not-found`, `proof-not-observed`, `blocking-objection`, and `needs-human-acceptance` are reserved for the store, gate, and adapter (E02, E06, E07); the validators emit the others.
 
@@ -263,14 +288,14 @@ One additive, experimental MCP tool (E07 registers it) over typed core operation
 | `capture-candidate` | `change_id, attempt_id, snapshot?: SnapshotInput` | `{ attempt, snapshot }` — binds `candidate_snapshot_id`; the attempt stays `running`; repeatable until a proof references the candidate |
 | `record-proof` | `change_id, attempt_id, proof: ProofInput` | `{ proof }` — `proof.snapshot_id` must be the attempt's bound candidate (or baseline for a RED run) |
 | `record-review` | `change_id, attempt_id, review: ReviewInput` | `{ review }` |
-| `check` | `change_id, attempt_id?` | `CheckResult { outcome: eligible \| blocked \| needs-human-acceptance \| accepted, requirements: AcceptanceRequirementStatus[], errors, next: { action, reason } }` — one requirement row per entry of the acceptance table |
-| `request-acceptance` | `change_id, attempt_id` | `{ outcome: accepted \| rejected \| needs-human-acceptance, request, approval?, reason? }` — the adapter re-reads the tree and runs `checkCandidateFreshness` before presenting anything |
+| `check` | `change_id, attempt_id?` | `CheckResult { outcome: eligible \| blocked \| needs-human-acceptance \| accepted, assurance, evidence: { observed, claimed }, requirements: AcceptanceRequirementStatus[], errors, next: { action, reason } }` — one requirement row per entry of the acceptance table |
+| `request-acceptance` | `change_id, attempt_id` | `{ outcome: accepted \| rejected \| needs-human-acceptance, assurance, request, approval?, reason? }` — the adapter re-reads the tree and runs `checkCandidateFreshness` before presenting anything; `acceptanceChannelSupported` false is `needs-human-acceptance` with its reason |
 
 Mutating actions (all but `status` and `check`) accept `idempotency_key` (1–200 chars): a retry with the same key and payload returns the first result; the same key with a different payload is `idempotency-conflict`. A lost acknowledgement never implies re-running an external command.
 
 Every result uses `ChangeResult<A>`: `{ ok: true, action, result: ChangeResults[A] }` or `{ ok: false, action?, errors }`; `ChangeResults` in `types.ts` maps each action to its result payload. The MCP adapter mirrors it in `structuredContent` and renders `text` from the same object, so both carry the same semantic result.
 
-**Capability negotiation.** `HostCapabilities { human_acceptance: mcp-elicitation | host-native | none, label? }` is supplied by the adapter from what it knows about the transport (for MCP: whether the client declared the `elicitation` capability at initialize). It is not a request field: `host` on any request is `unknown-field`. A model cannot raise its own host's capability.
+**Capability negotiation.** `HostCapabilities { human_acceptance, label?, client?, verified_integration, storage_boundary, assurance_policy }` is supplied by the adapter per session: `human_acceptance` from the transport (for MCP: whether the client declared `elicitation.form` at initialize), `client` from the transport's client info, `verified_integration` from `VERIFIED_ACCEPTANCE_INTEGRATIONS` and nothing else, `storage_boundary` and `assurance_policy` from host/user-level configuration outside the workspace. None is a request field: `host`, `assurance`, `verified_integration`, `storage`, and `attested_by` on any request are `unknown-field`. A model cannot raise its host's capability, declare its integration verified, pick a policy, or vouch for its own proof.
 
 **No approval field.** There is no `approve` action. `approve`, `approved`, `approval`, `decision`, `receipt`, `human_accepted`, `attested_by`, and any other field outside the table are `unknown-field` on every action. `request-acceptance` asks; it never grants.
 
@@ -284,7 +309,7 @@ The claim "a person accepted exactly this candidate, having seen exactly this pr
 
 | Actor | Can | Cannot (by this contract) |
 |---|---|---|
-| The model, through ordinary tool calls | call any `codecarto_change` action with any payload — including a proof whose `collector` says `host-observed`; write any file the host lets it write | put a decision into a request; mint an approval through the tool; raise host capability; vouch for its own claims (`attested_by`); supply the candidate the gate accepts; change a nonce or presentation after issue |
+| The model, through ordinary tool calls | call any `codecarto_change` action with any payload — including a proof whose `collector` says `host-observed`; write any file the host lets it write | put a decision into a request; mint an approval through the tool; raise host capability; declare its integration verified or pick the assurance policy; vouch for its own claims (`attested_by`) or turn a claim into an observation by relabelling it; supply the candidate the gate accepts; change a nonce or presentation after issue |
 | The host adapter (MCP server process, Pi extension) | issue requests, present them, obtain the decision on its own channel, mint the approval in-process | claim `authenticated: host-session` on a cooperative or agent-declared channel |
 | The MCP client (Claude Code, Codex, Cursor, …) | answer `elicitation/create` after showing it to the user, or decline | be verified by the server to have actually shown it |
 | A person at the keyboard | approve or reject in the host's UI; edit files on disk | be identified by name or credential — v1 has no identity |
@@ -294,10 +319,10 @@ The claim "a person accepted exactly this candidate, having seen exactly this pr
 
 1. The gate (E06) verifies the required records, then the adapter re-reads the tree and runs `checkCandidateFreshness` against the bound (adapter-attested) candidate; on any gap or a moved tree it returns `blocked`/`needs-human-acceptance` and no request is issued.
 2. The core builds an `AcceptanceRequest` with a fresh `acr_` ID and nonce, a bounded `expires_at`, and the presentation; the store durably writes it under `requests/` before anything is shown.
-3. The adapter presents `presentation` verbatim through a channel the model does not control:
+3. If `acceptanceChannelSupported(capabilities)` is false — no channel, or a host/client pair not in `VERIFIED_ACCEPTANCE_INTEGRATIONS` — the outcome is `needs-human-acceptance` with the reason and nothing is presented. Otherwise the adapter presents `presentation` verbatim through a channel the model does not control:
    - **`mcp-elicitation`**: the server sends `elicitation/create` (a server-initiated JSON-RPC request; SDK 1.30's `Server.elicitInput`, which requires the client to have declared the `elicitation.form` capability at initialize) with a form whose only field is the decision plus an optional note. The client's UI shows it; the answer returns over the transport as the client's JSON-RPC response. The model's tool-call arguments are never the channel.
    - **`host-native`**: an in-process UI such as Pi's `ctx.ui.confirm` is called by the adapter's own code with the presentation.
-4. The adapter — not the caller — mints the `ApprovalRecord` in-process with the receipt fields copied from the request and the decision copied from the channel, runs `evaluateApprovalReceipt` against the nonces already bound by *other* approvals, and only then stores it. The `request-acceptance` result carries the record.
+4. The adapter — not the caller — mints the `ApprovalRecord` in-process with the receipt fields copied from the request, the decision copied from the channel, and `assurance`/`storage` copied from its own capabilities; runs `evaluateApprovalReceipt` against the nonces already bound by *other* approvals; and only then stores it. The `request-acceptance` result carries the record and its `assurance`.
 5. Any later reader runs `evaluateApprovalReceipt` with the stored request and the nonces of every other approval in the change; `validateChangeBundle` independently refuses two approvals on one nonce.
 
 ### Rejections (each is a fixture under `tests/fixtures/engineering/v1/invalid/`)
@@ -318,6 +343,9 @@ The claim "a person accepted exactly this candidate, having seen exactly this pr
 | `approve: true`, `approval: {…}`, `decision`, `receipt`, or `host` in any request; `action: approve` | `unknown-field` / `invalid-action` |
 | Untrusted channel claiming `authenticated: host-session`, or trusted channel claiming `none` | `invalid-value /receipt/authenticated` |
 | Prototype-named field (`constructor`, `toString`) used to carry a payload | `unknown-field` |
+| Approval labelled `verified` over `storage.boundary: none` or `verified_integration: false` | `invalid-value` at that field |
+| Channel on a host/client pair absent from `VERIFIED_ACCEPTANCE_INTEGRATIONS` | `acceptanceChannelSupported` false → `needs-human-acceptance` |
+| Caller-reported proof relabelled `host-observed` | `proofAuthority` stays `claimed`; `proofDischarges` false under `verified` |
 
 ### What is attested versus authenticated
 
@@ -332,21 +360,48 @@ Hashes prove identity of bytes, not human intent. A reviewer ID string proves no
 
 ### Unsupported hosts
 
-An adapter whose `human_acceptance` is `none` (an MCP client without elicitation, a headless run, a drop-in template) returns `{ outcome: "needs-human-acceptance", request, reason }` from `request-acceptance`. The request is stored, the attempt becomes `needs-human-acceptance`, and nothing is minted. A person may later accept through a supported host against the same request while it is unexpired; the acceptance still binds to the same candidate digest, so any edit in between is refused. The template surface documents the procedure and cannot claim enforcement.
+An adapter for which `acceptanceChannelSupported` is false — `human_acceptance: none` (an MCP client without elicitation, a headless run, a drop-in template) **or** a channel on a host/client pair that has not passed the integration check — returns `{ outcome: "needs-human-acceptance", assurance, request, reason }` from `request-acceptance`. The request is stored, the attempt becomes `needs-human-acceptance`, and nothing is minted. A person may later accept through a supported host against the same request while it is unexpired; the acceptance still binds to the same candidate digest, so any edit in between is refused. The template surface documents the procedure and cannot claim enforcement.
+
+### Acceptance channel: a conditional pilot policy
+
+MCP elicitation and Pi's native confirm are the *proposed* trusted channels. Neither is approved for the pilot yet, and a client advertising a capability is not a supported client. The policy, pending the maintainer's decision:
+
+- Support is per **verified host/client combination**, recorded in `VERIFIED_ACCEPTANCE_INTEGRATIONS` (`types.ts`; empty today). `acceptanceChannelSupported` consults that list and nothing else; an adapter's own `verified_integration: true` without a registry entry is still unsupported.
+- An entry is added only by a contract amendment attaching evidence of a real integration check on the actual client: (1) the presentation was shown to a person as issued; (2) an acceptance came back and minted a bound approval; (3) a rejection and a cancellation/decline each came back as `rejected`/`needs-human-acceptance` with nothing minted; (4) a stale response (after `expires_at`) and a mismatched response (different nonce or presentation digest) were each refused by `evaluateApprovalReceipt` and nothing was minted.
+- Unsupported or unverified paths stop at `needs-human-acceptance`. They never downgrade the requirement and never mint.
+- Even on a verified integration the claim is *host/session-attested*: the answer came through the client over the session that issued the request. No channel in v1 authenticates a human identity, and the records say so (`receipt.authenticated`, `receipt.attestation`).
+
+### Channel trust versus at-rest trust
+
+A legitimate UI interaction says something about the moment of decision. It says nothing about the file that records it afterwards. The two are kept apart:
+
+| Question | Answered by | Field |
+|---|---|---|
+| Did the decision enter through a channel the model does not control? | the channel and its integration check | `receipt.channel`, `receipt.verified_integration` |
+| Can ordinary agent tools rewrite the record now? | the host's permission layer, not the channel | `storage.boundary` at mint; `HostCapabilities.storage_boundary` at read |
+| Under what policy was "accepted" produced? | host/user-level configuration | `assurance` |
+
+`classifyAcceptance(approval, context)` is how a downstream reader (E06's gate, E07's status, E08's resume) tells them apart. It is `verified` only when the receipt binds, the integration was verified, the policy was `verified`, the boundary was host-enforced when the record was minted, **and** is host-enforced for the reader now. Any other bound receipt is `cooperative`; a receipt that does not bind is `invalid`. A real elicitation answer stored in a namespace agent tools can write is therefore `cooperative` — the channel does not protect the file, and neither `host-native` nor `mcp-elicitation` implies that it does.
+
+A host-enforced boundary means the host's own permission layer denies the agent edit/write access to `.codecarto/engineering/` (for an MCP client, a permission rule the user configures in the client; the server cannot enforce it, because the model writes through the client's tools) or the namespace lives outside every agent-writable root. It is declared by the adapter from host configuration and is never a request field. The Pi analysis guard is unchanged by E01 (EV-D03): it confines agent writes to `.codecarto/`, which *includes* the engineering namespace, so a Pi session today has `storage_boundary: none` and any acceptance read there is `cooperative`. Whether and how a Pi build mode narrows that is a separate guard-policy decision (E08), not something this contract assumes.
 
 ### The same-user filesystem limitation
 
-Every record, including approvals and consumed nonces, is a file the same OS user can write. In-session, the channel guarantee holds: a decision cannot enter through the model's tool arguments. At rest, an approval minted by the adapter and one written by hand with `channel: mcp-elicitation` are byte-indistinguishable; the validators cannot tell them apart and this contract does not claim they can. Consequences:
-
-- The Pi analysis guard confines agent writes to `.codecarto/`, which *includes* `.codecarto/engineering/`. Hosts that run an agent with write access must deny it `.codecarto/engineering/` (a host policy for E08; the Pi guard itself is unchanged by E01 per EV-D03) or accept that at-rest records are cooperative.
-- Acceptance is only as trustworthy as the adapter that minted it and the store it wrote to. The honest label is *host-attested, session-bound, unauthenticated*; the records say so in `receipt.authenticated` and `receipt.attestation`, and nothing in this repository may advertise them as tamper-proof.
-- Tamper evidence at rest (a signature over the approval under a key the adapter holds outside the workspace) is a possible later addition and is explicitly out of v1; it must not be a homemade credential system or a token stored in `.codecarto/`.
+Every record, including approvals, requests, and consumed nonces, is a file the same OS user can write. In-session, the channel guarantee holds: a decision cannot enter through the model's tool arguments. At rest, with `storage_boundary: none`, an approval minted by the adapter and one written by hand are byte-indistinguishable; the validators cannot tell them apart and this contract does not claim they can. That is exactly why `classifyAcceptance` refuses to call such a record `verified` — the caveat is not used to satisfy the stronger requirement. Tamper evidence at rest (a signature under a key the adapter holds outside the workspace) is a possible later addition and is explicitly out of v1; it must not be a homemade credential system or a token stored in `.codecarto/`.
 
 ### Decision record
 
-The receipt design above is proposed as the v1 trusted path and is what the fixtures and validators implement. The maintainer's remaining call is whether **MCP elicitation, which trusts the connected client to have shown the form, is an acceptable pilot channel** given the consequence table. If it is not, E06/E07 stay blocked on a channel that E01 does not have: there is no cross-client mechanism by which an MCP server can verify a human saw a prompt. Pi's `host-native` channel does not depend on that call.
+The design above is a candidate. E01 stays open, and E02/E03 stay blocked, until the maintainer records answers to these; none of them is implied by merging the candidate:
 
-Two inputs the decision should weigh, neither settled by this contract: (a) which target clients implement form elicitation today — this commit verifies the SDK's server side only, not any client; (b) that on MCP every proof is caller-attested (the server never runs commands), so the human's decision rests on the host session's report plus the adapter's own re-read of the tree, and the presentation says so.
+| # | Question the maintainer must answer | What the contract does meanwhile |
+|---|---|---|
+| D1 | Is **MCP elicitation on a specific verified host/client pair** an acceptable pilot channel, given that it trusts the client to have shown the form and attests a session, not a person? Which pair is to be integration-checked first, and who runs the check? | `VERIFIED_ACCEPTANCE_INTEGRATIONS` is empty; every channel is unsupported; `request-acceptance` returns `needs-human-acceptance` |
+| D2 | Is **Pi `host-native`** (`ctx.ui.confirm` from the extension's own code) an acceptable pilot channel on the same terms? | same as D1 |
+| D3 | Which **storage-boundary mechanism** will the pilot host provide (a client permission rule denying agent writes under `.codecarto/engineering/`; a namespace outside agent-writable roots; a Pi build-mode guard — the last is a separate guard-policy change and not assumed here)? Without one, every acceptance is `cooperative`. | `storage_boundary` is adapter-declared; `verified` requires `host-enforced` |
+| D4 | Which **observed-evidence path** will the pilot host provide (a post-tool-use hook delivering tool results to a host-side ingestion entry, defined by E05)? Without one, every proof is `claimed` and nothing is accepted under `verified`. | `proofDischarges` refuses claims under `verified` |
+| D5 | Is the **`cooperative` policy** permitted at all for the pilot, and if so under what recorded approval? | it exists as a labelled, operator-set policy; the pilot does not use it |
+
+Inputs to D1/D2 not settled by this contract: which clients implement form elicitation today (only the SDK's server side is verified); and that D3 and D4 are prerequisites for any `verified` acceptance regardless of the channel answer.
 
 ## Compatibility
 
@@ -354,7 +409,7 @@ Additive only. No existing `.codecarto/` path, pipeline YAML, `status.yaml` fiel
 
 ## Design notes
 
-The paragraphs below are the reasoning behind the frozen rules; they are informative.
+The paragraphs below are the reasoning behind the candidate's rules; they are informative.
 
 *Identity and freshness.* Record the Git base but never identify an implementation with HEAD alone: dirty tracked bytes, relevant untracked files, deleted files, executable bits, and symlink targets matter, which is why the manifest carries all of them and the digest covers the manifest. The engineering namespace and generated output are excluded from the implementation fingerprint to avoid self-invalidation; the brief, plan, and selected references form a separate input digest so that a changed plan invalidates acceptance as surely as a changed file. Unknown coverage is recorded, not assumed away. Capture must detect a moving source and record it as `unstable`; pre-acceptance recheck stops a candidate edited after proof from inheriting that proof. Resume locates existing attempts; it does not rerun external commands.
 

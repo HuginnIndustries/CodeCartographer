@@ -67,6 +67,14 @@ const {
 	CHANGE_STATE_TRANSITIONS,
 	ATTEMPT_OUTCOME_TRANSITIONS,
 	ACCEPTANCE_REQUEST_MAX_TTL_MS,
+	ATTESTATIONS,
+	OBSERVING_ATTESTATIONS,
+	ASSURANCE_POLICIES,
+	VERIFIED_ACCEPTANCE_INTEGRATIONS,
+	proofAuthority,
+	proofDischarges,
+	acceptanceChannelSupported,
+	classifyAcceptance,
 } = engineering;
 
 async function readJson(relPath) {
@@ -88,6 +96,8 @@ const valid = {
 	proof2: await readJson("valid/proof-second-obligation.json"),
 	review: await readJson("valid/review.json"),
 	approval: await readJson("valid/approval.json"),
+	approvalCooperative: await readJson("valid/approval-cooperative.json"),
+	proofClaimed: await readJson("valid/proof-caller-reported.json"),
 	request: await readJson("valid/acceptance-request.json"),
 	bundle: await readJson("valid/bundle.json"),
 };
@@ -377,16 +387,21 @@ test("buildAcceptanceRequest reproduces the fixture request byte for byte and re
 		candidate: valid.candidate,
 		proofs: [valid.proof, valid.proof2],
 		reviews: [valid.review],
+		assurance: "verified",
+		storage_boundary: "host-enforced",
 		limitations: ["No CI run exists for this candidate."],
 	});
 	assert.deepEqual(built, valid.request);
-	assert.deepEqual(standardLimitations([valid.proof, valid.proof2], [valid.review]), valid.request.presentation.limitations.slice(0, 2), "caller attestation is always disclosed");
-	assert.deepEqual(standardLimitations([{ ...valid.proof, provenance: { ...valid.proof.provenance, attested_by: "adapter" } }], []), []);
+	const std = (proofs, extra = {}) => standardLimitations({ proofs, reviews: [], assurance: "verified", storage_boundary: "host-enforced", ...extra });
+	assert.deepEqual(std([valid.proof]), []);
+	assert.match(std([valid.proofClaimed])[0], /^1 of 1 proofs are caller-reported claims/, "a claim is always disclosed");
+	assert.match(std([], { assurance: "cooperative" })[0], /cooperative policy/);
+	assert.match(std([], { storage_boundary: "none" })[0], /writable by agent tools/);
 	assert.equal(ACCEPTANCE_REQUEST_MAX_TTL_MS, 24 * 60 * 60 * 1000);
 	assert.equal(validateAcceptanceRequest(built).ok, true);
 	assert.throws(() => buildAcceptanceRequest({ ...builtArgs(built), candidate: valid.baseline }), /not the attempt's bound candidate/);
 	function builtArgs() {
-		return { id: built.id, nonce: built.nonce, issued_at: built.issued_at, expires_at: built.expires_at, change: valid.change, slice: valid.slice, attempt: valid.attempt, candidate: valid.candidate, proofs: [], reviews: [], limitations: [] };
+		return { id: built.id, nonce: built.nonce, issued_at: built.issued_at, expires_at: built.expires_at, change: valid.change, slice: valid.slice, attempt: valid.attempt, candidate: valid.candidate, proofs: [], reviews: [], assurance: "verified", storage_boundary: "host-enforced", limitations: [] };
 	}
 });
 
@@ -406,6 +421,79 @@ test("agent-claimed is a legal collector that satisfies no obligation, and defer
 	assert.equal(collectorSatisfies("manual-observation", "manual-observation"), true);
 	assert.deepEqual(deriveRemainingBlockers(valid.review.objections), []);
 	assert.deepEqual(deriveRemainingBlockers([{ id: "A", severity: "blocking", disposition: "deferred" }, { id: "B", severity: "advisory", disposition: "open" }, { id: "C", severity: "blocking", disposition: "open" }]), ["A", "C"]);
+});
+
+// ---------- claims versus observations ----------
+
+test("a collector label never elevates a caller-reported record: authority comes from attestation", () => {
+	assert.deepEqual(ATTESTATIONS, ["adapter", "host-tool-result", "caller"]);
+	assert.deepEqual(OBSERVING_ATTESTATIONS, ["adapter", "host-tool-result"]);
+	const obligation = valid.slice.proof_obligations[0];
+	const claim = valid.proofClaimed;
+	assert.equal(claim.provenance.attested_by, "caller");
+	assert.equal(validateRecord(claim).ok, true, "the claim is retained as a record");
+	for (const collector of COLLECTORS) {
+		const relabelled = { ...claim, collector };
+		assert.equal(proofAuthority(relabelled), "claimed", `${collector} on a caller-reported record is still a claim`);
+		assert.equal(proofDischarges(relabelled, obligation, "verified"), false, `${collector} claim discharges nothing under verified`);
+	}
+	// The identical check delivered by the host's tool layer is an observation.
+	assert.equal(proofAuthority(valid.proof), "observed");
+	assert.equal(valid.proof.provenance.attested_by, "host-tool-result");
+	assert.equal(proofDischarges(valid.proof, obligation, "verified"), true);
+	// An observing attestation does not launder an agent-claimed collector, a failure, or the wrong obligation.
+	assert.equal(proofAuthority({ ...valid.proof, collector: "agent-claimed" }), "claimed");
+	assert.equal(proofDischarges({ ...valid.proof, result: "failed" }, obligation, "cooperative"), false);
+	assert.equal(proofDischarges(valid.proof, valid.slice.proof_obligations[1], "cooperative"), false);
+	// Only the separately-approved cooperative policy lets a claim discharge, and it never becomes "observed".
+	assert.equal(proofDischarges(claim, obligation, "cooperative"), true);
+	assert.equal(proofAuthority(claim), "claimed");
+	// The caller cannot vouch for itself on the way in.
+	const smuggled = { action: "record-proof", change_id: valid.change.id, attempt_id: valid.attempt.id, proof: { ...stripProof(claim), provenance: { source: "x", attested_by: "host-tool-result" } } };
+	assert.ok(codesAt(validateChangeRequest(smuggled)).includes("unknown-field /proof/provenance/attested_by"));
+});
+
+function stripProof(proof) {
+	const { schema_version, kind, id, created_at, change_id, attempt_id, ...input } = proof;
+	return input;
+}
+
+test("a trusted channel is a proposal until the host/client pair passes the integration check", () => {
+	assert.deepEqual(VERIFIED_ACCEPTANCE_INTEGRATIONS, [], "no integration has been verified yet");
+	const base = { human_acceptance: "mcp-elicitation", label: "mcp-server", client: { name: "claude-code" }, verified_integration: false, storage_boundary: "host-enforced", assurance_policy: "verified" };
+	assert.equal(acceptanceChannelSupported(base).supported, false);
+	assert.match(acceptanceChannelSupported(base).reason, /not a verified integration/);
+	// The adapter asserting it is verified does not make it so; the registry does.
+	assert.equal(acceptanceChannelSupported({ ...base, verified_integration: true }).supported, false);
+	assert.equal(acceptanceChannelSupported({ ...base, human_acceptance: "host-native", label: "pi" }).supported, false);
+	assert.deepEqual(acceptanceChannelSupported({ ...base, human_acceptance: "none" }), { supported: false, reason: "the host declares no human-acceptance channel" });
+	for (const field of ["assurance", "verified_integration", "storage", "storage_boundary", "assurance_policy"]) {
+		assert.ok(codesAt(validateChangeRequest({ action: "request-acceptance", change_id: valid.change.id, attempt_id: valid.attempt.id, [field]: "verified" })).includes(`unknown-field /${field}`), field);
+	}
+});
+
+test("channel trust and at-rest trust are separate: a real UI decision in a writable namespace is cooperative", () => {
+	assert.deepEqual(ASSURANCE_POLICIES, ["verified", "cooperative"]);
+	const ctx = (boundary) => ({ ...receiptContext(), current_storage_boundary: boundary });
+	assert.deepEqual(classifyAcceptance(valid.approval, ctx("host-enforced")), { class: "verified", reasons: [] });
+	// The same record read by a host whose namespace agent tools can write.
+	const now = classifyAcceptance(valid.approval, ctx("none"));
+	assert.equal(now.class, "cooperative");
+	assert.match(now.reasons[0], /not host-enforced now/);
+	// A record minted over an unprotected namespace cannot even be written as verified …
+	assert.deepEqual(codesAt(validateRecord({ ...valid.approval, storage: { boundary: "none", note: "n" } })), ["invalid-value /storage/boundary"]);
+	// … and the honestly-labelled cooperative record is valid, binds correctly, and classifies as cooperative everywhere.
+	assert.equal(validateRecord(valid.approvalCooperative).ok, true);
+	assert.deepEqual(evaluateApprovalReceipt(valid.approvalCooperative, receiptContext()), { ok: true, accepted: true }, "the receipt binding itself is sound");
+	const coop = classifyAcceptance(valid.approvalCooperative, ctx("host-enforced"));
+	assert.equal(coop.class, "cooperative");
+	assert.equal(coop.reasons.length, 3, "unverified integration, cooperative policy, unprotected at mint");
+	// A receipt that does not bind is invalid, not cooperative.
+	assert.equal(classifyAcceptance({ ...valid.approval, decision: "rejected" }, ctx("host-enforced")).class, "invalid");
+	assert.equal(classifyAcceptance(valid.approval, { ...ctx("host-enforced"), consumed_nonces: [valid.approval.receipt.nonce] }).class, "invalid");
+	// "verified" is the only spelling of verified: the presentation carries the policy and every proof's authority.
+	assert.equal(valid.request.presentation.assurance, "verified");
+	assert.ok(valid.request.presentation.proof_summary.every((p) => p.authority === "observed"));
 });
 
 test("state transitions are a closed table", () => {

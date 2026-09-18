@@ -1,10 +1,10 @@
 {
-	"description": "A receipt issued for one change cannot accept an attempt of another.",
-	"subject": "receipt",
+	"description": "A UI decision stored where agent tools can write is cooperative; the record may not call itself verified.",
+	"subject": "record",
 	"expect": [
 		{
-			"code": "cross-change-reference",
-			"path": "/change_id"
+			"code": "invalid-value",
+			"path": "/storage/boundary"
 		}
 	],
 	"value": {
@@ -12,7 +12,7 @@
 		"kind": "approval",
 		"id": "apr_000000000000000000000a01",
 		"created_at": "2026-09-17T10:45:00Z",
-		"change_id": "chg_00000000000000000000c002",
+		"change_id": "chg_00000000000000000000c001",
 		"slice_id": "slc_00000000000000000000e001",
 		"attempt_id": "att_00000000000000000000a001",
 		"candidate_snapshot_id": "snp_00000000000000000000d001",
@@ -35,8 +35,8 @@
 		},
 		"assurance": "verified",
 		"storage": {
-			"boundary": "host-enforced",
-			"note": "client permission rules deny agent writes under .codecarto/engineering/"
+			"boundary": "none",
+			"note": "unprotected"
 		},
 		"human_note": "Looks right; ship it."
 	}

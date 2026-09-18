@@ -36,7 +36,7 @@
 		"digest": "sha256:9c88ec3d30445acb71370d51c4433795a74061ecbd1be34656950450ca3936d6"
 	},
 	"provenance": {
-		"source": "mcp:claude-code",
-		"attested_by": "caller"
+		"source": "claude-code:post-tool-use-hook",
+		"attested_by": "host-tool-result"
 	}
 }

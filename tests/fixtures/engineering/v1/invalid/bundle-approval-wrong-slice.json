@@ -310,8 +310,8 @@
 					"digest": "sha256:9c88ec3d30445acb71370d51c4433795a74061ecbd1be34656950450ca3936d6"
 				},
 				"provenance": {
-					"source": "mcp:claude-code",
-					"attested_by": "caller"
+					"source": "claude-code:post-tool-use-hook",
+					"attested_by": "host-tool-result"
 				}
 			},
 			{
@@ -338,8 +338,8 @@
 				"ended_at": "2026-09-17T10:21:30Z",
 				"artifacts": [],
 				"provenance": {
-					"source": "mcp:claude-code",
-					"attested_by": "caller"
+					"source": "claude-code:post-tool-use-hook",
+					"attested_by": "host-tool-result"
 				}
 			}
 		],
@@ -399,14 +399,20 @@
 				"receipt": {
 					"request_id": "acr_000000000000000000000c01",
 					"nonce": "0123456789abcdef0123456789abcdef",
-					"presentation_digest": "sha256:94929a026f13dd8dffa2cc64cbae780513134ab6f9d777e383c73b37df512f60",
+					"presentation_digest": "sha256:047bb0ad4915f41145781a538f101043e6811faf75dd7635004eca486d8d4fa1",
 					"channel": "mcp-elicitation",
 					"host": "mcp-server",
 					"host_session": "stdio session 1",
 					"issued_at": "2026-09-17T10:40:00Z",
 					"responded_at": "2026-09-17T10:45:00Z",
 					"authenticated": "host-session",
+					"verified_integration": true,
 					"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."
+				},
+				"assurance": "verified",
+				"storage": {
+					"boundary": "host-enforced",
+					"note": "client permission rules deny agent writes under .codecarto/engineering/"
 				},
 				"human_note": "Looks right; ship it."
 			}

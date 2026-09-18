@@ -30,7 +30,13 @@
 			"issued_at": "2026-09-17T10:40:00Z",
 			"responded_at": "2026-09-17T10:45:00Z",
 			"authenticated": "host-session",
+			"verified_integration": true,
 			"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."
+		},
+		"assurance": "verified",
+		"storage": {
+			"boundary": "host-enforced",
+			"note": "client permission rules deny agent writes under .codecarto/engineering/"
 		},
 		"human_note": "Looks right; ship it."
 	}

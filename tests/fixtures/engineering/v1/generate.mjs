@@ -223,7 +223,7 @@ const proof = {
 		{ id: ID.artifact, label: "test stdout", media_type: "text/plain", raw_digest: sha("# pass 2\n# fail 0\n"), raw_size: 17, sanitized_digest: sha("# pass 2\n# fail 0\n"), retained: true },
 	],
 	environment: { summary: "linux x64, node 24", digest: digestOf({ node: "24", platform: "linux", arch: "x64" }) },
-	provenance: { source: "mcp:claude-code", attested_by: "caller" },
+	provenance: { source: "claude-code:post-tool-use-hook", attested_by: "host-tool-result" },
 };
 
 const proof2 = {
@@ -233,6 +233,15 @@ const proof2 = {
 	scenario_ids: ["S2"],
 	artifacts: [],
 	environment: undefined,
+};
+
+// The same check reported by the model through record-proof: a claim, whatever its collector says.
+const proofCallerReported = {
+	...proof,
+	id: "prf_00000000000000000000f003",
+	artifacts: [],
+	environment: undefined,
+	provenance: { source: "mcp:claude-code", attested_by: "caller" },
 };
 
 const review = {
@@ -273,16 +282,13 @@ const presentation = {
 	requested_outcome: change.requested_outcome,
 	slice_deliverable: slice.deliverable,
 	candidate_summary: `4 manifest entries (3 files, 1 symlinks); dirty tree at 01234567; digest ${candidate.digest}`,
+	assurance: "verified",
 	proof_summary: [
-		{ obligation_id: "O1", result: "passed", collector: "host-observed", attested_by: "caller" },
-		{ obligation_id: "O2", result: "passed", collector: "host-observed", attested_by: "caller" },
+		{ obligation_id: "O1", result: "passed", collector: "host-observed", attested_by: "host-tool-result", authority: "observed" },
+		{ obligation_id: "O2", result: "passed", collector: "host-observed", attested_by: "host-tool-result", authority: "observed" },
 	],
 	review_summary: [{ review_id: ID.review, separation: "declared-separate", remaining_blockers: 0 }],
-	limitations: [
-		"2 of 2 proofs are caller-attested: the host session reported the result; the framework did not observe the command.",
-		"Reviewer separation is declared by the host, not authenticated.",
-		"No CI run exists for this candidate.",
-	],
+	limitations: ["Reviewer separation is declared by the host, not authenticated.", "No CI run exists for this candidate."],
 };
 const acceptanceRequest = {
 	schema_version: 1,
@@ -323,9 +329,22 @@ const approval = {
 		issued_at: T.issued,
 		responded_at: T.responded,
 		authenticated: "host-session",
+		verified_integration: true,
 		attestation: "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated.",
 	},
+	assurance: "verified",
+	storage: { boundary: "host-enforced", note: "client permission rules deny agent writes under .codecarto/engineering/" },
 	human_note: "Looks right; ship it.",
+};
+
+// The same decision on a host whose namespace agent tools can write and whose
+// client is not a verified integration: legal to store, cooperative to read.
+const approvalCooperative = {
+	...approval,
+	id: "apr_000000000000000000000a03",
+	receipt: { ...approval.receipt, verified_integration: false, attestation: "Answered through the client's elicitation UI; this host/client pair has not passed the integration check." },
+	assurance: "cooperative",
+	storage: { boundary: "none", note: "no permission rule protects .codecarto/engineering/ on this host" },
 };
 
 const bundle = {
@@ -1052,6 +1071,56 @@ const invalid = {
 		expect: [{ code: "invalid-value", path: "/receipt/authenticated" }],
 		value: withPatch(approval, { receipt: { ...approval.receipt, authenticated: "none" } }),
 	},
+	"approval-verified-over-unprotected-storage": {
+		description: "A UI decision stored where agent tools can write is cooperative; the record may not call itself verified.",
+		subject: "record",
+		expect: [{ code: "invalid-value", path: "/storage/boundary" }],
+		value: withPatch(approval, { storage: { boundary: "none", note: "unprotected" } }),
+	},
+	"approval-verified-on-unverified-integration": {
+		description: "A client advertising elicitation is not a verified integration; a verified approval may not be minted on it.",
+		subject: "record",
+		expect: [{ code: "invalid-value", path: "/receipt/verified_integration" }],
+		value: withPatch(approval, { receipt: { ...approval.receipt, verified_integration: false } }),
+	},
+	"approval-missing-assurance": {
+		description: "Every approval says which policy it was minted under.",
+		subject: "record",
+		expect: [{ code: "missing-field", path: "/assurance" }],
+		value: (() => {
+			const v = clone(approval);
+			delete v.assurance;
+			return v;
+		})(),
+	},
+	"request-assurance-from-caller": {
+		description: "The policy is host configuration; a request cannot pick it.",
+		subject: "request",
+		expect: [{ code: "unknown-field", path: "/assurance" }],
+		value: { ...requests["request-acceptance"], assurance: "cooperative" },
+	},
+	"request-verified-integration-from-caller": {
+		description: "A caller cannot declare its own integration verified.",
+		subject: "request",
+		expect: [{ code: "unknown-field", path: "/verified_integration" }],
+		value: { ...requests["request-acceptance"], verified_integration: true },
+	},
+	"request-storage-from-caller": {
+		description: "A caller cannot declare the storage boundary.",
+		subject: "request",
+		expect: [{ code: "unknown-field", path: "/storage" }],
+		value: { ...requests["request-acceptance"], storage: { boundary: "host-enforced" } },
+	},
+	"acceptance-request-missing-assurance": {
+		description: "A presentation always shows which policy the decision is asked under.",
+		subject: "acceptance-request",
+		expect: [{ code: "missing-field", path: "/presentation/assurance" }],
+		value: (() => {
+			const v = clone(acceptanceRequest);
+			delete v.presentation.assurance;
+			return v;
+		})(),
+	},
 	"approval-caller-attested-candidate": {
 		description: "A candidate the adapter did not capture itself cannot bind an acceptance.",
 		subject: "receipt-caller-candidate",
@@ -1129,6 +1198,8 @@ await writeJson("valid/snapshot-baseline.json", baseline);
 await writeJson("valid/snapshot-candidate.json", candidate);
 await writeJson("valid/proof.json", proof);
 await writeJson("valid/proof-second-obligation.json", proof2);
+await writeJson("valid/proof-caller-reported.json", proofCallerReported);
+await writeJson("valid/approval-cooperative.json", approvalCooperative);
 await writeJson("valid/review.json", review);
 await writeJson("valid/approval.json", approval);
 await writeJson("valid/acceptance-request.json", acceptanceRequest);

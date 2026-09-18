@@ -1,10 +1,10 @@
 {
-	"description": "A presentation edited after issue no longer matches its digest.",
+	"description": "A presentation always shows which policy the decision is asked under.",
 	"subject": "acceptance-request",
 	"expect": [
 		{
-			"code": "digest-mismatch",
-			"path": "/presentation_digest"
+			"code": "missing-field",
+			"path": "/presentation/assurance"
 		}
 	],
 	"value": {
@@ -24,7 +24,6 @@
 			"requested_outcome": "`countWidgets()` returns archived widgets too, as the API documentation already says it does.",
 			"slice_deliverable": "countWidgets() counts archived widgets by default; a regression test pins both behaviors.",
 			"candidate_summary": "4 manifest entries (3 files, 1 symlinks); dirty tree at 01234567; digest sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
-			"assurance": "verified",
 			"proof_summary": [
 				{
 					"obligation_id": "O1",
@@ -48,7 +47,10 @@
 					"remaining_blockers": 0
 				}
 			],
-			"limitations": []
+			"limitations": [
+				"Reviewer separation is declared by the host, not authenticated.",
+				"No CI run exists for this candidate."
+			]
 		},
 		"presentation_digest": "sha256:047bb0ad4915f41145781a538f101043e6811faf75dd7635004eca486d8d4fa1"
 	}

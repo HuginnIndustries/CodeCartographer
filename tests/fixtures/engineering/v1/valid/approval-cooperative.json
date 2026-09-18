@@ -1,7 +1,7 @@
 {
 	"schema_version": 1,
 	"kind": "approval",
-	"id": "apr_000000000000000000000a01",
+	"id": "apr_000000000000000000000a03",
 	"created_at": "2026-09-17T10:45:00Z",
 	"change_id": "chg_00000000000000000000c001",
 	"slice_id": "slc_00000000000000000000e001",
@@ -21,13 +21,13 @@
 		"issued_at": "2026-09-17T10:40:00Z",
 		"responded_at": "2026-09-17T10:45:00Z",
 		"authenticated": "host-session",
-		"verified_integration": true,
-		"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."
+		"verified_integration": false,
+		"attestation": "Answered through the client's elicitation UI; this host/client pair has not passed the integration check."
 	},
-	"assurance": "verified",
+	"assurance": "cooperative",
 	"storage": {
-		"boundary": "host-enforced",
-		"note": "client permission rules deny agent writes under .codecarto/engineering/"
+		"boundary": "none",
+		"note": "no permission rule protects .codecarto/engineering/ on this host"
 	},
 	"human_note": "Looks right; ship it."
 }
