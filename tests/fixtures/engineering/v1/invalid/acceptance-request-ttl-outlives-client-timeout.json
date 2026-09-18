@@ -1,10 +1,10 @@
 {
-	"description": "A presentation edited after issue no longer matches its digest.",
-	"subject": "acceptance-request",
+	"description": "A window inside the contract's 24 h cap but longer than the client's own request timeout: the client gives up first, so a timeout cannot be told from a decline. Refused by checkAcceptanceRequestTtl, which classifyAcceptance calls.",
+	"subject": "acceptance-request-ttl",
 	"expect": [
 		{
-			"code": "digest-mismatch",
-			"path": "/presentation_digest"
+			"code": "invalid-value",
+			"path": "/expires_at"
 		}
 	],
 	"value": {
@@ -18,7 +18,7 @@
 		"input_digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1",
 		"nonce": "0123456789abcdef0123456789abcdef",
 		"issued_at": "2026-09-17T10:40:00Z",
-		"expires_at": "2026-09-17T10:42:00Z",
+		"expires_at": "2026-09-17T11:40:00Z",
 		"presentation": {
 			"title": "Widget count includes archived widgets",
 			"requested_outcome": "`countWidgets()` returns archived widgets too, as the API documentation already says it does.",
@@ -48,7 +48,10 @@
 					"remaining_blockers": 0
 				}
 			],
-			"limitations": []
+			"limitations": [
+				"Reviewer separation is declared by the review's author, not authenticated.",
+				"No CI run exists for this candidate."
+			]
 		},
 		"presentation_digest": "sha256:aaf8742f01787b9eb3dbbb7d26122bc66270a4258e7342630625f337507f0000"
 	}

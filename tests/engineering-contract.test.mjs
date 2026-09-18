@@ -64,6 +64,7 @@ const {
 	isAllowedTransition,
 	checkCandidateFreshness,
 	standardLimitations,
+	checkPresentationDisclosure,
 	CHANGE_STATE_TRANSITIONS,
 	ATTEMPT_OUTCOME_TRANSITIONS,
 	ACCEPTANCE_REQUEST_MAX_TTL_MS,
@@ -81,6 +82,7 @@ const {
 	ELICITATION_OUTCOMES,
 	elicitationDecision,
 	acceptanceTtlWithin,
+	checkAcceptanceRequestTtl,
 } = engineering;
 
 async function readJson(relPath) {
@@ -294,6 +296,11 @@ test("every invalid fixture is refused with the expected code at the expected pa
 					return evaluateApprovalReceipt(fixture.value, receiptContext({ candidate: { ...valid.candidate, attested_by: "caller" } }));
 				case "acceptance-request":
 					return validateAcceptanceRequest(fixture.value);
+				case "acceptance-request-ttl":
+					// The client-timeout rule needs the registered integration the
+					// receipt resolves to; the 24 h cap in validateAcceptanceRequest
+					// does not catch a window this short.
+					return checkAcceptanceRequestTtl(fixture.value, { client_request_timeout_ms: 150_000 });
 				default:
 					throw new Error(`${file}: unknown subject ${fixture.subject}`);
 			}
@@ -315,7 +322,11 @@ test("every invalid fixture is refused with the expected code at the expected pa
 			assert.equal(typeof error.message, "string");
 		}
 	}
-	assert.deepEqual([...subjects].sort(), ["acceptance-request", "bundle", "receipt", "receipt-caller-candidate", "receipt-replay", "record", "request", "request-valid"], "every validator has negative coverage");
+	assert.deepEqual(
+		[...subjects].sort(),
+		["acceptance-request", "acceptance-request-ttl", "bundle", "receipt", "receipt-caller-candidate", "receipt-replay", "record", "request", "request-valid"],
+		"every validator has negative coverage",
+	);
 });
 
 test("an unsupported schema version is refused without reading the rest of the record", () => {
@@ -497,6 +508,22 @@ test("a trusted channel is a proposal until the host/client pair passes the inte
 	assert.equal(acceptanceTtlWithin(req(150), entry), false, "equal to the timeout is not within it");
 	assert.equal(acceptanceTtlWithin(req(600), entry), false);
 	assert.equal(acceptanceTtlWithin(req(60), { ...entry, client_request_timeout_ms: undefined }), false, "an unmeasured timeout fails closed");
+	// The rule is enforced, not merely offered: classifyAcceptance calls
+	// checkAcceptanceRequestTtl itself, so no adapter can skip it.
+	const okEntry = { ...entry, client_version: "2.1.277" };
+	const ttlCtx = (request, integration) => ({ ...receiptContext({ request }), current_storage: { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "continuous-since-initialization" }, integrations: [integration] });
+	assert.deepEqual(classifyAcceptance(valid.approval, ttlCtx(valid.request, okEntry)), { class: "verified", reasons: [] }, "the fixture request fits inside the client's timeout");
+	const longRequest = { ...valid.request, expires_at: "2026-09-17T11:40:00Z" };
+	const tooLong = classifyAcceptance(valid.approval, ttlCtx(longRequest, okEntry));
+	assert.equal(tooLong.class, "cooperative", "a window outliving the client's timeout cannot read as verified");
+	assert.match(tooLong.reasons.join(" "), /is not shorter than the client's 150000 ms request timeout/);
+	const unmeasured = classifyAcceptance(valid.approval, ttlCtx(valid.request, { ...okEntry, client_request_timeout_ms: undefined }));
+	assert.equal(unmeasured.class, "cooperative", "an unmeasured client request timeout bounds nothing");
+	assert.match(unmeasured.reasons.join(" "), /records no client_request_timeout_ms/);
+	// And the predicate's own refusals are reported as errors by the enforcement form.
+	assert.equal(checkAcceptanceRequestTtl(valid.request, okEntry).ok, true);
+	assert.equal(checkAcceptanceRequestTtl(undefined, okEntry).ok, false, "no request fails closed");
+	assert.equal(checkAcceptanceRequestTtl(longRequest, okEntry).errors[0].path, "/expires_at");
 	for (const field of ["assurance", "verified_integration", "storage", "storage_boundary", "assurance_policy"]) {
 		assert.ok(codesAt(validateChangeRequest({ action: "request-acceptance", change_id: valid.change.id, attempt_id: valid.attempt.id, [field]: "verified" })).includes(`unknown-field /${field}`), field);
 	}
@@ -526,7 +553,7 @@ test("the decision derives only from content.decision; action alone never author
 test("channel trust and at-rest trust are separate: a real UI decision in a writable namespace is cooperative", () => {
 	assert.deepEqual(ASSURANCE_POLICIES, ["verified", "cooperative"]);
 	const enforced = { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "continuous-since-initialization" };
-	const registry = [{ host: "mcp-server", client: "claude-code", client_version: "2.1.277", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
+	const registry = [{ host: "mcp-server", client: "claude-code", client_version: "2.1.277", channel: "mcp-elicitation", client_request_timeout_ms: 150_000, evidence: "test-only registry entry" }];
 	const ctx = (storage, extra = {}) => ({ ...receiptContext(), current_storage: storage, ...extra });
 	// Against the contract's own (empty) registry nothing is verified today, even the fixture approval.
 	const today = classifyAcceptance(valid.approval, ctx(enforced));
@@ -558,7 +585,12 @@ test("channel trust and at-rest trust are separate: a real UI decision in a writ
 	assert.deepEqual(evaluateApprovalReceipt(valid.approvalCooperative, receiptContext()), { ok: true, accepted: true }, "the receipt binding itself is sound");
 	const coop = classifyAcceptance(valid.approvalCooperative, ctx(enforced, { integrations: registry }));
 	assert.equal(coop.class, "cooperative");
-	assert.equal(coop.reasons.length, 3, "unverified integration, cooperative policy, unprotected at mint");
+	// The fourth reason is the disclosure check: this fixture reuses the
+	// verified request, so the presentation claims a stronger policy than the
+	// record was minted under — exactly the mismatch a person must not be
+	// shown. A real cooperative request would present `cooperative`.
+	assert.equal(coop.reasons.length, 4, "unverified integration, cooperative policy, unprotected at mint, presentation overstated the policy");
+	assert.match(coop.reasons.join(" "), /withheld 2 required disclosure\(s\) from the person who answered/);
 	// A receipt that does not bind is invalid, not cooperative.
 	assert.equal(classifyAcceptance({ ...valid.approval, decision: "rejected" }, ctx(enforced, { integrations: registry })).class, "invalid");
 	assert.equal(classifyAcceptance(valid.approval, ctx(enforced, { integrations: registry, consumed_nonces: [valid.approval.receipt.nonce] })).class, "invalid");
@@ -570,20 +602,59 @@ test("channel trust and at-rest trust are separate: a real UI decision in a writ
 	assert.ok(valid.request.presentation.proof_summary.every((p) => p.authority === "observed"));
 });
 
+test("the presentation a person answered must have disclosed what the acceptance is read under", () => {
+	const enforced = { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "continuous-since-initialization" };
+	const registry = [{ host: "mcp-server", client: "claude-code", client_version: "2.1.277", channel: "mcp-elicitation", client_request_timeout_ms: 150_000, evidence: "test-only registry entry" }];
+	const honest = { proofs: [], reviews: [], candidate: valid.candidate, assurance: "verified", storage_boundary: "host-enforced" };
+	// The fixture request is honest for its own state.
+	assert.equal(checkPresentationDisclosure(valid.request, honest).ok, true);
+	// A presentation that hides a required line is refused, even though its
+	// digest is recomputed correctly and the receipt binds to it: the binding
+	// proves the person saw *a* presentation, not an honest one.
+	const claimedProof = { ...valid.proof, provenance: { ...valid.proof.provenance, attested_by: "caller" } };
+	const required = standardLimitations({ ...honest, proofs: [claimedProof] });
+	assert.ok(required.length > 0, "a caller-reported proof must be disclosed");
+	const silent = { ...valid.request, presentation: { ...valid.request.presentation, limitations: [] } };
+	silent.presentation_digest = computePresentationDigest(silent.presentation);
+	assert.equal(validateAcceptanceRequest(silent).ok, true, "byte-level the dishonest request is well formed");
+	const hidden = checkPresentationDisclosure(silent, { ...honest, proofs: [claimedProof] });
+	assert.equal(hidden.ok, false);
+	assert.equal(hidden.errors[0].path, "/presentation/limitations");
+	assert.match(hidden.errors[0].message, /withheld 1 required disclosure/);
+	// classifyAcceptance enforces it, so no adapter can mint around it.
+	const ctx = (request) => ({ ...receiptContext({ request }), current_storage: enforced, integrations: registry });
+	assert.deepEqual(classifyAcceptance(valid.approval, ctx(valid.request)), { class: "verified", reasons: [] });
+	const overstated = { ...valid.request, presentation: { ...valid.request.presentation, assurance: "cooperative", limitations: [] } };
+	overstated.presentation_digest = computePresentationDigest(overstated.presentation);
+	const rebound = { ...valid.approval, receipt: { ...valid.approval.receipt, presentation_digest: overstated.presentation_digest } };
+	const misread = classifyAcceptance(rebound, ctx(overstated));
+	assert.equal(misread.class, "cooperative", "a presentation naming another policy cannot read as verified");
+	assert.match(misread.reasons.join(" "), /presentation said the decision was asked under the cooperative policy/);
+	// Malformed or absent presentations fail closed.
+	assert.equal(checkPresentationDisclosure(undefined, honest).ok, false);
+	assert.equal(checkPresentationDisclosure({ presentation: { ...valid.request.presentation, limitations: "none" } }, honest).ok, false);
+	assert.equal(checkPresentationDisclosure({ presentation: { ...valid.request.presentation, limitations: [1] } }, honest).ok, false);
+	// Disclosing more than required is allowed; disclosing less is not.
+	const extra = { presentation: { ...valid.request.presentation, limitations: [...valid.request.presentation.limitations, "The host also notes something else."] } };
+	assert.equal(checkPresentationDisclosure(extra, honest).ok, true);
+});
+
 test("protection must precede authoritative initialization: a pair forged while unprotected cannot be laundered by later protection, whatever times it carries", () => {
 	assert.deepEqual(PROTECTION_HISTORIES, ["continuous-since-initialization", "enabled-after-initialization", "interrupted", "imported-history"]);
 	assert.deepEqual(TOOL_RESULT_PATHS, ["protected", "unprotected", "none"]);
-	const registry = [{ host: "mcp-server", client: "claude-code", client_version: "2.1.277", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
+	const registry = [{ host: "mcp-server", client: "claude-code", client_version: "2.1.277", channel: "mcp-elicitation", client_request_timeout_ms: 150_000, evidence: "test-only registry entry" }];
 	// The agent, while the namespace is writable, pre-writes a request/approval
 	// pair whose issued and decided times are AFTER the epoch at which the
 	// operator will later enable protection. Every timestamp it needs is inside
 	// the records it is writing.
 	const epoch = "2026-09-19T00:00:00Z";
-	const forgedRequest = { ...valid.request, issued_at: "2026-09-20T12:00:00Z", expires_at: "2026-09-20T13:00:00Z" };
+	// A 120 s window, as the client-timeout rule requires: this test is about
+	// protection history, and a TTL refusal here would mask what it proves.
+	const forgedRequest = { ...valid.request, issued_at: "2026-09-20T12:00:00Z", expires_at: "2026-09-20T12:02:00Z" };
 	const forgedApproval = {
 		...valid.approval,
-		decided_at: "2026-09-20T12:30:00Z",
-		receipt: { ...valid.approval.receipt, issued_at: "2026-09-20T12:00:00Z", responded_at: "2026-09-20T12:30:00Z", verified_integration: true },
+		decided_at: "2026-09-20T12:01:00Z",
+		receipt: { ...valid.approval.receipt, issued_at: "2026-09-20T12:00:00Z", responded_at: "2026-09-20T12:01:00Z", verified_integration: true },
 		storage: { boundary: "host-enforced", note: "forged while unprotected" },
 	};
 	assert.equal(validateRecord(forgedApproval).ok, true, "byte-level the forgery is a well-formed record");

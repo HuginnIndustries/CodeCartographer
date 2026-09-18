@@ -285,7 +285,7 @@
 				"schema_version": 1,
 				"kind": "approval",
 				"id": "apr_000000000000000000000a01",
-				"created_at": "2026-09-17T10:45:00Z",
+				"created_at": "2026-09-17T10:41:00Z",
 				"change_id": "chg_00000000000000000000c001",
 				"slice_id": "slc_00000000000000000000e001",
 				"attempt_id": "att_00000000000000000000a001",
@@ -293,7 +293,7 @@
 				"candidate_digest": "sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
 				"input_digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1",
 				"decision": "accepted",
-				"decided_at": "2026-09-17T10:45:00Z",
+				"decided_at": "2026-09-17T10:41:00Z",
 				"receipt": {
 					"request_id": "acr_000000000000000000000c01",
 					"nonce": "0123456789abcdef0123456789abcdef",
@@ -306,7 +306,7 @@
 					},
 					"host_session": "stdio session 1",
 					"issued_at": "2026-09-17T10:40:00Z",
-					"responded_at": "2026-09-17T10:45:00Z",
+					"responded_at": "2026-09-17T10:41:00Z",
 					"authenticated": "host-session",
 					"verified_integration": true,
 					"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."

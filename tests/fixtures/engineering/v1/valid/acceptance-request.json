@@ -9,7 +9,7 @@
 	"input_digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1",
 	"nonce": "0123456789abcdef0123456789abcdef",
 	"issued_at": "2026-09-17T10:40:00Z",
-	"expires_at": "2026-09-17T11:40:00Z",
+	"expires_at": "2026-09-17T10:42:00Z",
 	"presentation": {
 		"title": "Widget count includes archived widgets",
 		"requested_outcome": "`countWidgets()` returns archived widgets too, as the API documentation already says it does.",

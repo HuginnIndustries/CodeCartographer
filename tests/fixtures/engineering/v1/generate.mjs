@@ -59,8 +59,11 @@ const T = {
 	candidate: "2026-09-17T10:22:00Z",
 	review: "2026-09-17T10:30:00Z",
 	issued: "2026-09-17T10:40:00Z",
-	expires: "2026-09-17T11:40:00Z",
-	responded: "2026-09-17T10:45:00Z",
+	// The window must fit inside the client's observed elicitation request
+	// timeout (~150 s on claude-code 2.1.277), or a timeout cannot be told
+	// from a decline: 120 s, answered at 60 s.
+	expires: "2026-09-17T10:42:00Z",
+	responded: "2026-09-17T10:41:00Z",
 	ended: "2026-09-17T10:45:01Z",
 };
 const NONCE = "0123456789abcdef0123456789abcdef";
@@ -1214,6 +1217,13 @@ const invalid = {
 		subject: "acceptance-request",
 		expect: [{ code: "invalid-value", path: "/expires_at" }],
 		value: withPatch(acceptanceRequest, { expires_at: "2026-09-19T10:40:00Z" }),
+	},
+	"acceptance-request-ttl-outlives-client-timeout": {
+		description:
+			"A window inside the contract's 24 h cap but longer than the client's own request timeout: the client gives up first, so a timeout cannot be told from a decline. Refused by checkAcceptanceRequestTtl, which classifyAcceptance calls.",
+		subject: "acceptance-request-ttl",
+		expect: [{ code: "invalid-value", path: "/expires_at" }],
+		value: withPatch(acceptanceRequest, { expires_at: "2026-09-17T11:40:00Z" }),
 	},
 	"acceptance-request-presentation-digest-mismatch": {
 		description: "A presentation edited after issue no longer matches its digest.",

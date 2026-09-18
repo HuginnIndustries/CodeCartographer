@@ -678,8 +678,16 @@ export interface HostCapabilities {
  * an entry is valid only for the version it was checked on, and the adapter
  * compares the live `clientInfo.version` against it at session start
  * (`acceptanceChannelSupported`); any other version is unsupported.
- * `client_request_timeout_ms` is the client's observed elicitation timeout;
- * the adapter's TTL must stay below it (`acceptanceTtlWithin`).
+ *
+ * `client_request_timeout_ms` is the client's observed elicitation request
+ * timeout (~150 000 ms on claude-code 2.1.277). An acceptance request's TTL
+ * must be strictly shorter than it, or the client gives up before the
+ * request expires and the server cannot tell a timeout from a decline. The
+ * rule is enforced inside the validators — `checkAcceptanceRequestTtl`,
+ * which `classifyAcceptance` calls before it may return `verified` — not by
+ * an adapter that is trusted to call `acceptanceTtlWithin` itself. An entry
+ * that never recorded the timeout fails the check: an unmeasured client
+ * bounds nothing.
  */
 export interface VerifiedAcceptanceIntegration {
 	host: string;
@@ -712,8 +720,20 @@ export const VERIFIED_ACCEPTANCE_INTEGRATIONS: ReadonlyArray<VerifiedAcceptanceI
 export const ELICITATION_OUTCOMES = ["accepted", "rejected", "declined", "cancelled", "timed-out", "invalid"] as const;
 export type ElicitationOutcome = (typeof ELICITATION_OUTCOMES)[number];
 
-/** The client's answer as the SDK returns it, or the error `elicitInput` threw. */
-export type ElicitationResponse = { action: "accept" | "decline" | "cancel" | string; content?: unknown } | { threw: string };
+/**
+ * The JSON-RPC error code an MCP client/SDK reports when its own request
+ * timeout elapses. This number, not the prose around it, is the signal:
+ * error text is host-formatted and can embed anything a caller typed.
+ */
+export const JSONRPC_REQUEST_TIMEOUT_CODE = -32001;
+
+/**
+ * The client's answer as the SDK returns it, or the error `elicitInput`
+ * threw. `code` is the structured JSON-RPC error code when the adapter
+ * captured one (`McpError.code`); it is the primary timeout signal, and
+ * `threw` is only a fallback for adapters that kept the message alone.
+ */
+export type ElicitationResponse = { action: "accept" | "decline" | "cancel" | string; content?: unknown } | { threw: string; code?: number };
 
 export interface ChangeRequestBase {
 	action: ChangeAction;
