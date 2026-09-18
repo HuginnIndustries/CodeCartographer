@@ -366,7 +366,7 @@
 					"host": "mcp-server",
 					"client": {
 						"name": "claude-code",
-						"version": "2.1.0"
+						"version": "2.1.277"
 					},
 					"host_session": "stdio session 1",
 					"issued_at": "2026-09-17T10:40:00Z",

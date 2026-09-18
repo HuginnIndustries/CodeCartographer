@@ -551,8 +551,8 @@ export interface ApprovalReceipt {
 	channel: ApprovalChannel;
 	/** The adapter that obtained the decision, e.g. `mcp-server`, `pi`. */
 	host: string;
-	/** The connected client as the transport reported it; with `host` and `channel`, the key into {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}. */
-	client: { name: string; version?: string };
+	/** The connected client as the transport reported it at mint time; with `host` and `channel`, the exact key into {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}. The version is required because the registry is keyed by it. */
+	client: { name: string; version: string };
 	host_session?: string;
 	issued_at: Timestamp;
 	responded_at: Timestamp;
@@ -668,15 +668,52 @@ export interface HostCapabilities {
 }
 
 /**
- * The host/client pairs for which the integration check in
+ * One host/client pair for which the integration check in
  * docs/engineering/record-contract.md § Acceptance channel has been run and
- * recorded: presentation shown, acceptance, rejection/cancellation, and a
- * stale or mismatched response each observed on the real client. Empty until
- * such a record exists; adding an entry is a contract amendment with the
- * check's evidence attached. An adapter derives `verified_integration` from
- * this list and from nothing else.
+ * recorded: presentation shown, acceptance, rejection, decline/cancel, and a
+ * stale or mismatched response each observed on the real client.
+ *
+ * `client_version` is exact. A client updates itself — the D1 live check
+ * saw 2.1.277 where the spike had run on 2.1.263, three minutes apart — so
+ * an entry is valid only for the version it was checked on, and the adapter
+ * compares the live `clientInfo.version` against it at session start
+ * (`acceptanceChannelSupported`); any other version is unsupported.
+ * `client_request_timeout_ms` is the client's observed elicitation timeout;
+ * the adapter's TTL must stay below it (`acceptanceTtlWithin`).
  */
-export const VERIFIED_ACCEPTANCE_INTEGRATIONS: ReadonlyArray<{ host: string; client: string; channel: ApprovalChannel; evidence: string }> = [];
+export interface VerifiedAcceptanceIntegration {
+	host: string;
+	client: string;
+	client_version: string;
+	channel: ApprovalChannel;
+	client_request_timeout_ms?: number;
+	evidence: string;
+}
+
+/**
+ * Empty until such a record exists; adding an entry is a contract amendment
+ * with the check's evidence attached. An adapter derives
+ * `verified_integration` from this list and from nothing else.
+ */
+export const VERIFIED_ACCEPTANCE_INTEGRATIONS: ReadonlyArray<VerifiedAcceptanceIntegration> = [];
+
+/**
+ * What an MCP elicitation round trip established, derived from the client's
+ * `ElicitResult` by `elicitationDecision`. The decision comes ONLY from
+ * `content.decision`: the D1 live check observed `action: "accept"` carrying
+ * `content.decision: "reject"` — the form was submitted (the form-level
+ * Accept button) with the decision field set to reject — so an adapter that
+ * read `action` would have minted an approval out of a rejection. `action`
+ * alone never authorizes; a submitted form with a missing or unrecognized
+ * decision is `invalid`, not an acceptance. `timed-out` is its own outcome:
+ * the server cannot tell a timeout from a decline, and a person at an
+ * approval prompt routinely takes minutes.
+ */
+export const ELICITATION_OUTCOMES = ["accepted", "rejected", "declined", "cancelled", "timed-out", "invalid"] as const;
+export type ElicitationOutcome = (typeof ELICITATION_OUTCOMES)[number];
+
+/** The client's answer as the SDK returns it, or the error `elicitInput` threw. */
+export type ElicitationResponse = { action: "accept" | "decline" | "cancel" | string; content?: unknown } | { threw: string };
 
 export interface ChangeRequestBase {
 	action: ChangeAction;
@@ -837,7 +874,8 @@ export interface EngineeringError {
 export type ValidationOutcome<T> = { ok: true; value: T } | { ok: false; errors: EngineeringError[] };
 
 export interface AcceptanceRequestOutcome {
-	outcome: "accepted" | "rejected" | "needs-human-acceptance";
+	/** `declined` is a dismissed prompt and `timed-out` an unanswered one; neither is a decision and neither mints a record. */
+	outcome: "accepted" | "rejected" | "declined" | "timed-out" | "needs-human-acceptance";
 	/** How an `accepted` outcome is to be read; never `verified` unless {@link classifyAcceptance} says so now. */
 	assurance: AssurancePolicy;
 	request: AcceptanceRequest;

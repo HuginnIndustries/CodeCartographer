@@ -1,0 +1,11 @@
+{
+	"description": "the person typed the answer into the free-text field while Decision stayed unset — observed once during the live check before correction",
+	"response": {
+		"action": "accept",
+		"content": {
+			"decision": "",
+			"note": "accept"
+		}
+	},
+	"outcome": "invalid"
+}

@@ -77,6 +77,8 @@ import {
 	type Attestation,
 	type EngineeringError,
 	type EngineeringErrorCode,
+	type ElicitationOutcome,
+	type ElicitationResponse,
 	type EngineeringRecord,
 	type EvidenceAuthority,
 	type HostCapabilities,
@@ -90,6 +92,7 @@ import {
 	type SnapshotRecord,
 	type StorageBoundary,
 	type ValidationOutcome,
+	type VerifiedAcceptanceIntegration,
 } from "./types.ts";
 
 // ---------- collectors ----------
@@ -131,15 +134,26 @@ export function proofDischarges(proof: Pick<ProofRecord, "obligation_id" | "resu
  * {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}. Anything else stops at
  * `needs-human-acceptance` with the reason spelled out.
  */
-export function acceptanceChannelSupported(capabilities: HostCapabilities): { supported: true; channel: "mcp-elicitation" | "host-native" } | { supported: false; reason: string } {
+export function acceptanceChannelSupported(
+	capabilities: HostCapabilities,
+	/** The registry to check against; the contract's own unless a test supplies one. */
+	registry?: ReadonlyArray<VerifiedAcceptanceIntegration>,
+): { supported: true; channel: "mcp-elicitation" | "host-native"; integration: VerifiedAcceptanceIntegration } | { supported: false; reason: string } {
 	if (capabilities.human_acceptance === "none") return { supported: false, reason: "the host declares no human-acceptance channel" };
 	const pair = `${capabilities.human_acceptance} on ${capabilities.label ?? "this host"} / ${capabilities.client?.name ?? "unknown client"}`;
-	const registered = VERIFIED_ACCEPTANCE_INTEGRATIONS.some(
+	const registered = (registry ?? VERIFIED_ACCEPTANCE_INTEGRATIONS).filter(
 		(entry) => entry.channel === capabilities.human_acceptance && entry.host === capabilities.label && entry.client === capabilities.client?.name,
 	);
-	if (!registered) return { supported: false, reason: `${pair} is not a verified integration; a client advertising the capability is not enough` };
+	if (registered.length === 0) return { supported: false, reason: `${pair} is not a verified integration; a client advertising the capability is not enough` };
+	// The client updates itself; an entry is good only for the exact version it was checked on.
+	const live = capabilities.client?.version;
+	if (live === undefined) return { supported: false, reason: `${pair} did not report a client version; the registry is keyed by exact version` };
+	const match = registered.find((entry) => entry.client_version === live);
+	if (!match) {
+		return { supported: false, reason: `${pair} is registered for version ${registered.map((e) => e.client_version).join(", ")} but the live client is ${live}; re-run the integration check on ${live}` };
+	}
 	if (!capabilities.verified_integration) return { supported: false, reason: `${pair} is registered but the adapter did not declare it verified` };
-	return { supported: true, channel: capabilities.human_acceptance };
+	return { supported: true, channel: capabilities.human_acceptance, integration: match };
 }
 
 /**
@@ -150,6 +164,35 @@ export function acceptanceChannelSupported(capabilities: HostCapabilities): { su
  */
 export function attestationForHostObservation(capabilities: Partial<Pick<HostCapabilities, "tool_result_path">>): Extract<Attestation, "host-tool-result" | "caller"> {
 	return capabilities.tool_result_path === "protected" ? "host-tool-result" : "caller";
+}
+
+/**
+ * What a client's elicitation answer decided. The decision derives ONLY from
+ * `content.decision`; `action` says whether a form came back at all. The D1
+ * live check produced all of the first three shapes from one person at one
+ * dialog, including `action: "accept"` with `content.decision: "reject"`.
+ */
+export function elicitationDecision(response: ElicitationResponse): ElicitationOutcome {
+	if ("threw" in response) return /timed out|-32001/i.test(response.threw) ? "timed-out" : "invalid";
+	if (response.action === "decline") return "declined";
+	if (response.action === "cancel") return "cancelled";
+	if (response.action !== "accept") return "invalid";
+	const content = isPlainObject(response.content) ? response.content : null;
+	const decision = content?.decision;
+	if (decision === "accept") return "accepted";
+	if (decision === "reject") return "rejected";
+	return "invalid";
+}
+
+/**
+ * Whether the request's validity window fits inside the client's observed
+ * request timeout, so a timeout can never be mistaken for a decision that
+ * arrived late. Unknown timeout → not within: the adapter must measure it
+ * before relying on the channel.
+ */
+export function acceptanceTtlWithin(request: Pick<AcceptanceRequest, "issued_at" | "expires_at">, integration: Pick<VerifiedAcceptanceIntegration, "client_request_timeout_ms">): boolean {
+	if (!isTimestamp(request.issued_at) || !isTimestamp(request.expires_at) || integration.client_request_timeout_ms === undefined) return false;
+	return Date.parse(request.expires_at) - Date.parse(request.issued_at) < integration.client_request_timeout_ms;
 }
 
 /**
@@ -178,8 +221,10 @@ export function classifyAcceptance(
 	if (!receipt.accepted) return { class: "invalid", reasons: ["decision is rejected"] };
 	const reasons: string[] = [];
 	const r = approval.receipt;
-	const registered = (context.integrations ?? VERIFIED_ACCEPTANCE_INTEGRATIONS).some((e) => e.host === r.host && e.client === r.client.name && e.channel === r.channel);
-	if (!registered) reasons.push(`${r.channel} on ${r.host} / ${r.client.name} is not in VERIFIED_ACCEPTANCE_INTEGRATIONS now`);
+	const registered = (context.integrations ?? VERIFIED_ACCEPTANCE_INTEGRATIONS).some(
+		(e) => e.host === r.host && e.client === r.client.name && e.channel === r.channel && e.client_version === r.client.version,
+	);
+	if (!registered) reasons.push(`${r.channel} on ${r.host} / ${r.client.name} ${r.client.version ?? "(no version)"} is not in VERIFIED_ACCEPTANCE_INTEGRATIONS now`);
 	if (!r.verified_integration) reasons.push("receipt was minted on an unverified host/client integration");
 	if (approval.assurance !== "verified") reasons.push(`approval was minted under the ${approval.assurance} policy`);
 	if (approval.storage.boundary !== "host-enforced") reasons.push("storage boundary was not host-enforced when the approval was minted");
@@ -504,7 +549,7 @@ const RECEIPT_SHAPE: Shape = {
 	presentation_digest: req(digest),
 	channel: req(oneOf(APPROVAL_CHANNELS)),
 	host: req(nonEmptyString),
-	client: req(objectOf({ name: req(nonEmptyString), version: opt(nonEmptyString) })),
+	client: req(objectOf({ name: req(nonEmptyString), version: req(nonEmptyString) })),
 	host_session: opt(nonEmptyString),
 	issued_at: req(timestamp),
 	responded_at: req(timestamp),

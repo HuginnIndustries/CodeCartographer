@@ -78,6 +78,9 @@ const {
 	attestationForHostObservation,
 	PROTECTION_HISTORIES,
 	TOOL_RESULT_PATHS,
+	ELICITATION_OUTCOMES,
+	elicitationDecision,
+	acceptanceTtlWithin,
 } = engineering;
 
 async function readJson(relPath) {
@@ -467,22 +470,63 @@ function stripProof(proof) {
 
 test("a trusted channel is a proposal until the host/client pair passes the integration check", () => {
 	assert.deepEqual(VERIFIED_ACCEPTANCE_INTEGRATIONS, [], "no integration has been verified yet");
-	const base = { human_acceptance: "mcp-elicitation", label: "mcp-server", client: { name: "claude-code" }, verified_integration: false, storage_boundary: "host-enforced", assurance_policy: "verified" };
+	const base = { human_acceptance: "mcp-elicitation", label: "mcp-server", client: { name: "claude-code", version: "2.1.277" }, verified_integration: false, storage_boundary: "host-enforced", assurance_policy: "verified" };
 	assert.equal(acceptanceChannelSupported(base).supported, false);
 	assert.match(acceptanceChannelSupported(base).reason, /not a verified integration/);
 	// The adapter asserting it is verified does not make it so; the registry does.
 	assert.equal(acceptanceChannelSupported({ ...base, verified_integration: true }).supported, false);
 	assert.equal(acceptanceChannelSupported({ ...base, human_acceptance: "host-native", label: "pi" }).supported, false);
 	assert.deepEqual(acceptanceChannelSupported({ ...base, human_acceptance: "none" }), { supported: false, reason: "the host declares no human-acceptance channel" });
+	// Version drift: the D1 live check ran on 2.1.277 three minutes after the host updated itself from 2.1.263.
+	const entry = { host: "mcp-server", client: "claude-code", client_version: "2.1.263", channel: "mcp-elicitation", client_request_timeout_ms: 150_000, evidence: "test-only" };
+	const verified = { ...base, verified_integration: true };
+	const drifted = acceptanceChannelSupported(verified, [entry]);
+	assert.equal(drifted.supported, false);
+	assert.match(drifted.reason, /registered for version 2\.1\.263 but the live client is 2\.1\.277/);
+	assert.equal(acceptanceChannelSupported({ ...verified, client: { name: "claude-code" } }, [entry]).supported, false, "no live version reported");
+	const exact = acceptanceChannelSupported(verified, [{ ...entry, client_version: "2.1.277" }]);
+	assert.equal(exact.supported, true);
+	assert.equal(exact.integration.client_version, "2.1.277");
+	// A stale-version receipt classifies cooperative even with the pair registered at another version.
+	const ctxV = { ...receiptContext(), current_storage: { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "continuous-since-initialization" } };
+	assert.equal(classifyAcceptance(valid.approval, { ...ctxV, integrations: [entry] }).class, "cooperative", "receipt says 2.1.277, registry says 2.1.263");
+	assert.equal(classifyAcceptance(valid.approval, { ...ctxV, integrations: [{ ...entry, client_version: "2.1.277" }] }).class, "verified");
+	// The TTL must fit inside the client's observed request timeout, or a timeout is indistinguishable from a late answer.
+	const req = (secs) => ({ issued_at: "2026-09-18T21:30:00Z", expires_at: new Date(Date.parse("2026-09-18T21:30:00Z") + secs * 1000).toISOString().replace(/\.000Z$/, "Z") });
+	assert.equal(acceptanceTtlWithin(req(120), entry), true);
+	assert.equal(acceptanceTtlWithin(req(150), entry), false, "equal to the timeout is not within it");
+	assert.equal(acceptanceTtlWithin(req(600), entry), false);
+	assert.equal(acceptanceTtlWithin(req(60), { ...entry, client_request_timeout_ms: undefined }), false, "an unmeasured timeout fails closed");
 	for (const field of ["assurance", "verified_integration", "storage", "storage_boundary", "assurance_policy"]) {
 		assert.ok(codesAt(validateChangeRequest({ action: "request-acceptance", change_id: valid.change.id, attempt_id: valid.attempt.id, [field]: "verified" })).includes(`unknown-field /${field}`), field);
 	}
 });
 
+test("the decision derives only from content.decision; action alone never authorizes; timeout is its own outcome", async () => {
+	assert.deepEqual(ELICITATION_OUTCOMES, ["accepted", "rejected", "declined", "cancelled", "timed-out", "invalid"]);
+	const files = await listJson("valid/elicitation");
+	assert.ok(files.length >= 10);
+	const seen = new Set();
+	for (const file of files) {
+		const fixture = await readJson(`valid/elicitation/${file}`);
+		assert.equal(elicitationDecision(fixture.response), fixture.outcome, `${file}: ${fixture.description}`);
+		assert.equal(elicitationDecision(fixture.response), elicitationDecision(fixture.response), "deterministic");
+		seen.add(fixture.outcome);
+	}
+	assert.deepEqual([...seen].sort(), [...ELICITATION_OUTCOMES].sort(), "every outcome has a fixture");
+	// The three shapes from the live check, verbatim.
+	assert.equal(elicitationDecision({ action: "accept", content: { decision: "accept" } }), "accepted");
+	assert.equal(elicitationDecision({ action: "accept", content: { decision: "reject" } }), "rejected", "action accept + decision reject is a rejection");
+	assert.equal(elicitationDecision({ action: "decline" }), "declined");
+	assert.equal(elicitationDecision({ threw: "MCP error -32001: Request timed out" }), "timed-out");
+	// Only `accepted` may mint an acceptance; nothing else is one.
+	for (const outcome of ELICITATION_OUTCOMES) if (outcome !== "accepted") assert.notEqual(outcome, "accepted");
+});
+
 test("channel trust and at-rest trust are separate: a real UI decision in a writable namespace is cooperative", () => {
 	assert.deepEqual(ASSURANCE_POLICIES, ["verified", "cooperative"]);
 	const enforced = { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "continuous-since-initialization" };
-	const registry = [{ host: "mcp-server", client: "claude-code", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
+	const registry = [{ host: "mcp-server", client: "claude-code", client_version: "2.1.277", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
 	const ctx = (storage, extra = {}) => ({ ...receiptContext(), current_storage: storage, ...extra });
 	// Against the contract's own (empty) registry nothing is verified today, even the fixture approval.
 	const today = classifyAcceptance(valid.approval, ctx(enforced));
@@ -529,7 +573,7 @@ test("channel trust and at-rest trust are separate: a real UI decision in a writ
 test("protection must precede authoritative initialization: a pair forged while unprotected cannot be laundered by later protection, whatever times it carries", () => {
 	assert.deepEqual(PROTECTION_HISTORIES, ["continuous-since-initialization", "enabled-after-initialization", "interrupted", "imported-history"]);
 	assert.deepEqual(TOOL_RESULT_PATHS, ["protected", "unprotected", "none"]);
-	const registry = [{ host: "mcp-server", client: "claude-code", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
+	const registry = [{ host: "mcp-server", client: "claude-code", client_version: "2.1.277", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
 	// The agent, while the namespace is writable, pre-writes a request/approval
 	// pair whose issued and decided times are AFTER the epoch at which the
 	// operator will later enable protection. Every timestamp it needs is inside

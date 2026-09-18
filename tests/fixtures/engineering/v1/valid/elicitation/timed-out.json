@@ -1,0 +1,7 @@
+{
+	"description": "the client's request timeout elapsed before anyone answered — observed live after ~2.5 minutes; not a decline",
+	"response": {
+		"threw": "MCP error -32001: Request timed out"
+	},
+	"outcome": "timed-out"
+}
