@@ -427,7 +427,7 @@ The design above is a candidate. E01 stays open, and E02/E03 stay blocked, until
 | D4 | Which **observed-evidence path** will the pilot host provide (a post-tool-use hook delivering tool results to a host-side ingestion entry, defined by E05)? The entry *must* be unreachable by the model's tools and its configuration *must* live outside agent-writable roots — these are requirements for `host-tool-result`, already encoded as `tool_result_path: protected`; what remains to decide is how the host demonstrates both. Without a protected path every proof is `claimed` and nothing is accepted under `verified`. | `attestationForHostObservation` yields `caller` for anything but `protected`; `proofDischarges` refuses claims under `verified` |
 | D5 | Is the **`cooperative` policy** permitted at all for the pilot, and if so under what recorded approval? Under it, do honestly labelled `agent-claimed` records discharge equally with relabelled ones, or is the claimed-collector rank kept? | it exists as a labelled, operator-set policy; the pilot does not use it |
 
-Inputs to D1/D2 not settled by this contract: which clients implement form elicitation today (only the SDK's server side is verified); and that D3 and D4 are prerequisites for any `verified` acceptance regardless of the channel answer.
+Spike evidence against one host (Claude Code 2.1.263) for D1, D3, and D4 is in [spike-claude-code-2026-09-18.md](spike-claude-code-2026-09-18.md); it registers nothing. Inputs to D1/D2 not settled by this contract: which clients implement form elicitation today (only the SDK's server side is verified); and that D3 and D4 are prerequisites for any `verified` acceptance regardless of the channel answer.
 
 ## What the code proves and what the host must enforce
 

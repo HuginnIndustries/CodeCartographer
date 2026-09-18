@@ -7,8 +7,9 @@
 1. [Product vision and decision register](vision.md): intent, constraints, settled direction, provisional defaults, and deferred decisions.
 2. [Sanitized dogfood findings](dogfood-2026-09-17.md): what actually ran, what did not, and why the roadmap changed.
 3. [Engineering record contract](record-contract.md): the v1 candidate vocabulary, record schemas, operation API, and proof/approval trust model (E01 — **candidate contract, acceptance pending**; executable in `core/engineering/` with fixtures under `tests/fixtures/engineering/v1/`; its decision record lists what keeps #399 open).
-4. [Incremental implementation plan](implementation-plan.md): bounded tasks, prerequisites, paths, tests, and acceptance criteria.
-5. [Product roadmap](../ROADMAP.md): outcome-level sequencing and links to other workstreams.
+4. [Claude Code 2.1.263 feasibility spike](spike-claude-code-2026-09-18.md): what one concrete host can and cannot provide for the contract's D1–D5, with the live check still required and the smallest pilot configuration proposed (registers nothing).
+5. [Incremental implementation plan](implementation-plan.md): bounded tasks, prerequisites, paths, tests, and acceptance criteria.
+6. [Product roadmap](../ROADMAP.md): outcome-level sequencing and links to other workstreams.
 
 For E11 evaluation, read the [preregistered pilot tasks](pilot-selection.md) and [evaluation rubric](evaluation-rubric.md). These are planning and measurement documents, not permission to execute pilots or start held tasks.
 

@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "deny": [
+      "Write(./.codecarto/engineering/**)",
+      "Edit(./.codecarto/engineering/**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "denyWrite": [
+        "$SPIKE_ROOT/project/.codecarto/engineering"
+      ]
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$SPIKE_ROOT/hooks/observe.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$SPIKE_ROOT/hooks/observe.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
