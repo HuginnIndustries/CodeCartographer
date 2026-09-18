@@ -112,7 +112,11 @@ const valid = {
 
 /** The receipt context the valid approval fixture was issued against. */
 function receiptContext(overrides = {}) {
-	return { request: valid.request, consumed_nonces: [], attempt: valid.attempt, candidate: valid.candidate, ...overrides };
+	// `proofs`/`reviews` are what the acceptance binds to; classifyAcceptance
+	// requires them to re-derive the presentation's disclosure, and a reader
+	// that omits them may not read `verified`. The fixture bundle's proofs are
+	// observed and its presentation discloses nothing beyond them.
+	return { request: valid.request, consumed_nonces: [], attempt: valid.attempt, candidate: valid.candidate, proofs: [], reviews: [], ...overrides };
 }
 
 function codesAt(result) {
@@ -511,7 +515,11 @@ test("a trusted channel is a proposal until the host/client pair passes the inte
 	// The rule is enforced, not merely offered: classifyAcceptance calls
 	// checkAcceptanceRequestTtl itself, so no adapter can skip it.
 	const okEntry = { ...entry, client_version: "2.1.277" };
-	const ttlCtx = (request, integration) => ({ ...receiptContext({ request }), current_storage: { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "continuous-since-initialization" }, integrations: [integration] });
+	const ttlCtx = (request, integration, integrations) => ({
+		...receiptContext({ request }),
+		current_storage: { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "continuous-since-initialization" },
+		integrations: integrations ?? [integration],
+	});
 	assert.deepEqual(classifyAcceptance(valid.approval, ttlCtx(valid.request, okEntry)), { class: "verified", reasons: [] }, "the fixture request fits inside the client's timeout");
 	const longRequest = { ...valid.request, expires_at: "2026-09-17T11:40:00Z" };
 	const tooLong = classifyAcceptance(valid.approval, ttlCtx(longRequest, okEntry));
@@ -519,7 +527,34 @@ test("a trusted channel is a proposal until the host/client pair passes the inte
 	assert.match(tooLong.reasons.join(" "), /is not shorter than the client's 150000 ms request timeout/);
 	const unmeasured = classifyAcceptance(valid.approval, ttlCtx(valid.request, { ...okEntry, client_request_timeout_ms: undefined }));
 	assert.equal(unmeasured.class, "cooperative", "an unmeasured client request timeout bounds nothing");
-	assert.match(unmeasured.reasons.join(" "), /records no client_request_timeout_ms/);
+	assert.match(unmeasured.reasons.join(" "), /records no usable client_request_timeout_ms/);
+	// A timeout that is not a finite positive number is not a measurement: a
+	// numeric string, Infinity, or a one-element array would each coerce past
+	// `<` and read verified if the shape were assumed instead of checked.
+	for (const bogus of ["999999999", Infinity, [999_999_999], Number.NaN, 0, -1]) {
+		const c = classifyAcceptance(valid.approval, ttlCtx(longRequest, { ...okEntry, client_request_timeout_ms: bogus }));
+		assert.equal(c.class, "cooperative", `client_request_timeout_ms ${JSON.stringify(bogus)}`);
+	}
+	// Duplicate registrations must not let array order pick the generous entry,
+	// and the strictest measured timeout is the one that binds.
+	const generous = { ...okEntry, client_request_timeout_ms: 86_400_000 };
+	const dup = classifyAcceptance(valid.approval, ttlCtx(longRequest, generous, [generous, okEntry]));
+	assert.equal(dup.class, "cooperative", "a 60-minute window cannot read verified because a duplicate entry is generous");
+	assert.match(dup.reasons.join(" "), /2 registry entries match/);
+	const unmeasuredSibling = classifyAcceptance(valid.approval, ttlCtx(valid.request, okEntry, [okEntry, { ...okEntry, client_request_timeout_ms: undefined }]));
+	assert.equal(unmeasuredSibling.class, "cooperative", "an unmeasured sibling cannot be sidestepped by a measured one, whatever the order");
+	// The strictest entry binds independently of the duplicate-tuple refusal:
+	// entries differing only in a field outside the tuple are one registration
+	// each, so order must not decide which timeout applies.
+	const byChannelAlias = { ...okEntry, client_request_timeout_ms: 86_400_000, evidence: "a second registration of the same pair" };
+	for (const order of [
+		[byChannelAlias, okEntry],
+		[okEntry, byChannelAlias],
+	]) {
+		const c = classifyAcceptance(valid.approval, ttlCtx(longRequest, undefined, order));
+		assert.equal(c.class, "cooperative", "order must not change the reading");
+		assert.match(c.reasons.join(" "), /is not shorter than the client's 150000 ms request timeout/, "the strictest measured timeout is the one enforced, whichever entry came first");
+	}
 	// And the predicate's own refusals are reported as errors by the enforcement form.
 	assert.equal(checkAcceptanceRequestTtl(valid.request, okEntry).ok, true);
 	assert.equal(checkAcceptanceRequestTtl(undefined, okEntry).ok, false, "no request fails closed");
@@ -637,6 +672,17 @@ test("the presentation a person answered must have disclosed what the acceptance
 	// Disclosing more than required is allowed; disclosing less is not.
 	const extra = { presentation: { ...valid.request.presentation, limitations: [...valid.request.presentation.limitations, "The host also notes something else."] } };
 	assert.equal(checkPresentationDisclosure(extra, honest).ok, true);
+	// A reader that cannot supply the bound records cannot re-derive the whole
+	// disclosure, so it may not read `verified`. Narrowing the check to the
+	// derivable lines would restore the bypass: the same empty-limitations
+	// request would pass because no proof line was ever required.
+	const full = { ...receiptContext({ request: silent }), current_storage: enforced, integrations: registry };
+	const reboundSilent = { ...valid.approval, receipt: { ...valid.approval.receipt, presentation_digest: silent.presentation_digest } };
+	const { proofs: _p, reviews: _r, ...withoutRecords } = full;
+	const blind = classifyAcceptance(reboundSilent, withoutRecords);
+	assert.equal(blind.class, "cooperative", "omitting proofs/reviews degrades the reading, it does not skip the check");
+	assert.match(blind.reasons.join(" "), /proofs and reviews were not supplied/);
+	assert.equal(classifyAcceptance(reboundSilent, { ...full, proofs: [claimedProof] }).class, "cooperative", "and supplying them catches the withheld line");
 });
 
 test("protection must precede authoritative initialization: a pair forged while unprotected cannot be laundered by later protection, whatever times it carries", () => {

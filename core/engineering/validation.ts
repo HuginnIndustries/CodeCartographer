@@ -219,8 +219,19 @@ function threwTimedOut(response: { threw: string; code?: number }): boolean {
  * this contract depends on an adapter remembering to call a helper.
  */
 export function acceptanceTtlWithin(request: Pick<AcceptanceRequest, "issued_at" | "expires_at">, integration: Pick<VerifiedAcceptanceIntegration, "client_request_timeout_ms">): boolean {
-	if (!isTimestamp(request.issued_at) || !isTimestamp(request.expires_at) || integration.client_request_timeout_ms === undefined) return false;
+	if (!isTimestamp(request.issued_at) || !isTimestamp(request.expires_at) || !isMeasuredTimeout(integration.client_request_timeout_ms)) return false;
 	return Date.parse(request.expires_at) - Date.parse(request.issued_at) < integration.client_request_timeout_ms;
+}
+
+/**
+ * A measured client request timeout: a finite, positive number of
+ * milliseconds. Anything else — a numeric string, `Infinity`, a one-element
+ * array that would coerce past `<`, `NaN`, zero, a negative — is not a
+ * measurement, and the comparison must refuse rather than coerce. The
+ * registry is data an adapter supplies, so its shape is checked, not assumed.
+ */
+function isMeasuredTimeout(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 /**
@@ -245,8 +256,8 @@ export function checkAcceptanceRequestTtl(
 ): ValidationOutcome<true> {
 	const refuse = (message: string): ValidationOutcome<true> => ({ ok: false, errors: [{ code: "invalid-value", path, message }] });
 	if (!request) return refuse("no acceptance request is available, so its TTL cannot be checked against the client's request timeout");
-	if (!integration || integration.client_request_timeout_ms === undefined) {
-		return refuse("the registered integration records no client_request_timeout_ms; an unmeasured client request timeout cannot bound a request's TTL");
+	if (!integration || !isMeasuredTimeout(integration.client_request_timeout_ms)) {
+		return refuse("the registered integration records no usable client_request_timeout_ms (a finite positive number of milliseconds); an unmeasured client request timeout cannot bound a request's TTL");
 	}
 	if (acceptanceTtlWithin(request, integration)) return { ok: true, value: true };
 	if (!isTimestamp(request.issued_at) || !isTimestamp(request.expires_at)) {
@@ -279,11 +290,13 @@ export function classifyAcceptance(
 		/** The registry to check the receipt's host/client/channel against; the contract's own unless a test supplies one. */
 		integrations?: typeof VERIFIED_ACCEPTANCE_INTEGRATIONS;
 		/**
-		 * The proofs and reviews the acceptance binds to, when the reader holds
-		 * them (E06 reads the bundle). Supplying them lets the disclosure check
-		 * below re-derive every required line; without them it still enforces
-		 * the candidate, policy, and storage disclosures, which are derivable
-		 * from the approval and the receipt context alone.
+		 * The proofs and reviews the acceptance binds to. Required for a
+		 * `verified` reading: without them the disclosure check cannot re-derive
+		 * the proof and reviewer lines, and a reader that simply omits them
+		 * would restore the very bypass {@link checkPresentationDisclosure}
+		 * closes. Omitting them is not an error — the reading degrades to
+		 * `cooperative` with an explicit reason, because a degradation must
+		 * lower trust, never raise it. Pass `[]` to assert there are none.
 		 */
 		proofs?: ProofRecord[];
 		reviews?: ReviewRecord[];
@@ -298,21 +311,38 @@ export function classifyAcceptance(
 		(e) => e.host === r.host && e.client === r.client.name && e.channel === r.channel && e.client_version === r.client.version,
 	);
 	if (matches.length === 0) reasons.push(`${r.channel} on ${r.host} / ${r.client.name} ${r.client.version ?? "(no version)"} is not in VERIFIED_ACCEPTANCE_INTEGRATIONS now`);
-	// The TTL is enforced here, where no caller can skip it, against the entry
-	// the receipt actually resolves to. An unregistered pair has no measured
-	// timeout at all, so it fails closed on the line above and again here.
-	const ttl = checkAcceptanceRequestTtl(context.request, matches[0]);
+	// The TTL is enforced here, where no caller can skip it. A tuple must
+	// resolve to exactly one entry: duplicates would let array order pick the
+	// most generous timeout, so the registry's shape — not the reading — would
+	// decide trust. And the strictest matching timeout is the one that binds,
+	// so an entry that never measured one cannot be sidestepped by a sibling
+	// that did.
+	if (matches.length > 1) {
+		reasons.push(`${matches.length} registry entries match ${r.channel} on ${r.host} / ${r.client.name} ${r.client.version}; a host/client/version/channel tuple must be registered once, or its timeout is whichever entry happens to be first`);
+	}
+	const strictest = matches.reduce<(typeof matches)[number] | undefined>(
+		(worst, e) => (worst === undefined ? e : !isMeasuredTimeout(worst.client_request_timeout_ms) ? worst : !isMeasuredTimeout(e.client_request_timeout_ms) ? e : e.client_request_timeout_ms < worst.client_request_timeout_ms ? e : worst),
+		undefined,
+	);
+	const ttl = checkAcceptanceRequestTtl(context.request, strictest);
 	if (ttl.ok === false) reasons.push(ttl.errors[0].message);
 	// What the person was actually shown must have disclosed this state. The
 	// digest binding proves they saw a presentation; this proves it was honest.
-	const disclosure = checkPresentationDisclosure(context.request, {
-		proofs: context.proofs ?? [],
-		reviews: context.reviews ?? [],
-		candidate: context.candidate,
-		assurance: approval.assurance,
-		storage_boundary: approval.storage.boundary,
-	});
-	if (disclosure.ok === false) reasons.push(disclosure.errors[0].message);
+	// A reader that cannot supply the bound proofs and reviews cannot re-derive
+	// the whole disclosure, so it may not read `verified`: the check is not
+	// silently narrowed to the lines that happen to be derivable.
+	if (context.proofs === undefined || context.reviews === undefined) {
+		reasons.push("the acceptance's proofs and reviews were not supplied, so the presentation's disclosure cannot be fully re-derived; pass them (or empty arrays) to read this acceptance");
+	} else {
+		const disclosure = checkPresentationDisclosure(context.request, {
+			proofs: context.proofs,
+			reviews: context.reviews,
+			candidate: context.candidate,
+			assurance: approval.assurance,
+			storage_boundary: approval.storage.boundary,
+		});
+		if (disclosure.ok === false) reasons.push(disclosure.errors[0].message);
+	}
 	if (!r.verified_integration) reasons.push("receipt was minted on an unverified host/client integration");
 	if (approval.assurance !== "verified") reasons.push(`approval was minted under the ${approval.assurance} policy`);
 	if (approval.storage.boundary !== "host-enforced") reasons.push("storage boundary was not host-enforced when the approval was minted");
