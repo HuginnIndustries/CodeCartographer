@@ -77,6 +77,7 @@ const {
 	classifyAcceptance,
 	attestationForHostObservation,
 	PROTECTION_HISTORIES,
+	TOOL_RESULT_PATHS,
 } = engineering;
 
 async function readJson(relPath) {
@@ -527,6 +528,7 @@ test("channel trust and at-rest trust are separate: a real UI decision in a writ
 
 test("protection must precede authoritative initialization: a pair forged while unprotected cannot be laundered by later protection, whatever times it carries", () => {
 	assert.deepEqual(PROTECTION_HISTORIES, ["continuous-since-initialization", "enabled-after-initialization", "interrupted", "imported-history"]);
+	assert.deepEqual(TOOL_RESULT_PATHS, ["protected", "unprotected", "none"]);
 	const registry = [{ host: "mcp-server", client: "claude-code", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
 	// The agent, while the namespace is writable, pre-writes a request/approval
 	// pair whose issued and decided times are AFTER the epoch at which the
@@ -550,9 +552,10 @@ test("protection must precede authoritative initialization: a pair forged while 
 	assert.match(enabledLater.reasons[0], /^protection history is enabled-after-initialization/);
 	assert.ok(!enabledLater.reasons.some((r) => /before the boundary/.test(r)), "the timestamp check is not what refuses it");
 	// Nor does an interrupted boundary or imported history, and omitting the history fails closed.
-	for (const protection of ["interrupted", "imported-history", undefined]) {
+	for (const protection of ["interrupted", "imported-history", undefined, null, true, "bogus"]) {
 		const result = classifyAcceptance(forgedApproval, { ...base, current_storage: { boundary: "host-enforced", enforced_since: epoch, protection } });
 		assert.equal(result.class, "cooperative", `protection ${protection}`);
+		assert.match(result.reasons[0], PROTECTION_HISTORIES.includes(protection) ? /^protection history is / : /^protection history is not declared/);
 	}
 	// Only a namespace initialized under protection that never lapsed is eligible — and then the forgery could not have been written.
 	assert.deepEqual(classifyAcceptance(forgedApproval, { ...base, current_storage: { boundary: "host-enforced", enforced_since: epoch, protection: "continuous-since-initialization" } }), { class: "verified", reasons: [] }, "with continuous protection the record is by construction not a forgery; the host's attestation, not the record, carries this");

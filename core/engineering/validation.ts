@@ -49,6 +49,7 @@ import {
 	OBSERVED_COLLECTORS,
 	OBSERVING_ATTESTATIONS,
 	PROOF_RESULTS,
+	PROTECTION_HISTORIES,
 	RECEIPT_AUTHENTICATIONS,
 	RECORD_KINDS,
 	REVIEWER_CONTEXTS,
@@ -147,7 +148,7 @@ export function acceptanceChannelSupported(capabilities: HostCapabilities): { su
  * is `protected` (unreachable by the model's tools, configuration outside
  * agent-writable roots — D4's requirements), otherwise `caller`.
  */
-export function attestationForHostObservation(capabilities: Pick<HostCapabilities, "tool_result_path">): Extract<Attestation, "host-tool-result" | "caller"> {
+export function attestationForHostObservation(capabilities: Partial<Pick<HostCapabilities, "tool_result_path">>): Extract<Attestation, "host-tool-result" | "caller"> {
 	return capabilities.tool_result_path === "protected" ? "host-tool-result" : "caller";
 }
 
@@ -185,10 +186,10 @@ export function classifyAcceptance(
 	const current = context.current_storage;
 	if (!current || current.boundary !== "host-enforced") reasons.push("storage boundary is not host-enforced now; the record could have been rewritten by an agent tool");
 	else {
-		if (current.protection !== "continuous-since-initialization") {
-			reasons.push(
-				`protection history is ${String(current.protection)}: the namespace held records while unprotected, and no timestamp inside a record can show it was not written then`,
-			);
+		if (!PROTECTION_HISTORIES.includes(current.protection as never)) {
+			reasons.push("protection history is not declared; the namespace cannot be treated as continuously protected");
+		} else if (current.protection !== "continuous-since-initialization") {
+			reasons.push(`protection history is ${current.protection}: the namespace held records while unprotected, and no timestamp inside a record can show it was not written then`);
 		}
 		if (!isTimestamp(current.enforced_since)) reasons.push("the boundary's enforced_since instant is missing or malformed");
 		else if (before(approval.decided_at, current.enforced_since)) {
