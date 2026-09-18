@@ -13,11 +13,16 @@ Paths are parametrized. Before running, export:
 ```bash
 export SPIKE_ROOT=/path/to/a/disposable/directory     # holds project/, mcp.log, hook logs
 export CODECARTO_REPO=/path/to/this/checkout           # for the MCP SDK under node_modules
-mkdir -p "$SPIKE_ROOT/project/.codecarto/engineering/inbox"
-envsubst < settings-E3-sandbox.json > "$SPIKE_ROOT/settings-E3.json"   # likewise E4, mcp-config
+mkdir -p "$SPIKE_ROOT/project/.codecarto/engineering/inbox" "$SPIKE_ROOT/hooks"
+envsubst < settings-E3-sandbox.json        > "$SPIKE_ROOT/settings-E3.json"
+envsubst < settings-E4-sandbox-hooks.json  > "$SPIKE_ROOT/settings-E4.json"
+envsubst < settings-E5-protected-hook.json > "$SPIKE_ROOT/settings-E5.json"
+envsubst < mcp-config.json                 > "$SPIKE_ROOT/mcp-config.json"
 envsubst < mcp-server.mjs > "$SPIKE_ROOT/mcp-server.mjs"
-envsubst < observe.sh > "$SPIKE_ROOT/observe.sh" && chmod +x "$SPIKE_ROOT/observe.sh"
+envsubst < observe.sh > "$SPIKE_ROOT/hooks/observe.sh" && chmod 755 "$SPIKE_ROOT/hooks/observe.sh"
 ```
+
+The settings files reference `$SPIKE_ROOT/settings-E5.json` (its own path, in `denyWrite`) and `$SPIKE_ROOT/hooks/observe.sh`; the names above match those references.
 
 | File | Used by | What it is |
 |---|---|---|
@@ -25,8 +30,9 @@ envsubst < observe.sh > "$SPIKE_ROOT/observe.sh" && chmod +x "$SPIKE_ROOT/observ
 | `mcp-config.json` | E1 | Registers that server for one `claude` run only |
 | `settings-E2-deny-only.json` | E2 | `permissions.deny` on `Write`/`Edit` under `.codecarto/engineering/`, no sandbox |
 | `settings-E3-sandbox.json` | E3 | The same deny rules plus `sandbox.enabled`, `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, `filesystem.denyWrite` on the namespace |
-| `settings-E4-sandbox-hooks.json` | E4 | E3 plus `PostToolUse` and `PostToolUseFailure` hooks (matcher `Bash`) running `observe.sh` |
-| `observe.sh` | E4 | The hook: writes its stdin (the host-delivered tool result) into `$SPIKE_ROOT/project/.codecarto/engineering/inbox/` — a path the sandbox denies to the model's Bash |
+| `settings-E4-sandbox-hooks.json` | E4 | E3 plus `PostToolUse` and `PostToolUseFailure` hooks (matcher `Bash`) running `observe.sh`. **Superseded:** review found it leaves `$SPIKE_ROOT/hooks/` unprotected, so a sandboxed model could rewrite the script that then runs unsandboxed. Kept only as the configuration E5 corrects. |
+| `settings-E5-protected-hook.json` | E5 | E4 plus `denyWrite` on `$SPIKE_ROOT/hooks` and on the settings file itself, and `Write`/`Edit` deny rules on the hook directory. The only configuration this spike claims `tool_result_path: protected` for. |
+| `observe.sh` | E4, E5 | The hook: writes its stdin (the host-delivered tool result) into `$SPIKE_ROOT/project/.codecarto/engineering/inbox/` — a path the sandbox denies to the model's Bash. Hardened for E5: absolute interpreter, `PATH=/usr/bin:/bin`, every command by absolute path, nothing sourced |
 
 Run from `$SPIKE_ROOT/project` with `CLAUDECODE` unset (a nested launch is
 refused otherwise), e.g.:
