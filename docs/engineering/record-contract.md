@@ -213,7 +213,9 @@ Not a record kind; the object the core issues (`buildAcceptanceRequest`, pure) a
 | slice | `pending` → `active`, `abandoned`; `active` → `blocked`, `accepted`, `abandoned`; `blocked` → `active`, `abandoned` |
 | attempt | `running` → `failed`, `blocked`, `ready-for-review`, `needs-human-acceptance`, `superseded`; `failed`/`blocked` → `superseded`; `ready-for-review` → `needs-human-acceptance`, `accepted`, `blocked`, `superseded`; `needs-human-acceptance` → `accepted`, `blocked`, `superseded` |
 
-A change becomes `accepted` only when the store records an acceptance, never through a `plan` update. An attempt is never `accepted` straight from `running`.
+A change becomes `accepted` only when the store records an acceptance, never through a `plan` update. An attempt is never `accepted` straight from `running`. A `failed` or `blocked` attempt has no way back: the retry is a **new** attempt started with `parent_attempt_id` naming it (and, when the new one corrects an observation, `supersedes_attempt_id`), so the old record and its evidence stay exactly as they were.
+
+For the store (E02): when re-checking an approval already on disk, `consumed_nonces` must be the nonces of the *other* approvals in the change — including the approval's own nonce would make every stored approval self-reject as replayed.
 
 ## Required records for acceptance
 
