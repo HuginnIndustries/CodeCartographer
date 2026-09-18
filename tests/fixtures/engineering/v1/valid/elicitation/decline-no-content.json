@@ -1,0 +1,7 @@
+{
+	"description": "dialog dismissed; no decision",
+	"response": {
+		"action": "decline"
+	},
+	"outcome": "declined"
+}

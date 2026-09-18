@@ -1,0 +1,10 @@
+{
+	"description": "form submitted (the form-level Accept button), Decision = reject — observed live; reading `action` would mint an approval out of a rejection",
+	"response": {
+		"action": "accept",
+		"content": {
+			"decision": "reject"
+		}
+	},
+	"outcome": "rejected"
+}

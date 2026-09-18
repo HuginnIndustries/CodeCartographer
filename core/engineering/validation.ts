@@ -43,6 +43,7 @@ import {
 	COLLECTOR_RANK,
 	ENGINEERING_SCHEMA_VERSION,
 	EXCLUSION_REASONS,
+	JSONRPC_REQUEST_TIMEOUT_CODE,
 	MUTATING_CHANGE_ACTIONS,
 	OBJECTION_DISPOSITIONS,
 	OBJECTION_SEVERITIES,
@@ -77,6 +78,8 @@ import {
 	type Attestation,
 	type EngineeringError,
 	type EngineeringErrorCode,
+	type ElicitationOutcome,
+	type ElicitationResponse,
 	type EngineeringRecord,
 	type EvidenceAuthority,
 	type HostCapabilities,
@@ -90,6 +93,7 @@ import {
 	type SnapshotRecord,
 	type StorageBoundary,
 	type ValidationOutcome,
+	type VerifiedAcceptanceIntegration,
 } from "./types.ts";
 
 // ---------- collectors ----------
@@ -131,15 +135,26 @@ export function proofDischarges(proof: Pick<ProofRecord, "obligation_id" | "resu
  * {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}. Anything else stops at
  * `needs-human-acceptance` with the reason spelled out.
  */
-export function acceptanceChannelSupported(capabilities: HostCapabilities): { supported: true; channel: "mcp-elicitation" | "host-native" } | { supported: false; reason: string } {
+export function acceptanceChannelSupported(
+	capabilities: HostCapabilities,
+	/** The registry to check against; the contract's own unless a test supplies one. */
+	registry?: ReadonlyArray<VerifiedAcceptanceIntegration>,
+): { supported: true; channel: "mcp-elicitation" | "host-native"; integration: VerifiedAcceptanceIntegration } | { supported: false; reason: string } {
 	if (capabilities.human_acceptance === "none") return { supported: false, reason: "the host declares no human-acceptance channel" };
 	const pair = `${capabilities.human_acceptance} on ${capabilities.label ?? "this host"} / ${capabilities.client?.name ?? "unknown client"}`;
-	const registered = VERIFIED_ACCEPTANCE_INTEGRATIONS.some(
+	const registered = (registry ?? VERIFIED_ACCEPTANCE_INTEGRATIONS).filter(
 		(entry) => entry.channel === capabilities.human_acceptance && entry.host === capabilities.label && entry.client === capabilities.client?.name,
 	);
-	if (!registered) return { supported: false, reason: `${pair} is not a verified integration; a client advertising the capability is not enough` };
+	if (registered.length === 0) return { supported: false, reason: `${pair} is not a verified integration; a client advertising the capability is not enough` };
+	// The client updates itself; an entry is good only for the exact version it was checked on.
+	const live = capabilities.client?.version;
+	if (live === undefined) return { supported: false, reason: `${pair} did not report a client version; the registry is keyed by exact version` };
+	const match = registered.find((entry) => entry.client_version === live);
+	if (!match) {
+		return { supported: false, reason: `${pair} is registered for version ${registered.map((e) => e.client_version).join(", ")} but the live client is ${live}; re-run the integration check on ${live}` };
+	}
 	if (!capabilities.verified_integration) return { supported: false, reason: `${pair} is registered but the adapter did not declare it verified` };
-	return { supported: true, channel: capabilities.human_acceptance };
+	return { supported: true, channel: capabilities.human_acceptance, integration: match };
 }
 
 /**
@@ -153,17 +168,120 @@ export function attestationForHostObservation(capabilities: Partial<Pick<HostCap
 }
 
 /**
+ * What a client's elicitation answer decided. The decision derives ONLY from
+ * `content.decision`; `action` says whether a form came back at all. The D1
+ * live check produced all of the first three shapes from one person at one
+ * dialog, including `action: "accept"` with `content.decision: "reject"`.
+ *
+ * A thrown response is a timeout only on the structured JSON-RPC code
+ * {@link JSONRPC_REQUEST_TIMEOUT_CODE}. When the adapter captured a numeric
+ * `code` that code alone decides, because error prose is host-formatted and
+ * may quote text a caller supplied — `{ threw: "accept: request timed out" }`
+ * is not evidence of a timeout. Only when no code was captured does the
+ * message text stand in, and then it must carry the code token or be a bare
+ * timeout sentence, not merely contain the words somewhere.
+ */
+export function elicitationDecision(response: ElicitationResponse): ElicitationOutcome {
+	if ("threw" in response) return threwTimedOut(response) ? "timed-out" : "invalid";
+	if (response.action === "decline") return "declined";
+	if (response.action === "cancel") return "cancelled";
+	if (response.action !== "accept") return "invalid";
+	const content = isPlainObject(response.content) ? response.content : null;
+	const decision = content?.decision;
+	if (decision === "accept") return "accepted";
+	if (decision === "reject") return "rejected";
+	return "invalid";
+}
+
+/** The code token as an SDK renders it into a message, e.g. `MCP error -32001: …`. */
+const TIMEOUT_CODE_IN_TEXT = new RegExp(String.raw`(?:^|[^\d-])${JSONRPC_REQUEST_TIMEOUT_CODE}(?![\d])`);
+/** A message that is *only* a timeout sentence; anything with a caller-supplied prefix is not. */
+const BARE_TIMEOUT_TEXT = /^(?:mcp\s+error:?\s*)?request\s+timed\s+out\.?$/i;
+
+function threwTimedOut(response: { threw: string; code?: number }): boolean {
+	// The structured code is authoritative when the adapter captured one: a
+	// client that reports some other error has not timed out, whatever its
+	// message says.
+	if (typeof response.code === "number") return response.code === JSONRPC_REQUEST_TIMEOUT_CODE;
+	if (typeof response.threw !== "string") return false;
+	const text = response.threw.trim();
+	return TIMEOUT_CODE_IN_TEXT.test(text) || BARE_TIMEOUT_TEXT.test(text);
+}
+
+/**
+ * Whether the request's validity window fits inside the client's observed
+ * request timeout, so a timeout can never be mistaken for a decision that
+ * arrived late. Unknown timeout → not within: the adapter must measure it
+ * before relying on the channel.
+ *
+ * This is the predicate; {@link checkAcceptanceRequestTtl} is the enforcement
+ * point, and {@link classifyAcceptance} calls that one — no trust rule in
+ * this contract depends on an adapter remembering to call a helper.
+ */
+export function acceptanceTtlWithin(request: Pick<AcceptanceRequest, "issued_at" | "expires_at">, integration: Pick<VerifiedAcceptanceIntegration, "client_request_timeout_ms">): boolean {
+	if (!isTimestamp(request.issued_at) || !isTimestamp(request.expires_at) || !isMeasuredTimeout(integration.client_request_timeout_ms)) return false;
+	return Date.parse(request.expires_at) - Date.parse(request.issued_at) < integration.client_request_timeout_ms;
+}
+
+/**
+ * A measured client request timeout: a finite, positive number of
+ * milliseconds. Anything else — a numeric string, `Infinity`, a one-element
+ * array that would coerce past `<`, `NaN`, zero, a negative — is not a
+ * measurement, and the comparison must refuse rather than coerce. The
+ * registry is data an adapter supplies, so its shape is checked, not assumed.
+ */
+function isMeasuredTimeout(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * The enforcement form of {@link acceptanceTtlWithin}: `ok` when the request
+ * may bind a `verified` acceptance on this integration, otherwise
+ * `invalid-value` at `path` naming the reason. Fails closed on an unmeasured
+ * `client_request_timeout_ms`, on a missing request, and on a malformed
+ * window — an unmeasured client bounds nothing.
+ *
+ * {@link classifyAcceptance} calls this, so the rule cannot be skipped by an
+ * adapter that forgets the helper. A TTL longer than the client's timeout is
+ * a configuration error in how the request was minted, not evidence of
+ * forgery, so `classifyAcceptance` lowers the reading to `cooperative`
+ * rather than invalidating the receipt: the human's answer was real, but the
+ * channel could not have distinguished a timeout from a decline, so the
+ * record may not be read as verified.
+ */
+export function checkAcceptanceRequestTtl(
+	request: Pick<AcceptanceRequest, "issued_at" | "expires_at"> | undefined,
+	integration: Pick<VerifiedAcceptanceIntegration, "client_request_timeout_ms"> | undefined,
+	path: string = "/expires_at",
+): ValidationOutcome<true> {
+	const refuse = (message: string): ValidationOutcome<true> => ({ ok: false, errors: [{ code: "invalid-value", path, message }] });
+	if (!request) return refuse("no acceptance request is available, so its TTL cannot be checked against the client's request timeout");
+	if (!integration || !isMeasuredTimeout(integration.client_request_timeout_ms)) {
+		return refuse("the registered integration records no usable client_request_timeout_ms (a finite positive number of milliseconds); an unmeasured client request timeout cannot bound a request's TTL");
+	}
+	if (acceptanceTtlWithin(request, integration)) return { ok: true, value: true };
+	if (!isTimestamp(request.issued_at) || !isTimestamp(request.expires_at)) {
+		return refuse("the request's validity window is not two well-formed instants, so its TTL cannot be compared to the client's request timeout");
+	}
+	const ttl = Date.parse(request.expires_at) - Date.parse(request.issued_at);
+	return refuse(
+		`the request's TTL of ${ttl} ms is not shorter than the client's ${integration.client_request_timeout_ms} ms request timeout; the client would give up before the request expired and a timeout could not be told from a decline`,
+	);
+}
+
+/**
  * How to read an approval now. Every leg must hold for `verified`: the
  * receipt evaluates cleanly, the integration is in the registry now, the
- * approval was minted under the `verified` policy over a host-enforced
- * boundary, and the reader's out-of-namespace `CurrentStorage` says the
- * boundary is enforced now and has been continuously since the namespace
- * was initialized. A legitimate UI decision stored where agent tools can
- * write is `cooperative`, not `verified`: the channel does not protect the
- * file. And no timestamp inside the record can prove it was written under
- * protection — a record forged while unprotected can carry any time — so
- * the `decided_at`/`enforced_since` comparison below is a consistency
- * check that can only lower trust, never establish it.
+ * request's TTL fits inside that integration's observed client request
+ * timeout, the approval was minted under the `verified` policy over a
+ * host-enforced boundary, and the reader's out-of-namespace `CurrentStorage`
+ * says the boundary is enforced now and has been continuously since the
+ * namespace was initialized. A legitimate UI decision stored where agent
+ * tools can write is `cooperative`, not `verified`: the channel does not
+ * protect the file. And no timestamp inside the record can prove it was
+ * written under protection — a record forged while unprotected can carry any
+ * time — so the `decided_at`/`enforced_since` comparison below is a
+ * consistency check that can only lower trust, never establish it.
  */
 export function classifyAcceptance(
 	approval: ApprovalRecord,
@@ -171,6 +289,17 @@ export function classifyAcceptance(
 		current_storage: CurrentStorage;
 		/** The registry to check the receipt's host/client/channel against; the contract's own unless a test supplies one. */
 		integrations?: typeof VERIFIED_ACCEPTANCE_INTEGRATIONS;
+		/**
+		 * The proofs and reviews the acceptance binds to. Required for a
+		 * `verified` reading: without them the disclosure check cannot re-derive
+		 * the proof and reviewer lines, and a reader that simply omits them
+		 * would restore the very bypass {@link checkPresentationDisclosure}
+		 * closes. Omitting them is not an error — the reading degrades to
+		 * `cooperative` with an explicit reason, because a degradation must
+		 * lower trust, never raise it. Pass `[]` to assert there are none.
+		 */
+		proofs?: ProofRecord[];
+		reviews?: ReviewRecord[];
 	},
 ): { class: AcceptanceClass; reasons: string[] } {
 	const receipt = evaluateApprovalReceipt(approval, context);
@@ -178,8 +307,42 @@ export function classifyAcceptance(
 	if (!receipt.accepted) return { class: "invalid", reasons: ["decision is rejected"] };
 	const reasons: string[] = [];
 	const r = approval.receipt;
-	const registered = (context.integrations ?? VERIFIED_ACCEPTANCE_INTEGRATIONS).some((e) => e.host === r.host && e.client === r.client.name && e.channel === r.channel);
-	if (!registered) reasons.push(`${r.channel} on ${r.host} / ${r.client.name} is not in VERIFIED_ACCEPTANCE_INTEGRATIONS now`);
+	const matches = (context.integrations ?? VERIFIED_ACCEPTANCE_INTEGRATIONS).filter(
+		(e) => e.host === r.host && e.client === r.client.name && e.channel === r.channel && e.client_version === r.client.version,
+	);
+	if (matches.length === 0) reasons.push(`${r.channel} on ${r.host} / ${r.client.name} ${r.client.version ?? "(no version)"} is not in VERIFIED_ACCEPTANCE_INTEGRATIONS now`);
+	// The TTL is enforced here, where no caller can skip it. A tuple must
+	// resolve to exactly one entry: duplicates would let array order pick the
+	// most generous timeout, so the registry's shape — not the reading — would
+	// decide trust. And the strictest matching timeout is the one that binds,
+	// so an entry that never measured one cannot be sidestepped by a sibling
+	// that did.
+	if (matches.length > 1) {
+		reasons.push(`${matches.length} registry entries match ${r.channel} on ${r.host} / ${r.client.name} ${r.client.version}; a host/client/version/channel tuple must be registered once, or its timeout is whichever entry happens to be first`);
+	}
+	const strictest = matches.reduce<(typeof matches)[number] | undefined>(
+		(worst, e) => (worst === undefined ? e : !isMeasuredTimeout(worst.client_request_timeout_ms) ? worst : !isMeasuredTimeout(e.client_request_timeout_ms) ? e : e.client_request_timeout_ms < worst.client_request_timeout_ms ? e : worst),
+		undefined,
+	);
+	const ttl = checkAcceptanceRequestTtl(context.request, strictest);
+	if (ttl.ok === false) reasons.push(ttl.errors[0].message);
+	// What the person was actually shown must have disclosed this state. The
+	// digest binding proves they saw a presentation; this proves it was honest.
+	// A reader that cannot supply the bound proofs and reviews cannot re-derive
+	// the whole disclosure, so it may not read `verified`: the check is not
+	// silently narrowed to the lines that happen to be derivable.
+	if (context.proofs === undefined || context.reviews === undefined) {
+		reasons.push("the acceptance's proofs and reviews were not supplied, so the presentation's disclosure cannot be fully re-derived; pass them (or empty arrays) to read this acceptance");
+	} else {
+		const disclosure = checkPresentationDisclosure(context.request, {
+			proofs: context.proofs,
+			reviews: context.reviews,
+			candidate: context.candidate,
+			assurance: approval.assurance,
+			storage_boundary: approval.storage.boundary,
+		});
+		if (disclosure.ok === false) reasons.push(disclosure.errors[0].message);
+	}
 	if (!r.verified_integration) reasons.push("receipt was minted on an unverified host/client integration");
 	if (approval.assurance !== "verified") reasons.push(`approval was minted under the ${approval.assurance} policy`);
 	if (approval.storage.boundary !== "host-enforced") reasons.push("storage boundary was not host-enforced when the approval was minted");
@@ -504,7 +667,7 @@ const RECEIPT_SHAPE: Shape = {
 	presentation_digest: req(digest),
 	channel: req(oneOf(APPROVAL_CHANNELS)),
 	host: req(nonEmptyString),
-	client: req(objectOf({ name: req(nonEmptyString), version: opt(nonEmptyString) })),
+	client: req(objectOf({ name: req(nonEmptyString), version: req(nonEmptyString) })),
 	host_session: opt(nonEmptyString),
 	issued_at: req(timestamp),
 	responded_at: req(timestamp),
@@ -1012,6 +1175,39 @@ export function standardLimitations(args: { proofs: ProofRecord[]; reviews: Revi
 	if (args.storage_boundary !== "host-enforced") lines.push("The engineering namespace is writable by agent tools; the stored record of this decision is cooperative, not verified.");
 	if (args.reviews.length > 0) lines.push("Reviewer separation is declared by the review's author, not authenticated.");
 	return lines;
+}
+
+/**
+ * Whether the presentation a person was actually shown disclosed what this
+ * state requires. `buildAcceptanceRequest` composes an honest presentation,
+ * but the digest binding only proves the human saw *a* presentation — not
+ * that it told the truth. A request minted by any other path could show an
+ * empty `limitations` list over a claimed proof or an unprotected namespace
+ * and still validate, so the disclosure is re-derived here from the same
+ * records the acceptance binds to and every required line must be present
+ * verbatim. Extra lines are allowed: a host may disclose more, never less.
+ *
+ * {@link classifyAcceptance} calls this before it may return `verified`, so
+ * an adapter cannot skip it by building the request itself.
+ */
+export function checkPresentationDisclosure(
+	request: Pick<AcceptanceRequest, "presentation"> | undefined,
+	args: { proofs: ProofRecord[]; reviews: ReviewRecord[]; candidate?: SnapshotRecord; assurance: AssurancePolicy; storage_boundary: StorageBoundary },
+	path: string = "/presentation/limitations",
+): ValidationOutcome<true> {
+	const refuse = (message: string): ValidationOutcome<true> => ({ ok: false, errors: [{ code: "invalid-value", path, message }] });
+	if (!request || !isPlainObject(request.presentation)) return refuse("no presentation is available, so what the person was shown cannot be checked");
+	const shown = request.presentation.limitations;
+	if (!Array.isArray(shown) || shown.some((line) => typeof line !== "string")) return refuse("the presentation's limitations are not a list of strings");
+	const missing = standardLimitations(args).filter((line) => !shown.includes(line));
+	if (missing.length > 0) {
+		return refuse(`the presentation withheld ${missing.length} required disclosure(s) from the person who answered: ${missing.join(" | ")}`);
+	}
+	const declared = request.presentation.assurance;
+	if (declared !== args.assurance) {
+		return refuse(`the presentation said the decision was asked under the ${String(declared)} policy, but the acceptance is read under ${args.assurance}`);
+	}
+	return { ok: true, value: true };
 }
 
 /**

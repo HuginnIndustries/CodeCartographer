@@ -1,0 +1,10 @@
+{
+	"description": "an action outside the protocol",
+	"response": {
+		"action": "approve",
+		"content": {
+			"decision": "accept"
+		}
+	},
+	"outcome": "invalid"
+}

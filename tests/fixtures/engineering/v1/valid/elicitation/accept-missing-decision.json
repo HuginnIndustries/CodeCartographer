@@ -1,0 +1,10 @@
+{
+	"description": "form submitted with no Decision (the required-field enforcement is client behaviour the adapter must not assume)",
+	"response": {
+		"action": "accept",
+		"content": {
+			"note": "looks fine"
+		}
+	},
+	"outcome": "invalid"
+}

@@ -1,0 +1,7 @@
+{
+	"description": "cancelled by the client",
+	"response": {
+		"action": "cancel"
+	},
+	"outcome": "cancelled"
+}

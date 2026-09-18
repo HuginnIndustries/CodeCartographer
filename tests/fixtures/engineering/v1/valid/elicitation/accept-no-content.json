@@ -1,0 +1,7 @@
+{
+	"description": "accept with no form content at all",
+	"response": {
+		"action": "accept"
+	},
+	"outcome": "invalid"
+}

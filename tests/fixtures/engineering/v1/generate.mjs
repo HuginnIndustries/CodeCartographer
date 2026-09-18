@@ -59,8 +59,11 @@ const T = {
 	candidate: "2026-09-17T10:22:00Z",
 	review: "2026-09-17T10:30:00Z",
 	issued: "2026-09-17T10:40:00Z",
-	expires: "2026-09-17T11:40:00Z",
-	responded: "2026-09-17T10:45:00Z",
+	// The window must fit inside the client's observed elicitation request
+	// timeout (~150 s on claude-code 2.1.277), or a timeout cannot be told
+	// from a decline: 120 s, answered at 60 s.
+	expires: "2026-09-17T10:42:00Z",
+	responded: "2026-09-17T10:41:00Z",
 	ended: "2026-09-17T10:45:01Z",
 };
 const NONCE = "0123456789abcdef0123456789abcdef";
@@ -325,7 +328,7 @@ const approval = {
 		presentation_digest: acceptanceRequest.presentation_digest,
 		channel: "mcp-elicitation",
 		host: "mcp-server",
-		client: { name: "claude-code", version: "2.1.0" },
+		client: { name: "claude-code", version: "2.1.277" },
 		host_session: "stdio session 1",
 		issued_at: T.issued,
 		responded_at: T.responded,
@@ -1215,6 +1218,13 @@ const invalid = {
 		expect: [{ code: "invalid-value", path: "/expires_at" }],
 		value: withPatch(acceptanceRequest, { expires_at: "2026-09-19T10:40:00Z" }),
 	},
+	"acceptance-request-ttl-outlives-client-timeout": {
+		description:
+			"A window inside the contract's 24 h cap but longer than the client's own request timeout: the client gives up first, so a timeout cannot be told from a decline. Refused by checkAcceptanceRequestTtl, which classifyAcceptance calls.",
+		subject: "acceptance-request-ttl",
+		expect: [{ code: "invalid-value", path: "/expires_at" }],
+		value: withPatch(acceptanceRequest, { expires_at: "2026-09-17T11:40:00Z" }),
+	},
 	"acceptance-request-presentation-digest-mismatch": {
 		description: "A presentation edited after issue no longer matches its digest.",
 		subject: "acceptance-request",
@@ -1231,6 +1241,24 @@ const invalid = {
 			return v;
 		})(),
 	},
+};
+
+// ---------- elicitation shapes ----------
+// The first three are verbatim from the maintainer's D1 live check on
+// claude-code 2.1.277 (2026-09-18): one person, one dialog, three answers.
+// The decision derives only from content.decision; `action` never authorizes.
+
+const elicitation = {
+	"accept-accept": { description: "form submitted, Decision = accept", response: { action: "accept", content: { decision: "accept" } }, outcome: "accepted" },
+	"accept-reject": { description: "form submitted (the form-level Accept button), Decision = reject — observed live; reading `action` would mint an approval out of a rejection", response: { action: "accept", content: { decision: "reject" } }, outcome: "rejected" },
+	"decline-no-content": { description: "dialog dismissed; no decision", response: { action: "decline" }, outcome: "declined" },
+	cancel: { description: "cancelled by the client", response: { action: "cancel" }, outcome: "cancelled" },
+	"timed-out": { description: "the client's request timeout elapsed before anyone answered — observed live after ~2.5 minutes; not a decline", response: { threw: "MCP error -32001: Request timed out" }, outcome: "timed-out" },
+	"accept-missing-decision": { description: "form submitted with no Decision (the required-field enforcement is client behaviour the adapter must not assume)", response: { action: "accept", content: { note: "looks fine" } }, outcome: "invalid" },
+	"accept-unknown-decision": { description: "form submitted with a value outside the enum", response: { action: "accept", content: { decision: "yes" } }, outcome: "invalid" },
+	"accept-decision-in-note": { description: "the person typed the answer into the free-text field while Decision stayed unset — observed once during the live check before correction", response: { action: "accept", content: { decision: "", note: "accept" } }, outcome: "invalid" },
+	"accept-no-content": { description: "accept with no form content at all", response: { action: "accept" }, outcome: "invalid" },
+	"unknown-action": { description: "an action outside the protocol", response: { action: "approve", content: { decision: "accept" } }, outcome: "invalid" },
 };
 
 // ---------- write ----------
@@ -1257,4 +1285,5 @@ await writeJson("valid/acceptance-request.json", acceptanceRequest);
 await writeJson("valid/bundle.json", bundle);
 for (const [action, request] of Object.entries(requests)) await writeJson(`valid/requests/${action}.json`, request);
 for (const [name, fixture] of Object.entries(invalid)) await writeJson(`invalid/${name}.json`, fixture);
-console.log(`wrote ${12 + Object.keys(requests).length + Object.keys(invalid).length} fixtures`);
+for (const [name, fixture] of Object.entries(elicitation)) await writeJson(`valid/elicitation/${name}.json`, fixture);
+console.log(`wrote ${12 + Object.keys(requests).length + Object.keys(invalid).length + Object.keys(elicitation).length} fixtures`);

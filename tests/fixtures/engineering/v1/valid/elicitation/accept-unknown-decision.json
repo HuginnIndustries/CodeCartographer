@@ -1,0 +1,10 @@
+{
+	"description": "form submitted with a value outside the enum",
+	"response": {
+		"action": "accept",
+		"content": {
+			"decision": "yes"
+		}
+	},
+	"outcome": "invalid"
+}

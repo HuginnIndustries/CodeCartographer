@@ -1,0 +1,10 @@
+{
+	"description": "form submitted, Decision = accept",
+	"response": {
+		"action": "accept",
+		"content": {
+			"decision": "accept"
+		}
+	},
+	"outcome": "accepted"
+}
