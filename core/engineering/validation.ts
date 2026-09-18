@@ -73,6 +73,7 @@ import {
 	type ChangeRequest,
 	type Collector,
 	type CurrentStorage,
+	type Attestation,
 	type EngineeringError,
 	type EngineeringErrorCode,
 	type EngineeringRecord,
@@ -141,12 +142,27 @@ export function acceptanceChannelSupported(capabilities: HostCapabilities): { su
 }
 
 /**
+ * The attestation an adapter may put on a host-observed proof it ingests
+ * through the host's tool-result path: `host-tool-result` only when the path
+ * is `protected` (unreachable by the model's tools, configuration outside
+ * agent-writable roots — D4's requirements), otherwise `caller`.
+ */
+export function attestationForHostObservation(capabilities: Pick<HostCapabilities, "tool_result_path">): Extract<Attestation, "host-tool-result" | "caller"> {
+	return capabilities.tool_result_path === "protected" ? "host-tool-result" : "caller";
+}
+
+/**
  * How to read an approval now. Every leg must hold for `verified`: the
- * receipt evaluates cleanly, the integration was verified, the approval was
- * minted under the `verified` policy over a host-enforced boundary, and the
- * boundary is still host-enforced for the reader. A legitimate UI decision
- * stored where agent tools can write is `cooperative`, not `verified`: the
- * channel does not protect the file.
+ * receipt evaluates cleanly, the integration is in the registry now, the
+ * approval was minted under the `verified` policy over a host-enforced
+ * boundary, and the reader's out-of-namespace `CurrentStorage` says the
+ * boundary is enforced now and has been continuously since the namespace
+ * was initialized. A legitimate UI decision stored where agent tools can
+ * write is `cooperative`, not `verified`: the channel does not protect the
+ * file. And no timestamp inside the record can prove it was written under
+ * protection — a record forged while unprotected can carry any time — so
+ * the `decided_at`/`enforced_since` comparison below is a consistency
+ * check that can only lower trust, never establish it.
  */
 export function classifyAcceptance(
 	approval: ApprovalRecord,
@@ -168,8 +184,17 @@ export function classifyAcceptance(
 	if (approval.storage.boundary !== "host-enforced") reasons.push("storage boundary was not host-enforced when the approval was minted");
 	const current = context.current_storage;
 	if (!current || current.boundary !== "host-enforced") reasons.push("storage boundary is not host-enforced now; the record could have been rewritten by an agent tool");
-	else if (!isTimestamp(current.enforced_since)) reasons.push("the boundary's enforced_since instant is missing or malformed; continuity cannot be established");
-	else if (before(approval.decided_at, current.enforced_since)) reasons.push(`approval was decided at ${approval.decided_at}, before the boundary was enforced at ${current.enforced_since}; its storage fields are self-reported`);
+	else {
+		if (current.protection !== "continuous-since-initialization") {
+			reasons.push(
+				`protection history is ${String(current.protection)}: the namespace held records while unprotected, and no timestamp inside a record can show it was not written then`,
+			);
+		}
+		if (!isTimestamp(current.enforced_since)) reasons.push("the boundary's enforced_since instant is missing or malformed");
+		else if (before(approval.decided_at, current.enforced_since)) {
+			reasons.push(`approval was decided at ${approval.decided_at}, before the boundary was enforced at ${current.enforced_since}; inconsistent with continuous protection`);
+		}
+	}
 	return reasons.length === 0 ? { class: "verified", reasons: [] } : { class: "cooperative", reasons };
 }
 

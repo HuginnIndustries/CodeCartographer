@@ -117,13 +117,37 @@ export const SCENARIO_KINDS = ["behavior", "preserved", "non-functional"] as con
 export type ScenarioKind = (typeof SCENARIO_KINDS)[number];
 
 /**
- * What a reader knows about the namespace now. A host-enforced boundary
- * carries the instant since which it has been continuously enforced, taken
- * from host configuration outside the namespace (D3); an approval decided
- * before that instant was written into an unprotected namespace and stays
- * cooperative however it is labelled.
+ * The host's account, kept outside the namespace, of whether protection has
+ * held for the namespace's whole life. Only `continuous-since-initialization`
+ * makes any record eligible for `verified`: the namespace was created after
+ * the boundary was enforced and the boundary never lapsed. The other three
+ * say why not, and every record under them is cooperative however it is
+ * labelled and whatever timestamps it carries — a record written while the
+ * namespace was unprotected can claim any time it likes.
  */
-export type CurrentStorage = { boundary: "host-enforced"; enforced_since: Timestamp } | { boundary: "none" };
+export const PROTECTION_HISTORIES = ["continuous-since-initialization", "enabled-after-initialization", "interrupted", "imported-history"] as const;
+export type ProtectionHistory = (typeof PROTECTION_HISTORIES)[number];
+
+/**
+ * What a reader knows about the namespace now, from host configuration
+ * outside the namespace (D3): whether the boundary is enforced, since when,
+ * and whether it has held continuously since the namespace was initialized.
+ * Nothing inside the namespace can substitute for `protection`: every
+ * timestamp and flag in a record is writable by whoever could write the
+ * record.
+ */
+export type CurrentStorage = { boundary: "host-enforced"; enforced_since: Timestamp; protection: ProtectionHistory } | { boundary: "none" };
+
+/**
+ * Whether the host's tool-result path qualifies for `host-tool-result`
+ * attestation: `protected` means the ingestion entry is unreachable by the
+ * model's tools and its configuration lives where agent tools cannot write
+ * (D4) — both are requirements, not assurances; `unprotected` means a path
+ * exists but one of them does not hold; `none` means there is no path.
+ * Anything but `protected` yields `caller`.
+ */
+export const TOOL_RESULT_PATHS = ["protected", "unprotected", "none"] as const;
+export type ToolResultPath = (typeof TOOL_RESULT_PATHS)[number];
 
 /**
  * How the acceptance a reader is looking at should be treated once channel,
@@ -639,6 +663,8 @@ export interface HostCapabilities {
 	storage_boundary: StorageBoundary;
 	/** From host/user-level configuration; `verified` unless the operator explicitly chose `cooperative`. */
 	assurance_policy: AssurancePolicy;
+	/** Whether the host's tool-result ingestion path meets D4's requirements; the adapter attests `host-tool-result` only when `protected`. */
+	tool_result_path: ToolResultPath;
 }
 
 /**

@@ -75,6 +75,8 @@ const {
 	proofDischarges,
 	acceptanceChannelSupported,
 	classifyAcceptance,
+	attestationForHostObservation,
+	PROTECTION_HISTORIES,
 } = engineering;
 
 async function readJson(relPath) {
@@ -478,7 +480,7 @@ test("a trusted channel is a proposal until the host/client pair passes the inte
 
 test("channel trust and at-rest trust are separate: a real UI decision in a writable namespace is cooperative", () => {
 	assert.deepEqual(ASSURANCE_POLICIES, ["verified", "cooperative"]);
-	const enforced = { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z" };
+	const enforced = { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "continuous-since-initialization" };
 	const registry = [{ host: "mcp-server", client: "claude-code", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
 	const ctx = (storage, extra = {}) => ({ ...receiptContext(), current_storage: storage, ...extra });
 	// Against the contract's own (empty) registry nothing is verified today, even the fixture approval.
@@ -491,18 +493,18 @@ test("channel trust and at-rest trust are separate: a real UI decision in a writ
 	const now = classifyAcceptance(valid.approval, ctx({ boundary: "none" }, { integrations: registry }));
 	assert.equal(now.class, "cooperative");
 	assert.match(now.reasons[0], /not host-enforced now/);
-	// A boundary enforced after the decision does not retroactively protect the record: its storage fields were self-reported.
-	const late = classifyAcceptance(valid.approval, ctx({ boundary: "host-enforced", enforced_since: "2026-09-17T11:00:00Z" }, { integrations: registry }));
+	// A decision earlier than the boundary's own epoch is inconsistent with continuous protection: a consistency check that can only lower trust.
+	const late = classifyAcceptance(valid.approval, ctx({ ...enforced, enforced_since: "2026-09-17T11:00:00Z" }, { integrations: registry }));
 	assert.equal(late.class, "cooperative");
 	assert.match(late.reasons[0], /before the boundary was enforced/);
-	// A forged record claiming host-enforced storage and a verified integration is still cooperative under a boundary that post-dates it or is absent.
+	// A forged record claiming host-enforced storage and a verified integration is still cooperative under a boundary of none.
 	const forged = { ...valid.approval, storage: { boundary: "host-enforced", note: "forged" } };
 	assert.equal(classifyAcceptance(forged, ctx({ boundary: "none" }, { integrations: registry })).class, "cooperative");
-	assert.equal(classifyAcceptance(forged, ctx({ boundary: "host-enforced", enforced_since: "2026-09-17T11:00:00Z" }, { integrations: registry })).class, "cooperative");
 	// A de-verified pair downgrades old approvals: the receipt's own boolean is not trusted.
 	assert.equal(classifyAcceptance(valid.approval, ctx(enforced, { integrations: [{ ...registry[0], client: "other-client" }] })).class, "cooperative");
 	// Malformed current storage fails closed.
 	assert.equal(classifyAcceptance(valid.approval, ctx({ boundary: "host-enforced" }, { integrations: registry })).class, "cooperative");
+	assert.equal(classifyAcceptance(valid.approval, ctx({ boundary: "host-enforced", enforced_since: enforced.enforced_since }, { integrations: registry })).class, "cooperative", "protection omitted");
 	assert.equal(classifyAcceptance(valid.approval, ctx(undefined, { integrations: registry })).class, "cooperative");
 	// A record minted over an unprotected namespace cannot even be written as verified …
 	assert.deepEqual(codesAt(validateRecord({ ...valid.approval, storage: { boundary: "none", note: "n" } })), ["invalid-value /storage/boundary"]);
@@ -521,6 +523,56 @@ test("channel trust and at-rest trust are separate: a real UI decision in a writ
 	// "verified" is the only spelling of verified: the presentation carries the policy and every proof's authority.
 	assert.equal(valid.request.presentation.assurance, "verified");
 	assert.ok(valid.request.presentation.proof_summary.every((p) => p.authority === "observed"));
+});
+
+test("protection must precede authoritative initialization: a pair forged while unprotected cannot be laundered by later protection, whatever times it carries", () => {
+	assert.deepEqual(PROTECTION_HISTORIES, ["continuous-since-initialization", "enabled-after-initialization", "interrupted", "imported-history"]);
+	const registry = [{ host: "mcp-server", client: "claude-code", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
+	// The agent, while the namespace is writable, pre-writes a request/approval
+	// pair whose issued and decided times are AFTER the epoch at which the
+	// operator will later enable protection. Every timestamp it needs is inside
+	// the records it is writing.
+	const epoch = "2026-09-19T00:00:00Z";
+	const forgedRequest = { ...valid.request, issued_at: "2026-09-20T12:00:00Z", expires_at: "2026-09-20T13:00:00Z" };
+	const forgedApproval = {
+		...valid.approval,
+		decided_at: "2026-09-20T12:30:00Z",
+		receipt: { ...valid.approval.receipt, issued_at: "2026-09-20T12:00:00Z", responded_at: "2026-09-20T12:30:00Z", verified_integration: true },
+		storage: { boundary: "host-enforced", note: "forged while unprotected" },
+	};
+	assert.equal(validateRecord(forgedApproval).ok, true, "byte-level the forgery is a well-formed record");
+	assert.equal(validateAcceptanceRequest(forgedRequest).ok, true);
+	const base = { ...receiptContext(), request: forgedRequest, integrations: registry };
+	// Protection is then enabled on the existing namespace. The record-internal
+	// times post-date the epoch, so a timestamp comparison alone would pass.
+	const enabledLater = classifyAcceptance(forgedApproval, { ...base, current_storage: { boundary: "host-enforced", enforced_since: epoch, protection: "enabled-after-initialization" } });
+	assert.equal(enabledLater.class, "cooperative");
+	assert.match(enabledLater.reasons[0], /^protection history is enabled-after-initialization/);
+	assert.ok(!enabledLater.reasons.some((r) => /before the boundary/.test(r)), "the timestamp check is not what refuses it");
+	// Nor does an interrupted boundary or imported history, and omitting the history fails closed.
+	for (const protection of ["interrupted", "imported-history", undefined]) {
+		const result = classifyAcceptance(forgedApproval, { ...base, current_storage: { boundary: "host-enforced", enforced_since: epoch, protection } });
+		assert.equal(result.class, "cooperative", `protection ${protection}`);
+	}
+	// Only a namespace initialized under protection that never lapsed is eligible — and then the forgery could not have been written.
+	assert.deepEqual(classifyAcceptance(forgedApproval, { ...base, current_storage: { boundary: "host-enforced", enforced_since: epoch, protection: "continuous-since-initialization" } }), { class: "verified", reasons: [] }, "with continuous protection the record is by construction not a forgery; the host's attestation, not the record, carries this");
+	// The same holds for the genuine fixture: continuity is required, not just an early epoch.
+	assert.equal(classifyAcceptance(valid.approval, { ...receiptContext(), integrations: registry, current_storage: { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "imported-history" } }).class, "cooperative");
+	// Nothing in a request can set the protection history or the tool-result path.
+	for (const field of ["current_storage", "protection", "tool_result_path"]) {
+		assert.ok(codesAt(validateChangeRequest({ action: "status", [field]: "continuous-since-initialization" })).includes(`unknown-field /${field}`), field);
+	}
+});
+
+test("host-tool-result attestation requires a protected ingestion path; anything else is a claim", () => {
+	assert.equal(attestationForHostObservation({ tool_result_path: "protected" }), "host-tool-result");
+	assert.equal(attestationForHostObservation({ tool_result_path: "unprotected" }), "caller");
+	assert.equal(attestationForHostObservation({ tool_result_path: "none" }), "caller");
+	assert.equal(attestationForHostObservation({}), "caller", "an undeclared path is not a protected one");
+	// And what that attestation yields on the record is then a claim, not an observation.
+	const viaUnprotectedHook = { ...valid.proof, provenance: { source: "claude-code:post-tool-use-hook", attested_by: attestationForHostObservation({ tool_result_path: "unprotected" }) } };
+	assert.equal(proofAuthority(viaUnprotectedHook), "claimed");
+	assert.equal(proofDischarges(viaUnprotectedHook, valid.slice.proof_obligations[0], "verified"), false);
 });
 
 test("state transitions are a closed table", () => {
