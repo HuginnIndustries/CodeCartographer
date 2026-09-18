@@ -1,0 +1,42 @@
+{
+	"action": "plan",
+	"idempotency_key": "plan-widget-count-1",
+	"change_id": "chg_00000000000000000000c001",
+	"expected_revision": 1,
+	"brief_markdown": "# Brief\n\nMake the widget count include archived widgets.\n",
+	"plan_markdown": "# Plan\n\nOne slice: fix the count and prove it.\n",
+	"slices": [
+		{
+			"title": "Fix the count and prove both scenarios",
+			"deliverable": "countWidgets() counts archived widgets by default; a regression test pins both behaviors.",
+			"scenario_ids": [
+				"S1",
+				"S2"
+			],
+			"depends_on": [],
+			"proof_obligations": [
+				{
+					"id": "O1",
+					"scenario_id": "S1",
+					"check_kind": "test",
+					"description": "tests/widgets-count.test.mjs passes with the archived case added",
+					"minimum_collector": "host-observed"
+				},
+				{
+					"id": "O2",
+					"scenario_id": "S2",
+					"check_kind": "test",
+					"description": "the includeArchived: false case still passes",
+					"minimum_collector": "host-observed"
+				}
+			],
+			"permitted_scope": {
+				"paths": [
+					"src/widgets/**",
+					"tests/widgets-count.test.mjs"
+				],
+				"description": "the counting module and its test"
+			}
+		}
+	]
+}

@@ -1,0 +1,46 @@
+{
+	"description": "Record-level rules apply to the request body too, so the caller sees the error at the request path.",
+	"subject": "request",
+	"expect": [
+		{
+			"code": "duplicate-id",
+			"path": "/acceptance_scenarios/1/id"
+		}
+	],
+	"value": {
+		"action": "create",
+		"idempotency_key": "create-widget-count-1",
+		"title": "Widget count includes archived widgets",
+		"mode": "fix",
+		"requested_outcome": "`countWidgets()` returns archived widgets too, as the API documentation already says it does.",
+		"baseline": {
+			"vcs": "git",
+			"head": "0123456789abcdef0123456789abcdef01234567",
+			"description": "main as of the report"
+		},
+		"scope": {
+			"in_scope": [
+				"src/widgets/count.ts",
+				"tests/widgets-count.test.mjs"
+			],
+			"non_goals": [
+				"Changing the archived-widget storage format"
+			]
+		},
+		"preserved_contracts": [
+			"`countWidgets({ includeArchived: false })` keeps returning only live widgets"
+		],
+		"acceptance_scenarios": [
+			{
+				"id": "S1",
+				"kind": "behavior",
+				"description": "Counting with the default options includes archived widgets."
+			},
+			{
+				"id": "S1",
+				"kind": "preserved",
+				"description": "Counting with includeArchived: false excludes archived widgets."
+			}
+		]
+	}
+}

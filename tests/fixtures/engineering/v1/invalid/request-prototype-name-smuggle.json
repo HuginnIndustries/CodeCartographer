@@ -1,0 +1,17 @@
+{
+	"description": "`in` would have let a prototype name through; the request shape uses own-property checks.",
+	"subject": "request",
+	"expect": [
+		{
+			"code": "unknown-field",
+			"path": "/toString"
+		}
+	],
+	"value": {
+		"action": "status",
+		"change_id": "chg_00000000000000000000c001",
+		"toString": {
+			"approve": true
+		}
+	}
+}

@@ -1,0 +1,43 @@
+{
+	"description": "An agent-claimed proof is a valid request; the gate, not the parser, refuses it. Listed here so nobody 'fixes' the parser to hide claims.",
+	"subject": "request-valid",
+	"expect": [],
+	"value": {
+		"action": "record-proof",
+		"idempotency_key": "proof-O1-1",
+		"change_id": "chg_00000000000000000000c001",
+		"attempt_id": "att_00000000000000000000a001",
+		"proof": {
+			"snapshot_id": "snp_00000000000000000000d001",
+			"obligation_id": "O1",
+			"scenario_ids": [
+				"S1"
+			],
+			"check": {
+				"kind": "test"
+			},
+			"collector": "agent-claimed",
+			"result": "passed",
+			"started_at": "2026-09-17T10:20:00Z",
+			"ended_at": "2026-09-17T10:21:30Z",
+			"artifacts": [
+				{
+					"id": "art_00000000000000000000aa01",
+					"label": "test stdout",
+					"media_type": "text/plain",
+					"raw_digest": "sha256:21aa5f19ab93e4d479e998dc4a1981c98197500dbd31438b18d320e5981d5119",
+					"raw_size": 17,
+					"sanitized_digest": "sha256:21aa5f19ab93e4d479e998dc4a1981c98197500dbd31438b18d320e5981d5119",
+					"retained": true
+				}
+			],
+			"environment": {
+				"summary": "linux x64, node 24",
+				"digest": "sha256:9c88ec3d30445acb71370d51c4433795a74061ecbd1be34656950450ca3936d6"
+			},
+			"provenance": {
+				"source": "mcp:claude-code"
+			}
+		}
+	}
+}

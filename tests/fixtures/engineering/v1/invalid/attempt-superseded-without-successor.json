@@ -1,0 +1,29 @@
+{
+	"description": "A superseded attempt names its successor.",
+	"subject": "record",
+	"expect": [
+		{
+			"code": "missing-field",
+			"path": "/superseded_by_attempt_id"
+		}
+	],
+	"value": {
+		"schema_version": 1,
+		"kind": "attempt",
+		"id": "att_00000000000000000000a001",
+		"created_at": "2026-09-17T10:10:00Z",
+		"change_id": "chg_00000000000000000000c001",
+		"slice_id": "slc_00000000000000000000e001",
+		"inputs": {
+			"brief_digest": "sha256:32dd3ea09fe69f5a22d4cc1dd9d549ed808c48e42dd5ff683b1e1400d46247ae",
+			"plan_digest": "sha256:67d2de7f421a0b8104cad0aabfd6740aa11c7403618f9e7e33be5d8cbfc4da17",
+			"references": [],
+			"digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1"
+		},
+		"baseline_snapshot_id": "snp_00000000000000000000b001",
+		"candidate_snapshot_id": "snp_00000000000000000000d001",
+		"outcome": "superseded",
+		"started_at": "2026-09-17T10:10:00Z",
+		"ended_at": "2026-09-17T10:45:01Z"
+	}
+}

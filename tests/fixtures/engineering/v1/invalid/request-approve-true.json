@@ -1,0 +1,17 @@
+{
+	"description": "There is no field through which a caller can approve; `approve: true` is an unknown field.",
+	"subject": "request",
+	"expect": [
+		{
+			"code": "unknown-field",
+			"path": "/approve"
+		}
+	],
+	"value": {
+		"action": "request-acceptance",
+		"idempotency_key": "accept-1",
+		"change_id": "chg_00000000000000000000c001",
+		"attempt_id": "att_00000000000000000000a001",
+		"approve": true
+	}
+}
