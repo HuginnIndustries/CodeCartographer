@@ -1,11 +1,12 @@
-// Engineering records: the frozen v1 contract (E01, #399).
+// Engineering records: the v1 candidate contract (E01, #399).
 //
-// This module is the schema. Every field, enum spelling, ID prefix, and
-// invariant that a downstream issue (E02–E08) consumes is declared here and
-// enforced by ./validation.ts; the prose in docs/engineering/record-contract.md
-// describes the same contract and must not disagree with it. A change to any
-// of these shapes is a contract amendment: bump nothing silently, add a
-// fixture under tests/fixtures/engineering/v1/, and update the document.
+// Status: candidate contract; E01 acceptance pending. The shapes here are
+// what downstream issues (E02–E08) will consume once #399 is closed, and they
+// change only through a contract amendment: add a fixture under
+// tests/fixtures/engineering/v1/, update docs/engineering/record-contract.md,
+// and keep ./validation.ts in step. The prose there and the code here must
+// not disagree; the open decisions that keep E01 from closing are listed in
+// that document's decision record.
 //
 // Scope of this module: data. Nothing here reads a file, runs a command, or
 // talks to a host. The vocabulary:
@@ -116,6 +117,47 @@ export const SCENARIO_KINDS = ["behavior", "preserved", "non-functional"] as con
 export type ScenarioKind = (typeof SCENARIO_KINDS)[number];
 
 /**
+ * The host's account, kept outside the namespace, of whether protection has
+ * held for the namespace's whole life. Only `continuous-since-initialization`
+ * makes any record eligible for `verified`: the namespace was created after
+ * the boundary was enforced and the boundary never lapsed. The other three
+ * say why not, and every record under them is cooperative however it is
+ * labelled and whatever timestamps it carries — a record written while the
+ * namespace was unprotected can claim any time it likes.
+ */
+export const PROTECTION_HISTORIES = ["continuous-since-initialization", "enabled-after-initialization", "interrupted", "imported-history"] as const;
+export type ProtectionHistory = (typeof PROTECTION_HISTORIES)[number];
+
+/**
+ * What a reader knows about the namespace now, from host configuration
+ * outside the namespace (D3): whether the boundary is enforced, since when,
+ * and whether it has held continuously since the namespace was initialized.
+ * Nothing inside the namespace can substitute for `protection`: every
+ * timestamp and flag in a record is writable by whoever could write the
+ * record.
+ */
+export type CurrentStorage = { boundary: "host-enforced"; enforced_since: Timestamp; protection: ProtectionHistory } | { boundary: "none" };
+
+/**
+ * Whether the host's tool-result path qualifies for `host-tool-result`
+ * attestation: `protected` means the ingestion entry is unreachable by the
+ * model's tools and its configuration lives where agent tools cannot write
+ * (D4) — both are requirements, not assurances; `unprotected` means a path
+ * exists but one of them does not hold; `none` means there is no path.
+ * Anything but `protected` yields `caller`.
+ */
+export const TOOL_RESULT_PATHS = ["protected", "unprotected", "none"] as const;
+export type ToolResultPath = (typeof TOOL_RESULT_PATHS)[number];
+
+/**
+ * How the acceptance a reader is looking at should be treated once channel,
+ * integration, and storage boundary are all taken into account. `verified`
+ * only when every one of them holds now, not just at mint time.
+ */
+export const ACCEPTANCE_CLASSES = ["verified", "cooperative", "invalid"] as const;
+export type AcceptanceClass = (typeof ACCEPTANCE_CLASSES)[number];
+
+/**
  * Where the reviewer's context stands relative to the author's. This is a
  * declaration the framework records; it is not authenticated. `same-context`
  * is legal to record and cannot satisfy the independent-review requirement.
@@ -137,7 +179,8 @@ export const APPROVAL_DECISIONS = ["accepted", "rejected"] as const;
 export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
 
 /**
- * How a human decision reached the core.
+ * How a human decision reached the core. The first two are proposals: no
+ * host/client pair is verified yet (see VERIFIED_ACCEPTANCE_INTEGRATIONS).
  *
  * - `mcp-elicitation`: the MCP server sent `elicitation/create` to the
  *   connected client and the client — not the model — answered over the
@@ -151,7 +194,7 @@ export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
  */
 export const APPROVAL_CHANNELS = ["mcp-elicitation", "host-native", "cooperative-file", "agent-declared"] as const;
 export type ApprovalChannel = (typeof APPROVAL_CHANNELS)[number];
-/** The channels whose receipt may satisfy the human-acceptance gate in v1. */
+/** The channels proposed for the human-acceptance gate; a receipt on one satisfies nothing until its host/client pair is in {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}. */
 export const TRUSTED_APPROVAL_CHANNELS: readonly ApprovalChannel[] = ["mcp-elicitation", "host-native"];
 
 /**
@@ -164,15 +207,61 @@ export type ReceiptAuthentication = (typeof RECEIPT_AUTHENTICATIONS)[number];
 
 /**
  * Who vouches for a caller-visible observation (`collector`, `result`,
- * `stability`). `adapter` means the host adapter itself captured or observed
- * it with its own read-only utilities; `caller` means the values arrived in a
- * tool payload and are the caller's claim. Set by the adapter, never by the
- * payload: `attested_by` is an unknown field on every input shape. The
- * acceptance gate requires an adapter-attested candidate snapshot; proofs may
- * be caller-attested, and the presentation says so.
+ * `exit_code`, `stability`). Set by the adapter, never by the payload:
+ * `attested_by` is an unknown field on every input shape.
+ *
+ * - `adapter`: the host adapter itself captured or observed it with its own
+ *   read-only utilities (a snapshot of the working directory; a CI run it
+ *   read from the CI system itself).
+ * - `host-tool-result`: the host's own tool-execution layer delivered the
+ *   observation — a hook or extension event that receives the tool's actual
+ *   exit code and output — through a host-side ingestion entry the model's
+ *   tools cannot reach, configured somewhere agent tools cannot write. An
+ *   entry the model can invoke, or a hook the model can install, yields
+ *   `caller`. The host payload names the executed command, cwd, and tool
+ *   call; the adapter fills `check.command` and `provenance.tool_call_id`
+ *   from it, never from the caller.
+ * - `caller`: the values arrived in a tool payload. They are the caller's
+ *   claim, whatever `collector` says; see {@link proofAuthority}.
  */
-export const ATTESTATIONS = ["adapter", "caller"] as const;
+export const ATTESTATIONS = ["adapter", "host-tool-result", "caller"] as const;
 export type Attestation = (typeof ATTESTATIONS)[number];
+
+/** Attestations that make a proof's `collector` mean what it says. */
+export const OBSERVING_ATTESTATIONS: readonly Attestation[] = ["adapter", "host-tool-result"];
+
+/**
+ * What a proof record actually establishes. `observed` needs both an observed
+ * collector and an observing attestation; a caller-reported record is
+ * `claimed` no matter which collector label it carries. Changing the label
+ * never changes the authority.
+ */
+export const EVIDENCE_AUTHORITIES = ["observed", "claimed"] as const;
+export type EvidenceAuthority = (typeof EVIDENCE_AUTHORITIES)[number];
+
+/**
+ * What "accepted" is allowed to mean for a change. `verified` (the default
+ * and the only meaning of "verified" anywhere in this contract): observed
+ * proof, an adapter-captured candidate, a trusted channel on a verified
+ * integration, and a host-enforced storage boundary. `cooperative`: a weaker
+ * mode in which claimed proof and an unprotected namespace are tolerated and
+ * every result is labelled cooperative. It is a separate policy the host
+ * operator sets outside the workspace; it is never the default and never
+ * spelled "verified".
+ */
+export const ASSURANCE_POLICIES = ["verified", "cooperative"] as const;
+export type AssurancePolicy = (typeof ASSURANCE_POLICIES)[number];
+
+/**
+ * Whether ordinary agent tools can write `.codecarto/engineering/`.
+ * `host-enforced` means the host's own permission layer denies the agent
+ * edit/write access to the namespace (or the namespace lives outside every
+ * agent-writable root); `none` means any process as the user can write it, so
+ * at-rest records are cooperative whatever channel minted them. Declared by
+ * the adapter from host configuration, never by a payload.
+ */
+export const STORAGE_BOUNDARIES = ["host-enforced", "none"] as const;
+export type StorageBoundary = (typeof STORAGE_BOUNDARIES)[number];
 
 /** How a host can obtain a human decision; declared per request by the adapter, never by the model. */
 export const HUMAN_ACCEPTANCE_CAPABILITIES = ["mcp-elicitation", "host-native", "none"] as const;
@@ -352,8 +441,8 @@ export interface SnapshotRecord extends RecordEnvelope<"snapshot"> {
 	/** `unstable` when the tree moved during capture; an unstable candidate cannot be accepted. */
 	stability: SnapshotStability;
 	collector: Collector;
-	/** Adapter-set; a caller-attested candidate cannot bind an acceptance. */
-	attested_by: Attestation;
+	/** Adapter-set; `adapter` or `caller` only (a snapshot is never a tool result); a caller-attested candidate cannot bind an acceptance. */
+	attested_by: Exclude<Attestation, "host-tool-result">;
 	captured_at: Timestamp;
 	digest: Digest;
 }
@@ -403,12 +492,14 @@ export interface ProofRecord extends RecordEnvelope<"proof"> {
 		digest: Digest;
 	};
 	provenance: {
-		/** The collecting surface, e.g. `mcp:claude-code`, `github-actions`, `pi`. */
+		/** The collecting surface, e.g. `mcp:claude-code`, `github-actions`, `pi`. On a caller-reported record this is part of the claim. */
 		source: string;
 		/** Required for `ci-reported`: the run this result was read from. */
 		run_reference?: string;
 		/** Adapter-set: whether the adapter observed `collector`/`result` itself or ingested the caller's claim. */
 		attested_by: Attestation;
+		/** Required for `host-tool-result`: the host's identifier for the tool call whose result this is, taken from the host payload. */
+		tool_call_id?: string;
 	};
 }
 
@@ -460,10 +551,19 @@ export interface ApprovalReceipt {
 	channel: ApprovalChannel;
 	/** The adapter that obtained the decision, e.g. `mcp-server`, `pi`. */
 	host: string;
+	/** The connected client as the transport reported it; with `host` and `channel`, the key into {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}. */
+	client: { name: string; version?: string };
 	host_session?: string;
 	issued_at: Timestamp;
 	responded_at: Timestamp;
 	authenticated: ReceiptAuthentication;
+	/**
+	 * Whether this host/client pair was in {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}
+	 * at mint time. Informational: a reader re-derives it from `host`,
+	 * `client.name`, and `channel` against the current registry
+	 * (`classifyAcceptance`), so a de-verified pair downgrades old approvals.
+	 */
+	verified_integration: boolean;
 	/** The adapter's own statement of what it did and did not verify, for the human reader. */
 	attestation: string;
 }
@@ -478,6 +578,13 @@ export interface ApprovalRecord extends RecordEnvelope<"approval"> {
 	decision: ApprovalDecision;
 	decided_at: Timestamp;
 	receipt: ApprovalReceipt;
+	/** The policy in force when the adapter minted this; `verified` is only legal with a host-enforced boundary and a verified integration. */
+	assurance: AssurancePolicy;
+	/** The storage boundary the adapter observed at mint time; a reader re-checks the current one before calling anything verified. */
+	storage: {
+		boundary: StorageBoundary;
+		note: string;
+	};
 	human_note?: string;
 }
 
@@ -508,7 +615,9 @@ export interface AcceptancePresentation {
 	requested_outcome: string;
 	slice_deliverable: string;
 	candidate_summary: string;
-	proof_summary: Array<{ obligation_id: LocalId; result: ProofResult; collector: Collector; attested_by: Attestation }>;
+	/** The policy under which the decision is being asked for; `cooperative` is shown, never hidden. */
+	assurance: AssurancePolicy;
+	proof_summary: Array<{ obligation_id: LocalId; result: ProofResult; collector: Collector; attested_by: Attestation; authority: EvidenceAuthority }>;
 	review_summary: Array<{ review_id: RecordId; separation: ReviewerSeparation; remaining_blockers: number }>;
 	limitations: string[];
 }
@@ -537,12 +646,37 @@ export type ChangeAction = (typeof CHANGE_ACTIONS)[number];
 /** Actions that write records; each accepts an `idempotency_key`. */
 export const MUTATING_CHANGE_ACTIONS: readonly ChangeAction[] = ["create", "plan", "start-attempt", "capture-candidate", "record-proof", "record-review", "request-acceptance"];
 
-/** Declared by the host adapter per request. A model cannot raise its own capability: the adapter overwrites whatever the payload says. */
+/**
+ * Declared by the host adapter per session from what it knows about the
+ * transport and from host/user-level configuration outside the workspace.
+ * None of it is a request field: a model cannot raise its own capability,
+ * declare its integration verified, or pick a policy.
+ */
 export interface HostCapabilities {
 	human_acceptance: HumanAcceptanceCapability;
 	/** Display label of the host, e.g. `claude-code`. */
 	label?: string;
+	/** The connected client as the transport reports it, e.g. `{ name: "claude-code", version: "2.1.0" }`. */
+	client?: { name: string; version?: string };
+	/** Derived by the adapter from {@link VERIFIED_ACCEPTANCE_INTEGRATIONS}; never trusted from the client's own capability advertisement. */
+	verified_integration: boolean;
+	storage_boundary: StorageBoundary;
+	/** From host/user-level configuration; `verified` unless the operator explicitly chose `cooperative`. */
+	assurance_policy: AssurancePolicy;
+	/** Whether the host's tool-result ingestion path meets D4's requirements; the adapter attests `host-tool-result` only when `protected`. */
+	tool_result_path: ToolResultPath;
 }
+
+/**
+ * The host/client pairs for which the integration check in
+ * docs/engineering/record-contract.md § Acceptance channel has been run and
+ * recorded: presentation shown, acceptance, rejection/cancellation, and a
+ * stale or mismatched response each observed on the real client. Empty until
+ * such a record exists; adding an entry is a contract amendment with the
+ * check's evidence attached. An adapter derives `verified_integration` from
+ * this list and from nothing else.
+ */
+export const VERIFIED_ACCEPTANCE_INTEGRATIONS: ReadonlyArray<{ host: string; client: string; channel: ApprovalChannel; evidence: string }> = [];
 
 export interface ChangeRequestBase {
 	action: ChangeAction;
@@ -704,6 +838,8 @@ export type ValidationOutcome<T> = { ok: true; value: T } | { ok: false; errors:
 
 export interface AcceptanceRequestOutcome {
 	outcome: "accepted" | "rejected" | "needs-human-acceptance";
+	/** How an `accepted` outcome is to be read; never `verified` unless {@link classifyAcceptance} says so now. */
+	assurance: AssurancePolicy;
 	request: AcceptanceRequest;
 	approval?: ApprovalRecord;
 	/** Why the host could not obtain a decision, when `outcome` is `needs-human-acceptance`. */
@@ -749,6 +885,10 @@ export interface CheckResult {
 	change_id: RecordId;
 	attempt_id?: RecordId;
 	outcome: "eligible" | "blocked" | "needs-human-acceptance" | "accepted";
+	/** The policy the requirements were evaluated under. */
+	assurance: AssurancePolicy;
+	/** Proof authority as counted by {@link proofAuthority}; claimed proofs discharge nothing under `verified`. */
+	evidence: { observed: number; claimed: number };
 	requirements: AcceptanceRequirementStatus[];
 	/** Why not eligible; codes such as `proof-not-observed`, `blocking-objection`, `digest-mismatch`, `unknown-reference`. */
 	errors: EngineeringError[];
@@ -819,7 +959,7 @@ export const ACCEPTANCE_REQUIRED_RECORDS = [
 	{ kind: "slice", requirement: "state is `active`; every `proof_obligations[].id` is discharged" },
 	{ kind: "attempt", requirement: "outcome is `ready-for-review` or `needs-human-acceptance`; `candidate_snapshot_id` set" },
 	{ kind: "snapshot", requirement: "baseline and candidate both present; candidate `stability` is `stable`, `collector` is not `agent-claimed`, and `attested_by` is `adapter`; candidate digest equals the tree the adapter re-reads at acceptance (`checkCandidateFreshness`)" },
-	{ kind: "proof", requirement: "one per obligation with `result: passed`, `collector` at or above the obligation's `minimum_collector` (`collectorSatisfies`), and `snapshot_id` equal to the candidate; caller-attested proofs are allowed and named in the presentation" },
+	{ kind: "proof", requirement: "one per obligation that `proofDischarges` it: `result: passed`, `collector` at or above the obligation's `minimum_collector`, `snapshot_id` equal to the candidate, and — under the `verified` policy — `proofAuthority` of `observed`; a caller-reported record is `claimed` whatever its label and discharges nothing under `verified`" },
 	{ kind: "review", requirement: "at least one with `separation: declared-separate`, bound to the candidate and input digests, with empty `remaining_blockers`" },
-	{ kind: "approval", requirement: "`decision: accepted`, receipt on a trusted channel, unconsumed nonce, bindings equal to the request and the candidate" },
+	{ kind: "approval", requirement: "`decision: accepted`; receipt passes `evaluateApprovalReceipt`; `classifyAcceptance` is `verified` — trusted channel on a currently registered integration, `verified` policy, storage boundary host-enforced at mint, and the reader's out-of-namespace `CurrentStorage` host-enforced with `protection: continuous-since-initialization` (no record-internal timestamp substitutes) — or, only under an operator-set `cooperative` policy, `cooperative`" },
 ] as const;

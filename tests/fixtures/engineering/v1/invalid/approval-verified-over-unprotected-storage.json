@@ -1,10 +1,10 @@
 {
-	"description": "A nonce is 32 lowercase hex characters.",
+	"description": "A UI decision stored where agent tools can write is cooperative; the record may not call itself verified.",
 	"subject": "record",
 	"expect": [
 		{
 			"code": "invalid-value",
-			"path": "/receipt/nonce"
+			"path": "/storage/boundary"
 		}
 	],
 	"value": {
@@ -22,7 +22,7 @@
 		"decided_at": "2026-09-17T10:45:00Z",
 		"receipt": {
 			"request_id": "acr_000000000000000000000c01",
-			"nonce": "not-a-nonce",
+			"nonce": "0123456789abcdef0123456789abcdef",
 			"presentation_digest": "sha256:aaf8742f01787b9eb3dbbb7d26122bc66270a4258e7342630625f337507f0000",
 			"channel": "mcp-elicitation",
 			"host": "mcp-server",
@@ -39,8 +39,8 @@
 		},
 		"assurance": "verified",
 		"storage": {
-			"boundary": "host-enforced",
-			"note": "client permission rules deny agent writes under .codecarto/engineering/"
+			"boundary": "none",
+			"note": "unprotected"
 		},
 		"human_note": "Looks right; ship it."
 	}

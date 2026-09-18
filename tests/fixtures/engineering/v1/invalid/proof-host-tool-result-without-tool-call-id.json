@@ -1,14 +1,10 @@
 {
-	"description": "A manual observation names its procedure and observer.",
+	"description": "A host tool result names the tool call it came from.",
 	"subject": "record",
 	"expect": [
 		{
 			"code": "missing-field",
-			"path": "/check/procedure"
-		},
-		{
-			"code": "missing-field",
-			"path": "/observer"
+			"path": "/provenance/tool_call_id"
 		}
 	],
 	"value": {
@@ -24,10 +20,13 @@
 			"S1"
 		],
 		"check": {
-			"kind": "manual-procedure"
+			"kind": "test",
+			"command": "node --test tests/widgets-count.test.mjs",
+			"working_directory": "."
 		},
-		"collector": "manual-observation",
+		"collector": "host-observed",
 		"result": "passed",
+		"exit_code": 0,
 		"started_at": "2026-09-17T10:20:00Z",
 		"ended_at": "2026-09-17T10:21:30Z",
 		"artifacts": [
@@ -47,8 +46,7 @@
 		},
 		"provenance": {
 			"source": "claude-code:post-tool-use-hook",
-			"attested_by": "host-tool-result",
-			"tool_call_id": "toolu_01example"
+			"attested_by": "host-tool-result"
 		}
 	}
 }

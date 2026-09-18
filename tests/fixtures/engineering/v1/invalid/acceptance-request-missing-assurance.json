@@ -1,10 +1,10 @@
 {
-	"description": "A request cannot stay answerable for more than 24 hours.",
+	"description": "A presentation always shows which policy the decision is asked under.",
 	"subject": "acceptance-request",
 	"expect": [
 		{
-			"code": "invalid-value",
-			"path": "/expires_at"
+			"code": "missing-field",
+			"path": "/presentation/assurance"
 		}
 	],
 	"value": {
@@ -18,13 +18,12 @@
 		"input_digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1",
 		"nonce": "0123456789abcdef0123456789abcdef",
 		"issued_at": "2026-09-17T10:40:00Z",
-		"expires_at": "2026-09-19T10:40:00Z",
+		"expires_at": "2026-09-17T11:40:00Z",
 		"presentation": {
 			"title": "Widget count includes archived widgets",
 			"requested_outcome": "`countWidgets()` returns archived widgets too, as the API documentation already says it does.",
 			"slice_deliverable": "countWidgets() counts archived widgets by default; a regression test pins both behaviors.",
 			"candidate_summary": "4 manifest entries (3 files, 1 symlinks); dirty tree at 01234567; digest sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
-			"assurance": "verified",
 			"proof_summary": [
 				{
 					"obligation_id": "O1",

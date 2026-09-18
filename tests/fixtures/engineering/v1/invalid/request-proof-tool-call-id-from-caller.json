@@ -1,7 +1,12 @@
 {
-	"description": "An agent-claimed proof is a valid request; the gate, not the parser, refuses it. Listed here so nobody 'fixes' the parser to hide claims.",
-	"subject": "request-valid",
-	"expect": [],
+	"description": "tool_call_id comes from the host payload, never from the request.",
+	"subject": "request",
+	"expect": [
+		{
+			"code": "unknown-field",
+			"path": "/proof/provenance/tool_call_id"
+		}
+	],
 	"value": {
 		"action": "record-proof",
 		"idempotency_key": "proof-O1-1",
@@ -14,10 +19,13 @@
 				"S1"
 			],
 			"check": {
-				"kind": "test"
+				"kind": "test",
+				"command": "node --test tests/widgets-count.test.mjs",
+				"working_directory": "."
 			},
-			"collector": "agent-claimed",
+			"collector": "host-observed",
 			"result": "passed",
+			"exit_code": 0,
 			"started_at": "2026-09-17T10:20:00Z",
 			"ended_at": "2026-09-17T10:21:30Z",
 			"artifacts": [
@@ -36,7 +44,8 @@
 				"digest": "sha256:9c88ec3d30445acb71370d51c4433795a74061ecbd1be34656950450ca3936d6"
 			},
 			"provenance": {
-				"source": "claude-code:post-tool-use-hook"
+				"source": "claude-code:post-tool-use-hook",
+				"tool_call_id": "toolu_01example"
 			}
 		}
 	}

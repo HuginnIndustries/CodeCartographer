@@ -1,14 +1,10 @@
 {
-	"description": "A manual observation names its procedure and observer.",
+	"description": "The host's tool layer only sees tool results; it cannot attest a manual procedure.",
 	"subject": "record",
 	"expect": [
 		{
-			"code": "missing-field",
-			"path": "/check/procedure"
-		},
-		{
-			"code": "missing-field",
-			"path": "/observer"
+			"code": "invalid-value",
+			"path": "/provenance/attested_by"
 		}
 	],
 	"value": {
@@ -24,7 +20,8 @@
 			"S1"
 		],
 		"check": {
-			"kind": "manual-procedure"
+			"kind": "manual-procedure",
+			"procedure": "open the page"
 		},
 		"collector": "manual-observation",
 		"result": "passed",
@@ -49,6 +46,7 @@
 			"source": "claude-code:post-tool-use-hook",
 			"attested_by": "host-tool-result",
 			"tool_call_id": "toolu_01example"
-		}
+		},
+		"observer": "someone"
 	}
 }

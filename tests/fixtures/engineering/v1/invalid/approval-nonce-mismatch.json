@@ -23,14 +23,24 @@
 		"receipt": {
 			"request_id": "acr_000000000000000000000c01",
 			"nonce": "ffffffffffffffffffffffffffffffff",
-			"presentation_digest": "sha256:94929a026f13dd8dffa2cc64cbae780513134ab6f9d777e383c73b37df512f60",
+			"presentation_digest": "sha256:aaf8742f01787b9eb3dbbb7d26122bc66270a4258e7342630625f337507f0000",
 			"channel": "mcp-elicitation",
 			"host": "mcp-server",
+			"client": {
+				"name": "claude-code",
+				"version": "2.1.0"
+			},
 			"host_session": "stdio session 1",
 			"issued_at": "2026-09-17T10:40:00Z",
 			"responded_at": "2026-09-17T10:45:00Z",
 			"authenticated": "host-session",
+			"verified_integration": true,
 			"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."
+		},
+		"assurance": "verified",
+		"storage": {
+			"boundary": "host-enforced",
+			"note": "client permission rules deny agent writes under .codecarto/engineering/"
 		},
 		"human_note": "Looks right; ship it."
 	}

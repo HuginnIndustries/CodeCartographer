@@ -24,18 +24,21 @@
 			"requested_outcome": "`countWidgets()` returns archived widgets too, as the API documentation already says it does.",
 			"slice_deliverable": "countWidgets() counts archived widgets by default; a regression test pins both behaviors.",
 			"candidate_summary": "4 manifest entries (3 files, 1 symlinks); dirty tree at 01234567; digest sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
+			"assurance": "verified",
 			"proof_summary": [
 				{
 					"obligation_id": "O1",
 					"result": "passed",
 					"collector": "host-observed",
-					"attested_by": "caller"
+					"attested_by": "host-tool-result",
+					"authority": "observed"
 				},
 				{
 					"obligation_id": "O2",
 					"result": "passed",
 					"collector": "host-observed",
-					"attested_by": "caller"
+					"attested_by": "host-tool-result",
+					"authority": "observed"
 				}
 			],
 			"review_summary": [
@@ -47,6 +50,6 @@
 			],
 			"limitations": []
 		},
-		"presentation_digest": "sha256:94929a026f13dd8dffa2cc64cbae780513134ab6f9d777e383c73b37df512f60"
+		"presentation_digest": "sha256:aaf8742f01787b9eb3dbbb7d26122bc66270a4258e7342630625f337507f0000"
 	}
 }

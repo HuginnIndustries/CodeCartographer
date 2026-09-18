@@ -26,11 +26,21 @@
 			"presentation_digest": "sha256:ce6f261f8df2232f6a8607ad93237ba6f1286c98b8d966057785c86d572e93dc",
 			"channel": "mcp-elicitation",
 			"host": "mcp-server",
+			"client": {
+				"name": "claude-code",
+				"version": "2.1.0"
+			},
 			"host_session": "stdio session 1",
 			"issued_at": "2026-09-17T10:40:00Z",
 			"responded_at": "2026-09-17T10:45:00Z",
 			"authenticated": "host-session",
+			"verified_integration": true,
 			"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."
+		},
+		"assurance": "verified",
+		"storage": {
+			"boundary": "host-enforced",
+			"note": "client permission rules deny agent writes under .codecarto/engineering/"
 		},
 		"human_note": "Looks right; ship it."
 	}

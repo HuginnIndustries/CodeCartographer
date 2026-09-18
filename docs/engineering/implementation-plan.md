@@ -57,7 +57,7 @@ Expected successful outcome: every targeted assertion passes and the repository'
 
 **Objective:** give downstream agents one reviewed, executable contract, including an honest host-approval boundary.
 
-**Status:** implemented and locally verified on the branch for [#399](https://github.com/HuginnIndustries/CodeCartographer/issues/399); the issue records the PR, the reviewed commit, and whether the approval-channel decision in the contract's [decision record](record-contract.md#decision-record) is settled. Files as listed below plus `core/engineering/ids.ts`, `core/engineering/digest.ts`, and the fixture generator `tests/fixtures/engineering/v1/generate.mjs`.
+**Status:** candidate contract merged (PR #414) and locally verified; **E01 acceptance pending** — [#399](https://github.com/HuginnIndustries/CodeCartographer/issues/399) stays open until the maintainer records the decisions in the contract's [decision record](record-contract.md#decision-record), and E02/E03 stay blocked until it is closed. Files as listed below plus `core/engineering/ids.ts`, `core/engineering/digest.ts`, and the fixture generator `tests/fixtures/engineering/v1/generate.mjs`.
 
 **Depends on:** none. **Read:** `docs/engineering/record-contract.md`, `core/types.ts`, `core/utils.ts`, `core/status.ts`, `core/secrets.ts`, `core/synthesis.ts`, existing guard and closure tests.
 
@@ -153,7 +153,7 @@ Expected successful outcome: every targeted assertion passes and the repository'
 1. Write decision-table tests for each acceptance prerequisite and distinct failure/block reason; assert missing proof, wrong snapshots, uncovered scenarios, stale inputs, invalid dependencies, and unresolved blockers refuse acceptance.
 2. Add review tests requiring exact candidate binding and declared author-separated context; preserve the distinction between declared separation and authenticated identity.
 3. Add approval tests for absent receipt, ordinary agent-created flags, replay, wrong change/attempt, changed candidate after review, and unsupported host capability; run RED.
-4. Implement deterministic gate evaluation and serialized acceptance using the frozen host receipt contract. Recheck the bound candidate before committing acceptance; unsupported hosts return `needs-human-acceptance`.
+4. Implement deterministic gate evaluation and serialized acceptance using the host receipt contract as closed by E01. Recheck the bound candidate before committing acceptance; unsupported hosts return `needs-human-acceptance`.
 5. Test concurrent edits/acceptance and process failure around the state commit. Preserve historical acceptance without treating it as approval of new bytes; run GREEN/full gates.
 
 **Acceptance:** neither a PASS string nor a checkbox alone can accept a candidate; stale inputs and open blockers refuse; approval is bound to exactly what was presented. Semantic correctness remains a review/test claim, not a hash guarantee.

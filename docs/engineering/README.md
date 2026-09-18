@@ -6,7 +6,7 @@
 
 1. [Product vision and decision register](vision.md): intent, constraints, settled direction, provisional defaults, and deferred decisions.
 2. [Sanitized dogfood findings](dogfood-2026-09-17.md): what actually ran, what did not, and why the roadmap changed.
-3. [Engineering record contract](record-contract.md): the frozen v1 vocabulary, record schemas, operation API, and proof/approval trust model (E01; executable in `core/engineering/` with fixtures under `tests/fixtures/engineering/v1/`).
+3. [Engineering record contract](record-contract.md): the v1 candidate vocabulary, record schemas, operation API, and proof/approval trust model (E01 — **candidate contract, acceptance pending**; executable in `core/engineering/` with fixtures under `tests/fixtures/engineering/v1/`; its decision record lists what keeps #399 open).
 4. [Incremental implementation plan](implementation-plan.md): bounded tasks, prerequisites, paths, tests, and acceptance criteria.
 5. [Product roadmap](../ROADMAP.md): outcome-level sequencing and links to other workstreams.
 
@@ -19,7 +19,7 @@ The [Helix/Traverse discussion](../plans/2026-09-17-helix-patterns.md) is retain
 - Read this page, `CONTRIBUTING.md`, and the target issue in full. Use the live CodeCartographer guide when operating an analysis workspace; historical examples do not override it.
 - Fetch the repository and inspect the current branch, dirty/untracked files, open PRs, and dependency issues. Issue state is live; this document's status is not a substitute for checking it.
 - Choose one **unblocked and authorized** task from the implementation plan. Check the latest maintainer scheduling notes and holds in the issue and tracker; dependency eligibility is not permission to start. Do not execute a dependent issue because its parent merely has a draft PR.
-- E01 owns the record/API contract freeze. Downstream agents must consume its merged contract, not independently invent names, schemas, authority rules, or file layouts.
+- E01 owns the record/API contract. Its merged code is a candidate until #399 is resolved and closed; E02/E03 do not start before that, and E09 is on explicit maintainer hold. Downstream agents must consume the contract as closed, not independently invent names, schemas, authority rules, or file layouts.
 - Preserve analysis pipelines, their state ABI, existing synthesis confirmation gates, and both Pi analysis guards. Use additive experimental surfaces. Do not repurpose `workflow/status.yaml` as engineering state.
 - Work in an isolated branch/worktree. Do not overwrite another agent's files or absorb unrelated untracked work. Shared-file changes in `core/index.ts`, MCP registration, and invariant tests must be rebased and reconciled, not duplicated.
 - Follow RED → GREEN → review. Record actual commands, return codes, relevant environment identifiers, scope limits, and the exact candidate revision. A model-authored PASS is not execution evidence.

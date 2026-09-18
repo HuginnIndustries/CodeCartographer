@@ -1,14 +1,10 @@
 {
-	"description": "A manual observation names its procedure and observer.",
+	"description": "The adapter never runs a command, so it cannot attest a host-observed check.",
 	"subject": "record",
 	"expect": [
 		{
-			"code": "missing-field",
-			"path": "/check/procedure"
-		},
-		{
-			"code": "missing-field",
-			"path": "/observer"
+			"code": "invalid-value",
+			"path": "/provenance/attested_by"
 		}
 	],
 	"value": {
@@ -24,10 +20,13 @@
 			"S1"
 		],
 		"check": {
-			"kind": "manual-procedure"
+			"kind": "test",
+			"command": "node --test tests/widgets-count.test.mjs",
+			"working_directory": "."
 		},
-		"collector": "manual-observation",
+		"collector": "host-observed",
 		"result": "passed",
+		"exit_code": 0,
 		"started_at": "2026-09-17T10:20:00Z",
 		"ended_at": "2026-09-17T10:21:30Z",
 		"artifacts": [
@@ -46,9 +45,8 @@
 			"digest": "sha256:9c88ec3d30445acb71370d51c4433795a74061ecbd1be34656950450ca3936d6"
 		},
 		"provenance": {
-			"source": "claude-code:post-tool-use-hook",
-			"attested_by": "host-tool-result",
-			"tool_call_id": "toolu_01example"
+			"source": "mcp-server",
+			"attested_by": "adapter"
 		}
 	}
 }

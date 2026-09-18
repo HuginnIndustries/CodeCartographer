@@ -67,6 +67,17 @@ const {
 	CHANGE_STATE_TRANSITIONS,
 	ATTEMPT_OUTCOME_TRANSITIONS,
 	ACCEPTANCE_REQUEST_MAX_TTL_MS,
+	ATTESTATIONS,
+	OBSERVING_ATTESTATIONS,
+	ASSURANCE_POLICIES,
+	VERIFIED_ACCEPTANCE_INTEGRATIONS,
+	proofAuthority,
+	proofDischarges,
+	acceptanceChannelSupported,
+	classifyAcceptance,
+	attestationForHostObservation,
+	PROTECTION_HISTORIES,
+	TOOL_RESULT_PATHS,
 } = engineering;
 
 async function readJson(relPath) {
@@ -88,6 +99,8 @@ const valid = {
 	proof2: await readJson("valid/proof-second-obligation.json"),
 	review: await readJson("valid/review.json"),
 	approval: await readJson("valid/approval.json"),
+	approvalCooperative: await readJson("valid/approval-cooperative.json"),
+	proofClaimed: await readJson("valid/proof-caller-reported.json"),
 	request: await readJson("valid/acceptance-request.json"),
 	bundle: await readJson("valid/bundle.json"),
 };
@@ -377,25 +390,31 @@ test("buildAcceptanceRequest reproduces the fixture request byte for byte and re
 		candidate: valid.candidate,
 		proofs: [valid.proof, valid.proof2],
 		reviews: [valid.review],
+		assurance: "verified",
+		storage_boundary: "host-enforced",
 		limitations: ["No CI run exists for this candidate."],
 	});
 	assert.deepEqual(built, valid.request);
-	assert.deepEqual(standardLimitations([valid.proof, valid.proof2], [valid.review]), valid.request.presentation.limitations.slice(0, 2), "caller attestation is always disclosed");
-	assert.deepEqual(standardLimitations([{ ...valid.proof, provenance: { ...valid.proof.provenance, attested_by: "adapter" } }], []), []);
+	const std = (proofs, extra = {}) => standardLimitations({ proofs, reviews: [], assurance: "verified", storage_boundary: "host-enforced", ...extra });
+	assert.deepEqual(std([valid.proof]), []);
+	assert.match(std([valid.proofClaimed])[0], /^1 of 1 proofs are caller-reported claims/, "a claim is always disclosed");
+	assert.match(std([], { assurance: "cooperative" })[0], /cooperative policy/);
+	assert.match(std([], { storage_boundary: "none" })[0], /writable by agent tools/);
 	assert.equal(ACCEPTANCE_REQUEST_MAX_TTL_MS, 24 * 60 * 60 * 1000);
 	assert.equal(validateAcceptanceRequest(built).ok, true);
 	assert.throws(() => buildAcceptanceRequest({ ...builtArgs(built), candidate: valid.baseline }), /not the attempt's bound candidate/);
 	function builtArgs() {
-		return { id: built.id, nonce: built.nonce, issued_at: built.issued_at, expires_at: built.expires_at, change: valid.change, slice: valid.slice, attempt: valid.attempt, candidate: valid.candidate, proofs: [], reviews: [], limitations: [] };
+		return { id: built.id, nonce: built.nonce, issued_at: built.issued_at, expires_at: built.expires_at, change: valid.change, slice: valid.slice, attempt: valid.attempt, candidate: valid.candidate, proofs: [], reviews: [], assurance: "verified", storage_boundary: "host-enforced", limitations: [] };
 	}
 });
 
 // ---------- proof and review semantics ----------
 
 test("agent-claimed is a legal collector that satisfies no obligation, and deferred blockers still block", () => {
-	const claimed = { ...valid.proof, collector: "agent-claimed", check: { kind: "test" } };
+	const claimed = { ...valid.proofClaimed, collector: "agent-claimed", check: { kind: "test" } };
 	delete claimed.exit_code;
 	assert.equal(validateRecord(claimed).ok, true, "a claim is kept so it can be contradicted");
+	assert.equal(validateRecord({ ...valid.proof, collector: "agent-claimed", check: { kind: "test" }, exit_code: undefined }).ok, false, "a tool layer cannot attest an agent claim");
 	assert.ok(!OBSERVED_COLLECTORS.includes("agent-claimed"));
 	assert.deepEqual(codesAt(validateRecord({ ...valid.slice, proof_obligations: [{ ...valid.slice.proof_obligations[0], minimum_collector: "agent-claimed" }] })), ["invalid-enum /proof_obligations/0/minimum_collector"]);
 	assert.deepEqual(COLLECTOR_RANK, { "host-observed": 3, "ci-reported": 2, "manual-observation": 1, "agent-claimed": 0 });
@@ -406,6 +425,157 @@ test("agent-claimed is a legal collector that satisfies no obligation, and defer
 	assert.equal(collectorSatisfies("manual-observation", "manual-observation"), true);
 	assert.deepEqual(deriveRemainingBlockers(valid.review.objections), []);
 	assert.deepEqual(deriveRemainingBlockers([{ id: "A", severity: "blocking", disposition: "deferred" }, { id: "B", severity: "advisory", disposition: "open" }, { id: "C", severity: "blocking", disposition: "open" }]), ["A", "C"]);
+});
+
+// ---------- claims versus observations ----------
+
+test("a collector label never elevates a caller-reported record: authority comes from attestation", () => {
+	assert.deepEqual(ATTESTATIONS, ["adapter", "host-tool-result", "caller"]);
+	assert.deepEqual(OBSERVING_ATTESTATIONS, ["adapter", "host-tool-result"]);
+	const obligation = valid.slice.proof_obligations[0];
+	const claim = valid.proofClaimed;
+	assert.equal(claim.provenance.attested_by, "caller");
+	assert.equal(validateRecord(claim).ok, true, "the claim is retained as a record");
+	for (const collector of COLLECTORS) {
+		const relabelled = { ...claim, collector };
+		assert.equal(proofAuthority(relabelled), "claimed", `${collector} on a caller-reported record is still a claim`);
+		assert.equal(proofDischarges(relabelled, obligation, "verified"), false, `${collector} claim discharges nothing under verified`);
+	}
+	// The identical check delivered by the host's tool layer is an observation.
+	assert.equal(proofAuthority(valid.proof), "observed");
+	assert.equal(valid.proof.provenance.attested_by, "host-tool-result");
+	assert.equal(proofDischarges(valid.proof, obligation, "verified"), true);
+	// An observing attestation does not launder an agent-claimed collector, a failure, or the wrong obligation.
+	assert.equal(proofAuthority({ ...valid.proof, collector: "agent-claimed" }), "claimed");
+	// And the attestation must be able to vouch for that kind of check: a tool layer sees tool results only, the adapter runs nothing.
+	assert.deepEqual(codesAt(validateRecord({ ...valid.proof, collector: "ci-reported", provenance: { ...valid.proof.provenance, run_reference: "run 1" } })), ["invalid-value /provenance/attested_by"]);
+	assert.deepEqual(codesAt(validateRecord({ ...valid.proof, provenance: { source: "mcp-server", attested_by: "adapter" } })), ["invalid-value /provenance/attested_by"]);
+	assert.equal(proofDischarges({ ...valid.proof, result: "failed" }, obligation, "cooperative"), false);
+	assert.equal(proofDischarges(valid.proof, valid.slice.proof_obligations[1], "cooperative"), false);
+	// Only the separately-approved cooperative policy lets a claim discharge, and it never becomes "observed".
+	assert.equal(proofDischarges(claim, obligation, "cooperative"), true);
+	assert.equal(proofAuthority(claim), "claimed");
+	// The caller cannot vouch for itself on the way in.
+	const smuggled = { action: "record-proof", change_id: valid.change.id, attempt_id: valid.attempt.id, proof: { ...stripProof(claim), provenance: { source: "x", attested_by: "host-tool-result" } } };
+	assert.ok(codesAt(validateChangeRequest(smuggled)).includes("unknown-field /proof/provenance/attested_by"));
+});
+
+function stripProof(proof) {
+	const { schema_version, kind, id, created_at, change_id, attempt_id, ...input } = proof;
+	return input;
+}
+
+test("a trusted channel is a proposal until the host/client pair passes the integration check", () => {
+	assert.deepEqual(VERIFIED_ACCEPTANCE_INTEGRATIONS, [], "no integration has been verified yet");
+	const base = { human_acceptance: "mcp-elicitation", label: "mcp-server", client: { name: "claude-code" }, verified_integration: false, storage_boundary: "host-enforced", assurance_policy: "verified" };
+	assert.equal(acceptanceChannelSupported(base).supported, false);
+	assert.match(acceptanceChannelSupported(base).reason, /not a verified integration/);
+	// The adapter asserting it is verified does not make it so; the registry does.
+	assert.equal(acceptanceChannelSupported({ ...base, verified_integration: true }).supported, false);
+	assert.equal(acceptanceChannelSupported({ ...base, human_acceptance: "host-native", label: "pi" }).supported, false);
+	assert.deepEqual(acceptanceChannelSupported({ ...base, human_acceptance: "none" }), { supported: false, reason: "the host declares no human-acceptance channel" });
+	for (const field of ["assurance", "verified_integration", "storage", "storage_boundary", "assurance_policy"]) {
+		assert.ok(codesAt(validateChangeRequest({ action: "request-acceptance", change_id: valid.change.id, attempt_id: valid.attempt.id, [field]: "verified" })).includes(`unknown-field /${field}`), field);
+	}
+});
+
+test("channel trust and at-rest trust are separate: a real UI decision in a writable namespace is cooperative", () => {
+	assert.deepEqual(ASSURANCE_POLICIES, ["verified", "cooperative"]);
+	const enforced = { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "continuous-since-initialization" };
+	const registry = [{ host: "mcp-server", client: "claude-code", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
+	const ctx = (storage, extra = {}) => ({ ...receiptContext(), current_storage: storage, ...extra });
+	// Against the contract's own (empty) registry nothing is verified today, even the fixture approval.
+	const today = classifyAcceptance(valid.approval, ctx(enforced));
+	assert.equal(today.class, "cooperative");
+	assert.match(today.reasons[0], /not in VERIFIED_ACCEPTANCE_INTEGRATIONS now/);
+	// With the pair registered and a boundary enforced before the decision, the full path holds.
+	assert.deepEqual(classifyAcceptance(valid.approval, ctx(enforced, { integrations: registry })), { class: "verified", reasons: [] });
+	// The same record read by a host whose namespace agent tools can write.
+	const now = classifyAcceptance(valid.approval, ctx({ boundary: "none" }, { integrations: registry }));
+	assert.equal(now.class, "cooperative");
+	assert.match(now.reasons[0], /not host-enforced now/);
+	// A decision earlier than the boundary's own epoch is inconsistent with continuous protection: a consistency check that can only lower trust.
+	const late = classifyAcceptance(valid.approval, ctx({ ...enforced, enforced_since: "2026-09-17T11:00:00Z" }, { integrations: registry }));
+	assert.equal(late.class, "cooperative");
+	assert.match(late.reasons[0], /before the boundary was enforced/);
+	// A forged record claiming host-enforced storage and a verified integration is still cooperative under a boundary of none.
+	const forged = { ...valid.approval, storage: { boundary: "host-enforced", note: "forged" } };
+	assert.equal(classifyAcceptance(forged, ctx({ boundary: "none" }, { integrations: registry })).class, "cooperative");
+	// A de-verified pair downgrades old approvals: the receipt's own boolean is not trusted.
+	assert.equal(classifyAcceptance(valid.approval, ctx(enforced, { integrations: [{ ...registry[0], client: "other-client" }] })).class, "cooperative");
+	// Malformed current storage fails closed.
+	assert.equal(classifyAcceptance(valid.approval, ctx({ boundary: "host-enforced" }, { integrations: registry })).class, "cooperative");
+	assert.equal(classifyAcceptance(valid.approval, ctx({ boundary: "host-enforced", enforced_since: enforced.enforced_since }, { integrations: registry })).class, "cooperative", "protection omitted");
+	assert.equal(classifyAcceptance(valid.approval, ctx(undefined, { integrations: registry })).class, "cooperative");
+	// A record minted over an unprotected namespace cannot even be written as verified …
+	assert.deepEqual(codesAt(validateRecord({ ...valid.approval, storage: { boundary: "none", note: "n" } })), ["invalid-value /storage/boundary"]);
+	// … and the honestly-labelled cooperative record is valid, binds correctly, and classifies as cooperative everywhere.
+	assert.equal(validateRecord(valid.approvalCooperative).ok, true);
+	assert.deepEqual(evaluateApprovalReceipt(valid.approvalCooperative, receiptContext()), { ok: true, accepted: true }, "the receipt binding itself is sound");
+	const coop = classifyAcceptance(valid.approvalCooperative, ctx(enforced, { integrations: registry }));
+	assert.equal(coop.class, "cooperative");
+	assert.equal(coop.reasons.length, 3, "unverified integration, cooperative policy, unprotected at mint");
+	// A receipt that does not bind is invalid, not cooperative.
+	assert.equal(classifyAcceptance({ ...valid.approval, decision: "rejected" }, ctx(enforced, { integrations: registry })).class, "invalid");
+	assert.equal(classifyAcceptance(valid.approval, ctx(enforced, { integrations: registry, consumed_nonces: [valid.approval.receipt.nonce] })).class, "invalid");
+	// The presentation discloses a candidate that could not bind a verified acceptance.
+	const weak = standardLimitations({ proofs: [], reviews: [], candidate: { ...valid.candidate, attested_by: "caller" }, assurance: "verified", storage_boundary: "host-enforced" });
+	assert.match(weak[0], /candidate snapshot is caller-attested/);
+	// "verified" is the only spelling of verified: the presentation carries the policy and every proof's authority.
+	assert.equal(valid.request.presentation.assurance, "verified");
+	assert.ok(valid.request.presentation.proof_summary.every((p) => p.authority === "observed"));
+});
+
+test("protection must precede authoritative initialization: a pair forged while unprotected cannot be laundered by later protection, whatever times it carries", () => {
+	assert.deepEqual(PROTECTION_HISTORIES, ["continuous-since-initialization", "enabled-after-initialization", "interrupted", "imported-history"]);
+	assert.deepEqual(TOOL_RESULT_PATHS, ["protected", "unprotected", "none"]);
+	const registry = [{ host: "mcp-server", client: "claude-code", channel: "mcp-elicitation", evidence: "test-only registry entry" }];
+	// The agent, while the namespace is writable, pre-writes a request/approval
+	// pair whose issued and decided times are AFTER the epoch at which the
+	// operator will later enable protection. Every timestamp it needs is inside
+	// the records it is writing.
+	const epoch = "2026-09-19T00:00:00Z";
+	const forgedRequest = { ...valid.request, issued_at: "2026-09-20T12:00:00Z", expires_at: "2026-09-20T13:00:00Z" };
+	const forgedApproval = {
+		...valid.approval,
+		decided_at: "2026-09-20T12:30:00Z",
+		receipt: { ...valid.approval.receipt, issued_at: "2026-09-20T12:00:00Z", responded_at: "2026-09-20T12:30:00Z", verified_integration: true },
+		storage: { boundary: "host-enforced", note: "forged while unprotected" },
+	};
+	assert.equal(validateRecord(forgedApproval).ok, true, "byte-level the forgery is a well-formed record");
+	assert.equal(validateAcceptanceRequest(forgedRequest).ok, true);
+	const base = { ...receiptContext(), request: forgedRequest, integrations: registry };
+	// Protection is then enabled on the existing namespace. The record-internal
+	// times post-date the epoch, so a timestamp comparison alone would pass.
+	const enabledLater = classifyAcceptance(forgedApproval, { ...base, current_storage: { boundary: "host-enforced", enforced_since: epoch, protection: "enabled-after-initialization" } });
+	assert.equal(enabledLater.class, "cooperative");
+	assert.match(enabledLater.reasons[0], /^protection history is enabled-after-initialization/);
+	assert.ok(!enabledLater.reasons.some((r) => /before the boundary/.test(r)), "the timestamp check is not what refuses it");
+	// Nor does an interrupted boundary or imported history, and omitting the history fails closed.
+	for (const protection of ["interrupted", "imported-history", undefined, null, true, "bogus"]) {
+		const result = classifyAcceptance(forgedApproval, { ...base, current_storage: { boundary: "host-enforced", enforced_since: epoch, protection } });
+		assert.equal(result.class, "cooperative", `protection ${protection}`);
+		assert.match(result.reasons[0], PROTECTION_HISTORIES.includes(protection) ? /^protection history is / : /^protection history is not declared/);
+	}
+	// Only a namespace initialized under protection that never lapsed is eligible — and then the forgery could not have been written.
+	assert.deepEqual(classifyAcceptance(forgedApproval, { ...base, current_storage: { boundary: "host-enforced", enforced_since: epoch, protection: "continuous-since-initialization" } }), { class: "verified", reasons: [] }, "with continuous protection the record is by construction not a forgery; the host's attestation, not the record, carries this");
+	// The same holds for the genuine fixture: continuity is required, not just an early epoch.
+	assert.equal(classifyAcceptance(valid.approval, { ...receiptContext(), integrations: registry, current_storage: { boundary: "host-enforced", enforced_since: "2026-09-17T09:00:00Z", protection: "imported-history" } }).class, "cooperative");
+	// Nothing in a request can set the protection history or the tool-result path.
+	for (const field of ["current_storage", "protection", "tool_result_path"]) {
+		assert.ok(codesAt(validateChangeRequest({ action: "status", [field]: "continuous-since-initialization" })).includes(`unknown-field /${field}`), field);
+	}
+});
+
+test("host-tool-result attestation requires a protected ingestion path; anything else is a claim", () => {
+	assert.equal(attestationForHostObservation({ tool_result_path: "protected" }), "host-tool-result");
+	assert.equal(attestationForHostObservation({ tool_result_path: "unprotected" }), "caller");
+	assert.equal(attestationForHostObservation({ tool_result_path: "none" }), "caller");
+	assert.equal(attestationForHostObservation({}), "caller", "an undeclared path is not a protected one");
+	// And what that attestation yields on the record is then a claim, not an observation.
+	const viaUnprotectedHook = { ...valid.proof, provenance: { source: "claude-code:post-tool-use-hook", attested_by: attestationForHostObservation({ tool_result_path: "unprotected" }) } };
+	assert.equal(proofAuthority(viaUnprotectedHook), "claimed");
+	assert.equal(proofDischarges(viaUnprotectedHook, valid.slice.proof_obligations[0], "verified"), false);
 });
 
 test("state transitions are a closed table", () => {

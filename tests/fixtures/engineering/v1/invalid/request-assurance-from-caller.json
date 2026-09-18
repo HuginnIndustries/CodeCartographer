@@ -1,0 +1,17 @@
+{
+	"description": "The policy is host configuration; a request cannot pick it.",
+	"subject": "request",
+	"expect": [
+		{
+			"code": "unknown-field",
+			"path": "/assurance"
+		}
+	],
+	"value": {
+		"action": "request-acceptance",
+		"idempotency_key": "accept-1",
+		"change_id": "chg_00000000000000000000c001",
+		"attempt_id": "att_00000000000000000000a001",
+		"assurance": "cooperative"
+	}
+}

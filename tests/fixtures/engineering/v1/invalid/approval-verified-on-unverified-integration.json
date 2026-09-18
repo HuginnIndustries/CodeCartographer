@@ -1,10 +1,10 @@
 {
-	"description": "A nonce is 32 lowercase hex characters.",
+	"description": "A client advertising elicitation is not a verified integration; a verified approval may not be minted on it.",
 	"subject": "record",
 	"expect": [
 		{
 			"code": "invalid-value",
-			"path": "/receipt/nonce"
+			"path": "/receipt/verified_integration"
 		}
 	],
 	"value": {
@@ -22,7 +22,7 @@
 		"decided_at": "2026-09-17T10:45:00Z",
 		"receipt": {
 			"request_id": "acr_000000000000000000000c01",
-			"nonce": "not-a-nonce",
+			"nonce": "0123456789abcdef0123456789abcdef",
 			"presentation_digest": "sha256:aaf8742f01787b9eb3dbbb7d26122bc66270a4258e7342630625f337507f0000",
 			"channel": "mcp-elicitation",
 			"host": "mcp-server",
@@ -34,7 +34,7 @@
 			"issued_at": "2026-09-17T10:40:00Z",
 			"responded_at": "2026-09-17T10:45:00Z",
 			"authenticated": "host-session",
-			"verified_integration": true,
+			"verified_integration": false,
 			"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."
 		},
 		"assurance": "verified",
