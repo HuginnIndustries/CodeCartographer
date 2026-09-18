@@ -26,13 +26,17 @@
 import { compareUtf8, computeInputDigest, computePresentationDigest, computeSnapshotDigest, isDigest } from "./digest.ts";
 import { isLocalId, isNonce, isRecordId, isRepoRelativePath, isScopePattern } from "./ids.ts";
 import {
+	ACCEPTANCE_REQUEST_MAX_TTL_MS,
 	APPROVAL_CHANNELS,
 	APPROVAL_DECISIONS,
 	ATTEMPT_OUTCOMES,
 	ATTEMPT_OUTCOMES_REQUIRING_CANDIDATE,
+	ATTEMPT_OUTCOME_TRANSITIONS,
+	ATTESTATIONS,
 	CHANGE_ACTIONS,
 	CHANGE_MODES,
 	CHANGE_STATES,
+	CHANGE_STATE_TRANSITIONS,
 	CHECK_KINDS,
 	COLLECTORS,
 	COLLECTOR_RANK,
@@ -49,6 +53,7 @@ import {
 	REVIEWER_SEPARATIONS,
 	SCENARIO_KINDS,
 	SLICE_STATES,
+	SLICE_STATE_TRANSITIONS,
 	SNAPSHOT_ROLES,
 	SNAPSHOT_STABILITIES,
 	TRUSTED_APPROVAL_CHANNELS,
@@ -57,6 +62,7 @@ import {
 	type AcceptanceRequest,
 	type ApprovalRecord,
 	type AttemptRecord,
+	type ChangeBundle,
 	type ChangeRecord,
 	type ChangeRequest,
 	type Collector,
@@ -68,6 +74,7 @@ import {
 	type RecordKind,
 	type ReviewRecord,
 	type SliceRecord,
+	type SnapshotInput,
 	type SnapshotRecord,
 	type ValidationOutcome,
 } from "./types.ts";
@@ -78,6 +85,13 @@ import {
 export function collectorSatisfies(actual: Collector, minimum: Collector): boolean {
 	if (actual === "agent-claimed" || minimum === "agent-claimed") return false;
 	return COLLECTOR_RANK[actual] >= COLLECTOR_RANK[minimum];
+}
+
+/** Whether `from → to` is an allowed transition for the kind's state machine; the same state is never a transition. */
+export function isAllowedTransition(kind: "change" | "slice" | "attempt", from: string, to: string): boolean {
+	const table = kind === "change" ? CHANGE_STATE_TRANSITIONS : kind === "slice" ? SLICE_STATE_TRANSITIONS : ATTEMPT_OUTCOME_TRANSITIONS;
+	const next = (table as Record<string, readonly string[]>)[from];
+	return next !== undefined && next.includes(to);
 }
 
 // ---------- error collection ----------
@@ -127,7 +141,7 @@ function checkObject(value: unknown, path: string, shape: Shape, errors: Errors)
 		return null;
 	}
 	for (const [key, spec] of Object.entries(shape)) {
-		if (!(key in value)) {
+		if (!Object.hasOwn(value, key)) {
 			if (spec.required) errors.fail(at(path, key), "missing-field", `missing required field ${key}`);
 			continue;
 		}
@@ -138,7 +152,8 @@ function checkObject(value: unknown, path: string, shape: Shape, errors: Errors)
 		spec.check(value[key], at(path, key), errors);
 	}
 	for (const key of Object.keys(value)) {
-		if (!(key in shape)) errors.fail(at(path, key), "unknown-field", `unknown field ${key}`);
+		// hasOwn, not `in`: `"toString" in shape` is true for any object.
+		if (!Object.hasOwn(shape, key)) errors.fail(at(path, key), "unknown-field", `unknown field ${key}`);
 	}
 	return value;
 }
@@ -351,7 +366,8 @@ const CHECK_SHAPE: Shape = { kind: req(oneOf(CHECK_KINDS)), command: opt(nonEmpt
 
 const ENVIRONMENT_SHAPE: Shape = { summary: req(nonEmptyString), digest: req(digest) };
 
-const PROVENANCE_SHAPE: Shape = { source: req(nonEmptyString), run_reference: opt(nonEmptyString) };
+const PROVENANCE_INPUT_SHAPE: Shape = { source: req(nonEmptyString), run_reference: opt(nonEmptyString) };
+const PROVENANCE_SHAPE: Shape = { ...PROVENANCE_INPUT_SHAPE, attested_by: req(oneOf(ATTESTATIONS)) };
 
 const REVIEWER_SHAPE: Shape = {
 	context: req(oneOf(REVIEWER_CONTEXTS)),
@@ -388,7 +404,7 @@ const PRESENTATION_SHAPE: Shape = {
 	requested_outcome: req(nonEmptyString),
 	slice_deliverable: req(nonEmptyString),
 	candidate_summary: req(nonEmptyString),
-	proof_summary: req(arrayOf(objectOf({ obligation_id: req(localId), result: req(oneOf(PROOF_RESULTS)), collector: req(oneOf(COLLECTORS)) }))),
+	proof_summary: req(arrayOf(objectOf({ obligation_id: req(localId), result: req(oneOf(PROOF_RESULTS)), collector: req(oneOf(COLLECTORS)), attested_by: req(oneOf(ATTESTATIONS)) }))),
 	review_summary: req(arrayOf(objectOf({ review_id: req(recordId("review")), separation: req(oneOf(REVIEWER_SEPARATIONS)), remaining_blockers: req(nonNegativeInteger) }))),
 	limitations: req(arrayOf(nonEmptyString)),
 };
@@ -548,13 +564,17 @@ const SNAPSHOT_BODY: Shape = {
 	attempt_id: req(recordId("attempt")),
 	role: req(oneOf(SNAPSHOT_ROLES)),
 	...SNAPSHOT_INPUT_BODY,
+	attested_by: req(oneOf(ATTESTATIONS)),
 	digest: req(digest),
 };
-function snapshotPost(obj: Record<string, unknown>, path: string, errors: Errors, identityErrorsBefore: number): void {
-	// Only recompute over identity fields that passed their own checks;
+const IDENTITY_FIELDS = ["coverage", "manifest", "repository"];
+function snapshotPost(obj: Record<string, unknown>, path: string, errors: Errors, errorsBefore: number): void {
+	// Only recompute when the identity fields passed their own checks;
 	// otherwise the mismatch would just restate an error already reported.
-	if (errors.list.length !== identityErrorsBefore) return;
-	if (!isDigest(obj.digest)) return;
+	// An error elsewhere on the record (a bad timestamp, say) does not hide it.
+	const identityPaths = IDENTITY_FIELDS.map((field) => at(path, field));
+	const identityBroken = errors.list.slice(errorsBefore).some((e) => identityPaths.some((p) => e.path === p || e.path.startsWith(`${p}/`)));
+	if (identityBroken || !isDigest(obj.digest)) return;
 	const expected = computeSnapshotDigest(obj as never);
 	if (expected !== obj.digest) errors.fail(at(path, "digest"), "digest-mismatch", `snapshot digest is ${obj.digest}, recomputed ${expected}`);
 }
@@ -573,9 +593,9 @@ const PROOF_INPUT_BODY: Shape = {
 	observer: opt(nonEmptyString),
 	artifacts: req(arrayOf(objectOf(ARTIFACT_SHAPE))),
 	environment: opt(objectOf(ENVIRONMENT_SHAPE)),
-	provenance: req(objectOf(PROVENANCE_SHAPE)),
+	provenance: req(objectOf(PROVENANCE_INPUT_SHAPE)),
 };
-const PROOF_BODY: Shape = { change_id: req(recordId("change")), attempt_id: req(recordId("attempt")), ...PROOF_INPUT_BODY };
+const PROOF_BODY: Shape = { change_id: req(recordId("change")), attempt_id: req(recordId("attempt")), ...PROOF_INPUT_BODY, provenance: req(objectOf(PROVENANCE_SHAPE)) };
 function proofPost(obj: Record<string, unknown>, path: string, errors: Errors): void {
 	uniqueStrings(obj.scenario_ids, at(path, "scenario_ids"), errors);
 	uniqueBy(obj.artifacts, at(path, "artifacts"), "id", errors);
@@ -660,9 +680,13 @@ function approvalPost(obj: Record<string, unknown>, path: string, errors: Errors
 	if (isTimestamp(receipt.issued_at) && isTimestamp(receipt.responded_at) && before(receipt.responded_at, receipt.issued_at)) {
 		errors.fail(at(receiptPath, "responded_at"), "invalid-value", "responded_at precedes issued_at");
 	}
-	const untrusted = receipt.channel === "cooperative-file" || receipt.channel === "agent-declared";
-	if (untrusted && receipt.authenticated !== undefined && receipt.authenticated !== "none") {
+	if (typeof receipt.channel !== "string" || !APPROVAL_CHANNELS.includes(receipt.channel as never) || receipt.authenticated === undefined) return;
+	const trusted = TRUSTED_APPROVAL_CHANNELS.includes(receipt.channel as never);
+	if (!trusted && receipt.authenticated !== "none") {
 		errors.fail(at(receiptPath, "authenticated"), "invalid-value", `a ${receipt.channel} receipt authenticates nothing`);
+	}
+	if (trusted && receipt.authenticated !== "host-session") {
+		errors.fail(at(receiptPath, "authenticated"), "invalid-value", `a ${receipt.channel} receipt is bound to the host session that issued the request`);
 	}
 }
 
@@ -758,8 +782,11 @@ export function validateAcceptanceRequest(value: unknown, path: string = "/"): V
 	const errorsBefore = errors.list.length;
 	const obj = checkObject(value, path, ACCEPTANCE_REQUEST_SHAPE, errors);
 	if (!obj) return outcome(errors, value as never);
-	if (isTimestamp(obj.issued_at) && isTimestamp(obj.expires_at) && !before(obj.issued_at, obj.expires_at)) {
-		errors.fail(at(path, "expires_at"), "invalid-value", "expires_at must be after issued_at");
+	if (isTimestamp(obj.issued_at) && isTimestamp(obj.expires_at)) {
+		if (!before(obj.issued_at, obj.expires_at)) errors.fail(at(path, "expires_at"), "invalid-value", "expires_at must be after issued_at");
+		else if (Date.parse(obj.expires_at) - Date.parse(obj.issued_at) > ACCEPTANCE_REQUEST_MAX_TTL_MS) {
+			errors.fail(at(path, "expires_at"), "invalid-value", `a request is valid for at most ${ACCEPTANCE_REQUEST_MAX_TTL_MS / 3_600_000} hours`);
+		}
 	}
 	if (errors.list.length === errorsBefore && isDigest(obj.presentation_digest)) {
 		const expected = computePresentationDigest(obj.presentation as AcceptancePresentation);
@@ -797,9 +824,9 @@ export function buildAcceptanceRequest(args: {
 		requested_outcome: change.requested_outcome,
 		slice_deliverable: slice.deliverable,
 		candidate_summary: `${candidate.manifest.length} manifest entries (${files} files, ${symlinks} symlinks); ${tree}; digest ${candidate.digest}`,
-		proof_summary: args.proofs.map((p) => ({ obligation_id: p.obligation_id, result: p.result, collector: p.collector })),
+		proof_summary: args.proofs.map((p) => ({ obligation_id: p.obligation_id, result: p.result, collector: p.collector, attested_by: p.provenance.attested_by })),
 		review_summary: args.reviews.map((r) => ({ review_id: r.id, separation: r.reviewer.separation, remaining_blockers: r.remaining_blockers.length })),
-		limitations: [...args.limitations],
+		limitations: [...standardLimitations(args.proofs, args.reviews), ...args.limitations],
 	};
 	return {
 		schema_version: ENGINEERING_SCHEMA_VERSION,
@@ -818,12 +845,39 @@ export function buildAcceptanceRequest(args: {
 	};
 }
 
+/**
+ * The limitations every presentation carries, derived from the records: the
+ * caller can add to them but cannot remove them.
+ */
+export function standardLimitations(proofs: ProofRecord[], reviews: ReviewRecord[]): string[] {
+	const lines: string[] = [];
+	const callerAttested = proofs.filter((p) => p.provenance.attested_by === "caller").length;
+	if (callerAttested > 0) {
+		lines.push(`${callerAttested} of ${proofs.length} proofs are caller-attested: the host session reported the result; the framework did not observe the command.`);
+	}
+	if (reviews.length > 0) lines.push("Reviewer separation is declared by the host, not authenticated.");
+	return lines;
+}
+
+/**
+ * Whether the tree the adapter just re-read is still the bound candidate.
+ * `reread` is the fresh capture's identity fields; only its digest matters.
+ * A mismatch is `digest-mismatch` at `/digest` and means the candidate was
+ * edited after it was snapshotted — nothing it earned carries over.
+ */
+export function checkCandidateFreshness(candidate: SnapshotRecord, reread: Pick<SnapshotInput, "coverage" | "manifest" | "repository">): ValidationOutcome<SnapshotRecord> {
+	const errors = new Errors();
+	const current = computeSnapshotDigest(reread);
+	if (current !== candidate.digest) errors.fail("/digest", "digest-mismatch", `candidate ${candidate.id} has digest ${candidate.digest}; the tree now has ${current}`);
+	return outcome(errors, candidate);
+}
+
 // ---------- approval receipt ----------
 
 export interface ReceiptContext {
 	/** The request the core issued with this id, if the store still has it. */
 	request: AcceptanceRequest | undefined;
-	/** Nonces already bound to an approval; a second use is a replay. */
+	/** Nonces bound by approvals *other than* the one under evaluation; a second use is a replay. Re-evaluating a stored approval passes its own nonce nowhere. */
 	consumed_nonces: Iterable<string>;
 	attempt: AttemptRecord;
 	candidate: SnapshotRecord;
@@ -842,8 +896,29 @@ export interface ReceiptContext {
  */
 export function evaluateApprovalReceipt(approval: ApprovalRecord, context: ReceiptContext): { ok: true; accepted: boolean } | { ok: false; errors: EngineeringError[] } {
 	const errors = new Errors();
+	// The inputs are re-validated here rather than assumed: the checks are pure
+	// and cheap, and a caller that skipped them would otherwise get an `ok`
+	// built on NaN comparisons.
+	for (const [value, validate, label] of [
+		[approval, (v: unknown) => validateRecordOfKind("approval", v), "approval"],
+		[context.attempt, (v: unknown) => validateRecordOfKind("attempt", v), "attempt"],
+		[context.candidate, (v: unknown) => validateRecordOfKind("snapshot", v), "candidate"],
+	] as const) {
+		const result = validate(value) as ValidationOutcome<unknown>;
+		if (result.ok === false) {
+			errors.fail("/", "invalid-request", `${label} record is not valid: ${result.errors[0].code} at ${result.errors[0].path}`);
+			return outcome(errors, undefined as never) as never;
+		}
+	}
 	const receipt = approval.receipt;
 	const request = context.request;
+	if (request !== undefined) {
+		const valid = validateAcceptanceRequest(request) as ValidationOutcome<unknown>;
+		if (valid.ok === false) {
+			errors.fail("/receipt/request_id", "invalid-request", `request is not valid: ${valid.errors[0].code} at ${valid.errors[0].path}`);
+			return outcome(errors, undefined as never) as never;
+		}
+	}
 	if (!request || request.id !== receipt.request_id) {
 		errors.fail("/receipt/request_id", "receipt-unknown-request", `no acceptance request ${receipt.request_id} was issued`);
 		return outcome(errors, undefined as never) as never;
@@ -871,9 +946,13 @@ export function evaluateApprovalReceipt(approval: ApprovalRecord, context: Recei
 	if (receipt.presentation_digest !== request.presentation_digest) errors.fail("/receipt/presentation_digest", "receipt-mismatch", "presentation digest differs from the request");
 	if (receipt.issued_at !== request.issued_at) errors.fail("/receipt/issued_at", "receipt-mismatch", "issued_at differs from the request");
 	if (context.attempt.id !== approval.attempt_id) errors.fail("/attempt_id", "receipt-mismatch", "context attempt is not the approved attempt");
+	if (context.attempt.slice_id !== approval.slice_id) errors.fail("/slice_id", "receipt-mismatch", "attempt belongs to another slice");
 	if (context.attempt.candidate_snapshot_id !== approval.candidate_snapshot_id) errors.fail("/candidate_snapshot_id", "receipt-mismatch", "attempt's bound candidate differs");
 	if (context.attempt.inputs.digest !== approval.input_digest) errors.fail("/input_digest", "receipt-mismatch", "attempt's input digest differs");
 	if (context.candidate.id !== approval.candidate_snapshot_id) errors.fail("/candidate_snapshot_id", "receipt-mismatch", "context snapshot is not the approved candidate");
+	if (context.candidate.attempt_id !== approval.attempt_id || context.candidate.role !== "candidate") {
+		errors.fail("/candidate_snapshot_id", "receipt-mismatch", "context snapshot is not a candidate of the approved attempt");
+	}
 	if (context.candidate.digest !== approval.candidate_digest) errors.fail("/candidate_digest", "receipt-mismatch", "candidate digest differs from the snapshot's");
 	if (before(receipt.responded_at, request.issued_at)) errors.fail("/receipt/responded_at", "receipt-mismatch", "responded before the request was issued");
 	else if (before(request.expires_at, receipt.responded_at)) errors.fail("/receipt/responded_at", "receipt-expired", `responded after the request expired at ${request.expires_at}`);
@@ -882,24 +961,26 @@ export function evaluateApprovalReceipt(approval: ApprovalRecord, context: Recei
 	}
 	if (context.candidate.stability !== "stable") errors.fail("/candidate_snapshot_id", "invalid-value", "an unstable candidate cannot bind an acceptance");
 	if (context.candidate.collector === "agent-claimed") errors.fail("/candidate_snapshot_id", "invalid-value", "an agent-claimed candidate snapshot cannot bind an acceptance");
+	if (context.candidate.attested_by !== "adapter") errors.fail("/candidate_snapshot_id", "invalid-value", "only an adapter-captured candidate snapshot can bind an acceptance");
 	if (!TRUSTED_APPROVAL_CHANNELS.includes(receipt.channel)) {
 		errors.fail("/receipt/channel", "untrusted-channel", `${receipt.channel} is a cooperative record, not human acceptance`);
 	}
-	if (!errors.ok) return { ok: false, errors: errors.list };
+	if (!errors.ok) return { ok: false, errors: dedupe(errors.list) };
 	return { ok: true, accepted: approval.decision === "accepted" };
 }
 
-// ---------- bundle ----------
-
-export interface ChangeBundle {
-	change: ChangeRecord;
-	slices: SliceRecord[];
-	attempts: AttemptRecord[];
-	snapshots: SnapshotRecord[];
-	proofs: ProofRecord[];
-	reviews: ReviewRecord[];
-	approvals: ApprovalRecord[];
+/** One entry per `code + path`, first message kept; several checks can name the same binding. */
+function dedupe(list: EngineeringError[]): EngineeringError[] {
+	const seen = new Set<string>();
+	return list.filter((e) => {
+		const key = `${e.code} ${e.path}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
 }
+
+// ---------- bundle ----------
 
 const BUNDLE_SLOTS: Array<[keyof ChangeBundle, RecordKind]> = [
 	["slices", "slice"],
@@ -1008,8 +1089,12 @@ function checkBundleReferences(bundle: ChangeBundle, errors: Errors): void {
 		const snapshot = snapshots.get(proof.snapshot_id);
 		if (!snapshot || snapshot.attempt_id !== attempt.id) errors.fail(`${path}/snapshot_id`, "unknown-reference", `no snapshot ${proof.snapshot_id} of attempt ${attempt.id}`);
 		const slice = slices.get(attempt.slice_id);
-		if (slice && !slice.proof_obligations.some((o) => o.id === proof.obligation_id)) {
+		const obligation = slice?.proof_obligations.find((o) => o.id === proof.obligation_id);
+		if (slice && !obligation) {
 			errors.fail(`${path}/obligation_id`, "unknown-reference", `slice ${slice.id} declares no obligation ${proof.obligation_id}`);
+		}
+		if (obligation && !proof.scenario_ids.includes(obligation.scenario_id)) {
+			errors.fail(`${path}/scenario_ids`, "invalid-value", `obligation ${obligation.id} proves scenario ${obligation.scenario_id}, which the proof does not name`);
 		}
 		proof.scenario_ids.forEach((id, j) => {
 			if (!scenarios.has(id)) errors.fail(`${path}/scenario_ids/${j}`, "unknown-reference", `no scenario ${id} in this change`);
@@ -1030,9 +1115,13 @@ function checkBundleReferences(bundle: ChangeBundle, errors: Errors): void {
 		return attempt;
 	};
 	bundle.reviews.forEach((review, i) => bindCandidate(review, `/reviews/${i}`));
+	const nonces = new Map<string, number>();
 	bundle.approvals.forEach((approval, i) => {
 		const attempt = bindCandidate(approval, `/approvals/${i}`);
 		if (attempt && approval.slice_id !== attempt.slice_id) errors.fail(`/approvals/${i}/slice_id`, "invalid-value", `attempt ${attempt.id} belongs to slice ${attempt.slice_id}`);
+		const first = nonces.get(approval.receipt.nonce);
+		if (first !== undefined) errors.fail(`/approvals/${i}/receipt/nonce`, "receipt-replayed", `nonce already bound by /approvals/${first}`);
+		else nonces.set(approval.receipt.nonce, i);
 	});
 }
 
@@ -1060,9 +1149,14 @@ const REQUEST_SHAPES: Record<ChangeRequest["action"], Shape> = {
 	"start-attempt": {
 		change_id: req(recordId("change")),
 		slice_id: req(recordId("slice")),
-		baseline_snapshot: req(objectOf(SNAPSHOT_INPUT_BODY)),
 		inputs: req(objectOf(INPUTS_BODY, (obj, path, errors) => inputsPost(obj, path, errors, false))),
+		baseline_snapshot: opt(objectOf(SNAPSHOT_INPUT_BODY)),
 		parent_attempt_id: opt(recordId("attempt")),
+	},
+	"capture-candidate": {
+		change_id: req(recordId("change")),
+		attempt_id: req(recordId("attempt")),
+		snapshot: opt(objectOf(SNAPSHOT_INPUT_BODY)),
 	},
 	"record-proof": {
 		change_id: req(recordId("change")),
@@ -1078,8 +1172,12 @@ const REQUEST_SHAPES: Record<ChangeRequest["action"], Shape> = {
 	"request-acceptance": {
 		change_id: req(recordId("change")),
 		attempt_id: req(recordId("attempt")),
-		candidate_snapshot: req(objectOf(SNAPSHOT_INPUT_BODY)),
 	},
+};
+
+/** Cross-field rules that apply to a request body as they would to the record it becomes. */
+const REQUEST_POSTS: Partial<Record<ChangeRequest["action"], (obj: Record<string, unknown>, path: string, errors: Errors) => void>> = {
+	create: changePost,
 };
 
 const idempotencyKey: Check = (value, path, errors) => {
@@ -1110,6 +1208,7 @@ export function validateChangeRequest(value: unknown): ValidationOutcome<ChangeR
 	const action = value.action as ChangeRequest["action"];
 	const shape: Shape = { action: req(() => {}), ...REQUEST_SHAPES[action] };
 	if (MUTATING_CHANGE_ACTIONS.includes(action)) shape.idempotency_key = opt(idempotencyKey);
-	checkObject(value, "/", shape, errors);
+	const obj = checkObject(value, "/", shape, errors);
+	if (obj) REQUEST_POSTS[action]?.(obj, "/", errors);
 	return outcome(errors, value as unknown as ChangeRequest);
 }

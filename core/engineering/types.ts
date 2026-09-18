@@ -162,6 +162,18 @@ export const TRUSTED_APPROVAL_CHANNELS: readonly ApprovalChannel[] = ["mcp-elici
 export const RECEIPT_AUTHENTICATIONS = ["none", "host-session"] as const;
 export type ReceiptAuthentication = (typeof RECEIPT_AUTHENTICATIONS)[number];
 
+/**
+ * Who vouches for a caller-visible observation (`collector`, `result`,
+ * `stability`). `adapter` means the host adapter itself captured or observed
+ * it with its own read-only utilities; `caller` means the values arrived in a
+ * tool payload and are the caller's claim. Set by the adapter, never by the
+ * payload: `attested_by` is an unknown field on every input shape. The
+ * acceptance gate requires an adapter-attested candidate snapshot; proofs may
+ * be caller-attested, and the presentation says so.
+ */
+export const ATTESTATIONS = ["adapter", "caller"] as const;
+export type Attestation = (typeof ATTESTATIONS)[number];
+
 /** How a host can obtain a human decision; declared per request by the adapter, never by the model. */
 export const HUMAN_ACCEPTANCE_CAPABILITIES = ["mcp-elicitation", "host-native", "none"] as const;
 export type HumanAcceptanceCapability = (typeof HUMAN_ACCEPTANCE_CAPABILITIES)[number];
@@ -340,6 +352,8 @@ export interface SnapshotRecord extends RecordEnvelope<"snapshot"> {
 	/** `unstable` when the tree moved during capture; an unstable candidate cannot be accepted. */
 	stability: SnapshotStability;
 	collector: Collector;
+	/** Adapter-set; a caller-attested candidate cannot bind an acceptance. */
+	attested_by: Attestation;
 	captured_at: Timestamp;
 	digest: Digest;
 }
@@ -393,6 +407,8 @@ export interface ProofRecord extends RecordEnvelope<"proof"> {
 		source: string;
 		/** Required for `ci-reported`: the run this result was read from. */
 		run_reference?: string;
+		/** Adapter-set: whether the adapter observed `collector`/`result` itself or ingested the caller's claim. */
+		attested_by: Attestation;
 	};
 }
 
@@ -467,6 +483,17 @@ export interface ApprovalRecord extends RecordEnvelope<"approval"> {
 
 export type EngineeringRecord = ChangeRecord | SliceRecord | AttemptRecord | SnapshotRecord | ProofRecord | ReviewRecord | ApprovalRecord;
 
+/** Every record of one change, as the store (E02) enumerates it and `validateChangeBundle` checks it. */
+export interface ChangeBundle {
+	change: ChangeRecord;
+	slices: SliceRecord[];
+	attempts: AttemptRecord[];
+	snapshots: SnapshotRecord[];
+	proofs: ProofRecord[];
+	reviews: ReviewRecord[];
+	approvals: ApprovalRecord[];
+}
+
 // ---------- acceptance request ----------
 
 /**
@@ -481,7 +508,7 @@ export interface AcceptancePresentation {
 	requested_outcome: string;
 	slice_deliverable: string;
 	candidate_summary: string;
-	proof_summary: Array<{ obligation_id: LocalId; result: ProofResult; collector: Collector }>;
+	proof_summary: Array<{ obligation_id: LocalId; result: ProofResult; collector: Collector; attested_by: Attestation }>;
 	review_summary: Array<{ review_id: RecordId; separation: ReviewerSeparation; remaining_blockers: number }>;
 	limitations: string[];
 }
@@ -504,11 +531,11 @@ export interface AcceptanceRequest {
 
 // ---------- operation API (`codecarto_change`) ----------
 
-export const CHANGE_ACTIONS = ["create", "status", "plan", "start-attempt", "record-proof", "record-review", "check", "request-acceptance"] as const;
+export const CHANGE_ACTIONS = ["create", "status", "plan", "start-attempt", "capture-candidate", "record-proof", "record-review", "check", "request-acceptance"] as const;
 export type ChangeAction = (typeof CHANGE_ACTIONS)[number];
 
 /** Actions that write records; each accepts an `idempotency_key`. */
-export const MUTATING_CHANGE_ACTIONS: readonly ChangeAction[] = ["create", "plan", "start-attempt", "record-proof", "record-review", "request-acceptance"];
+export const MUTATING_CHANGE_ACTIONS: readonly ChangeAction[] = ["create", "plan", "start-attempt", "capture-candidate", "record-proof", "record-review", "request-acceptance"];
 
 /** Declared by the host adapter per request. A model cannot raise its own capability: the adapter overwrites whatever the payload says. */
 export interface HostCapabilities {
@@ -554,18 +581,34 @@ export interface PlanChangeRequest extends ChangeRequestBase {
 	slices: SliceInput[];
 }
 
-export type SnapshotInput = Omit<SnapshotRecord, keyof RecordEnvelope<"snapshot"> | "change_id" | "attempt_id" | "role" | "digest">;
+/**
+ * A snapshot as a caller may supply it. The adapter captures the tree itself
+ * whenever it can read the working directory (E03) and then ignores this;
+ * a caller-supplied snapshot is recorded `attested_by: caller` and is
+ * accepted only where the adapter cannot capture.
+ */
+export type SnapshotInput = Omit<SnapshotRecord, keyof RecordEnvelope<"snapshot"> | "change_id" | "attempt_id" | "role" | "digest" | "attested_by">;
 
 export interface StartAttemptRequest extends ChangeRequestBase {
 	action: "start-attempt";
 	change_id: RecordId;
 	slice_id: RecordId;
-	baseline_snapshot: SnapshotInput;
 	inputs: Omit<AttemptInputs, "digest">;
+	baseline_snapshot?: SnapshotInput;
 	parent_attempt_id?: RecordId;
 }
 
-export type ProofInput = Omit<ProofRecord, keyof RecordEnvelope<"proof"> | "change_id" | "attempt_id">;
+/** Binds the attempt's candidate snapshot; the attempt stays `running`. Repeatable: a later capture supersedes an earlier unbound one only while no proof references it. */
+export interface CaptureCandidateRequest extends ChangeRequestBase {
+	action: "capture-candidate";
+	change_id: RecordId;
+	attempt_id: RecordId;
+	snapshot?: SnapshotInput;
+}
+
+export type ProofInput = Omit<ProofRecord, keyof RecordEnvelope<"proof"> | "change_id" | "attempt_id" | "provenance"> & {
+	provenance: Omit<ProofRecord["provenance"], "attested_by">;
+};
 
 export interface RecordProofRequest extends ChangeRequestBase {
 	action: "record-proof";
@@ -590,17 +633,18 @@ export interface CheckChangeRequest extends ChangeRequestBase {
 }
 
 /**
- * Asks the host to obtain a human decision. There is deliberately no field on
- * this request — or any other — through which the caller can supply the
- * decision: `approve`, `approval`, `decision`, `receipt`, and friends are
- * unknown fields and the request is refused. The adapter fills `host` from
- * its own knowledge of the transport.
+ * Asks the host to obtain a human decision. The adapter re-reads the tree
+ * itself and compares it to the bound candidate (`checkCandidateFreshness`)
+ * before presenting anything. There is deliberately no field on this request
+ * — or any other — through which the caller can supply the decision:
+ * `approve`, `approval`, `decision`, `receipt`, and friends are unknown
+ * fields and the request is refused. The adapter fills `host` from its own
+ * knowledge of the transport.
  */
 export interface RequestAcceptanceRequest extends ChangeRequestBase {
 	action: "request-acceptance";
 	change_id: RecordId;
 	attempt_id: RecordId;
-	candidate_snapshot: SnapshotInput;
 }
 
 export type ChangeRequest =
@@ -608,6 +652,7 @@ export type ChangeRequest =
 	| StatusChangeRequest
 	| PlanChangeRequest
 	| StartAttemptRequest
+	| CaptureCandidateRequest
 	| RecordProofRequest
 	| RecordReviewRequest
 	| CheckChangeRequest
@@ -665,8 +710,104 @@ export interface AcceptanceRequestOutcome {
 	reason?: string;
 }
 
+/** One row of `status`: enough to pick a change without reading its bundle. */
+export interface ChangeSummary {
+	id: RecordId;
+	title: string;
+	mode: ChangeMode;
+	state: ChangeState;
+	revision: number;
+	updated_at: Timestamp;
+	slice_count: number;
+	attempt_count: number;
+}
+
+/** A change directory the store could not read as a bundle; reported, never hidden. */
+export interface CorruptChangeReport {
+	/** Workspace-relative directory, e.g. `engineering/changes/chg_…`. */
+	path: string;
+	errors: EngineeringError[];
+}
+
+export interface StatusResult {
+	changes: ChangeSummary[];
+	/** Present when the request named a `change_id`. */
+	change?: ChangeBundle;
+	corrupt: CorruptChangeReport[];
+}
+
+/** One acceptance prerequisite as the gate (E06) evaluated it; the rows mirror {@link ACCEPTANCE_REQUIRED_RECORDS}. */
+export interface AcceptanceRequirementStatus {
+	kind: RecordKind;
+	requirement: string;
+	satisfied: boolean;
+	detail?: string;
+}
+
+/** The `check` result. `eligible` means every prerequisite except the human decision is met. */
+export interface CheckResult {
+	change_id: RecordId;
+	attempt_id?: RecordId;
+	outcome: "eligible" | "blocked" | "needs-human-acceptance" | "accepted";
+	requirements: AcceptanceRequirementStatus[];
+	/** Why not eligible; codes such as `proof-not-observed`, `blocking-objection`, `digest-mismatch`, `unknown-reference`. */
+	errors: EngineeringError[];
+	/** The next bounded step for the host; the gate names it, the host decides whether to take it. */
+	next: { action: ChangeAction | "host-execute" | "obtain-human-acceptance" | "none"; reason: string };
+}
+
+/** The result payload of each action, by action. */
+export interface ChangeResults {
+	create: { change: ChangeRecord };
+	status: StatusResult;
+	plan: { change: ChangeRecord; slices: SliceRecord[] };
+	"start-attempt": { attempt: AttemptRecord; snapshot: SnapshotRecord };
+	"capture-candidate": { attempt: AttemptRecord; snapshot: SnapshotRecord };
+	"record-proof": { proof: ProofRecord };
+	"record-review": { review: ReviewRecord };
+	check: CheckResult;
+	"request-acceptance": AcceptanceRequestOutcome;
+}
+
 /** Every operation result uses this envelope; the MCP adapter (E07) mirrors it in `structuredContent` and renders `text` from it. */
-export type ChangeResult<T = unknown> = { ok: true; action: ChangeAction; result: T } | { ok: false; action?: ChangeAction; errors: EngineeringError[] };
+export type ChangeResult<A extends ChangeAction = ChangeAction> = { ok: true; action: A; result: ChangeResults[A] } | { ok: false; action?: ChangeAction; errors: EngineeringError[] };
+
+/**
+ * Allowed state transitions, `from → to[]`. Anything else is
+ * `invalid-transition`. Terminal states have no outgoing edge; a change is
+ * `accepted` only when the store records the acceptance, never by a `plan`
+ * update.
+ */
+export const CHANGE_STATE_TRANSITIONS: Readonly<Record<ChangeState, readonly ChangeState[]>> = {
+	draft: ["planned", "abandoned"],
+	planned: ["active", "draft", "abandoned"],
+	active: ["blocked", "accepted", "abandoned"],
+	blocked: ["active", "abandoned"],
+	accepted: [],
+	abandoned: [],
+};
+
+export const SLICE_STATE_TRANSITIONS: Readonly<Record<SliceState, readonly SliceState[]>> = {
+	pending: ["active", "abandoned"],
+	active: ["blocked", "accepted", "abandoned"],
+	blocked: ["active", "abandoned"],
+	accepted: [],
+	abandoned: [],
+};
+
+/** An attempt's outcome changes at most twice: `running` to a result, and a result to `superseded`. Immutability means nothing else moves. */
+export const ATTEMPT_OUTCOME_TRANSITIONS: Readonly<Record<AttemptOutcome, readonly AttemptOutcome[]>> = {
+	running: ["failed", "blocked", "ready-for-review", "needs-human-acceptance", "superseded"],
+	failed: ["superseded"],
+	blocked: ["superseded"],
+	"ready-for-review": ["needs-human-acceptance", "accepted", "blocked", "superseded"],
+	"needs-human-acceptance": ["accepted", "blocked", "superseded"],
+	accepted: [],
+	superseded: [],
+};
+
+/** The longest validity window an adapter may give an acceptance request: 24 hours. `validateAcceptanceRequest` refuses a longer one. */
+export const ACCEPTANCE_REQUEST_MAX_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The records the acceptance gate (E06) requires before an attempt may
@@ -677,8 +818,8 @@ export const ACCEPTANCE_REQUIRED_RECORDS = [
 	{ kind: "change", requirement: "state is `active`; the slice's `depends_on` are all `accepted`" },
 	{ kind: "slice", requirement: "state is `active`; every `proof_obligations[].id` is discharged" },
 	{ kind: "attempt", requirement: "outcome is `ready-for-review` or `needs-human-acceptance`; `candidate_snapshot_id` set" },
-	{ kind: "snapshot", requirement: "baseline and candidate both present; candidate `stability` is `stable` and `collector` is not `agent-claimed`; candidate digest equals the current tree at recheck" },
-	{ kind: "proof", requirement: "one per obligation with `result: passed`, `collector` at or above the obligation's `minimum_collector`, and `snapshot_id` equal to the candidate" },
+	{ kind: "snapshot", requirement: "baseline and candidate both present; candidate `stability` is `stable`, `collector` is not `agent-claimed`, and `attested_by` is `adapter`; candidate digest equals the tree the adapter re-reads at acceptance (`checkCandidateFreshness`)" },
+	{ kind: "proof", requirement: "one per obligation with `result: passed`, `collector` at or above the obligation's `minimum_collector` (`collectorSatisfies`), and `snapshot_id` equal to the candidate; caller-attested proofs are allowed and named in the presentation" },
 	{ kind: "review", requirement: "at least one with `separation: declared-separate`, bound to the candidate and input digests, with empty `remaining_blockers`" },
 	{ kind: "approval", requirement: "`decision: accepted`, receipt on a trusted channel, unconsumed nonce, bindings equal to the request and the candidate" },
 ] as const;

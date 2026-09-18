@@ -1,10 +1,10 @@
 {
-	"description": "A symlink entry carries its raw target, never a content digest.",
+	"description": "A stored snapshot always says who captured it.",
 	"subject": "record",
 	"expect": [
 		{
-			"code": "unknown-field",
-			"path": "/manifest/0/digest"
+			"code": "missing-field",
+			"path": "/attested_by"
 		}
 	],
 	"value": {
@@ -24,8 +24,7 @@
 			{
 				"path": "scripts/count",
 				"type": "symlink",
-				"target": "../src/widgets/count.ts",
-				"digest": "sha256:dc676b42859915c826f8bbaef6511998f7aedbd6e332565faeda17fc33ec6320"
+				"target": "../src/widgets/count.ts"
 			},
 			{
 				"path": "src/widgets/count.ts",
@@ -68,8 +67,7 @@
 		},
 		"stability": "stable",
 		"collector": "host-observed",
-		"attested_by": "adapter",
 		"captured_at": "2026-09-17T10:22:00Z",
-		"digest": "sha256:591c092d1eb6fdbbba123a693f84183200aa2cb0198d00b5df037a7fcdd18a5f"
+		"digest": "sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0"
 	}
 }

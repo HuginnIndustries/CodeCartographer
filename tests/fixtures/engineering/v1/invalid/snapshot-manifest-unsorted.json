@@ -55,6 +55,7 @@
 		},
 		"stability": "stable",
 		"collector": "host-observed",
+		"attested_by": "adapter",
 		"captured_at": "2026-09-17T10:10:05Z",
 		"digest": "sha256:e6261ad046120da244d97a2354e371d06807606f3614687505a12d912115d7db"
 	}

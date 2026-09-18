@@ -19,12 +19,14 @@
 			{
 				"obligation_id": "O1",
 				"result": "passed",
-				"collector": "host-observed"
+				"collector": "host-observed",
+				"attested_by": "caller"
 			},
 			{
 				"obligation_id": "O2",
 				"result": "passed",
-				"collector": "host-observed"
+				"collector": "host-observed",
+				"attested_by": "caller"
 			}
 		],
 		"review_summary": [
@@ -35,9 +37,10 @@
 			}
 		],
 		"limitations": [
-			"Proof was host-observed on the workstation; no CI run exists for this candidate.",
-			"Reviewer separation is declared by the host, not authenticated."
+			"2 of 2 proofs are caller-attested: the host session reported the result; the framework did not observe the command.",
+			"Reviewer separation is declared by the host, not authenticated.",
+			"No CI run exists for this candidate."
 		]
 	},
-	"presentation_digest": "sha256:2bae2e508347b08e9aaef38780a96057338e38c71f0e8fd83ecc7b6ee8fba2b3"
+	"presentation_digest": "sha256:94929a026f13dd8dffa2cc64cbae780513134ab6f9d777e383c73b37df512f60"
 }

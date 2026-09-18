@@ -157,6 +157,7 @@ const baseline = {
 	...baselineIdentity,
 	stability: "stable",
 	collector: "host-observed",
+	attested_by: "adapter",
 	captured_at: T.baseline,
 	digest: digestOf(baselineIdentity),
 };
@@ -182,6 +183,7 @@ const candidate = {
 	...candidateIdentity,
 	stability: "stable",
 	collector: "host-observed",
+	attested_by: "adapter",
 	captured_at: T.candidate,
 	digest: digestOf(candidateIdentity),
 };
@@ -221,7 +223,7 @@ const proof = {
 		{ id: ID.artifact, label: "test stdout", media_type: "text/plain", raw_digest: sha("# pass 2\n# fail 0\n"), raw_size: 17, sanitized_digest: sha("# pass 2\n# fail 0\n"), retained: true },
 	],
 	environment: { summary: "linux x64, node 24", digest: digestOf({ node: "24", platform: "linux", arch: "x64" }) },
-	provenance: { source: "mcp:claude-code" },
+	provenance: { source: "mcp:claude-code", attested_by: "caller" },
 };
 
 const proof2 = {
@@ -272,11 +274,15 @@ const presentation = {
 	slice_deliverable: slice.deliverable,
 	candidate_summary: `4 manifest entries (3 files, 1 symlinks); dirty tree at 01234567; digest ${candidate.digest}`,
 	proof_summary: [
-		{ obligation_id: "O1", result: "passed", collector: "host-observed" },
-		{ obligation_id: "O2", result: "passed", collector: "host-observed" },
+		{ obligation_id: "O1", result: "passed", collector: "host-observed", attested_by: "caller" },
+		{ obligation_id: "O2", result: "passed", collector: "host-observed", attested_by: "caller" },
 	],
 	review_summary: [{ review_id: ID.review, separation: "declared-separate", remaining_blockers: 0 }],
-	limitations: ["Proof was host-observed on the workstation; no CI run exists for this candidate.", "Reviewer separation is declared by the host, not authenticated."],
+	limitations: [
+		"2 of 2 proofs are caller-attested: the host session reported the result; the framework did not observe the command.",
+		"Reviewer separation is declared by the host, not authenticated.",
+		"No CI run exists for this candidate.",
+	],
 };
 const acceptanceRequest = {
 	schema_version: 1,
@@ -370,8 +376,14 @@ const requests = {
 		idempotency_key: "attempt-1",
 		change_id: ID.change,
 		slice_id: ID.slice,
-		baseline_snapshot: { ...baselineIdentity, stability: "stable", collector: "host-observed", captured_at: T.baseline },
 		inputs: inputsBody,
+		baseline_snapshot: { ...baselineIdentity, stability: "stable", collector: "host-observed", captured_at: T.baseline },
+	},
+	"capture-candidate": {
+		action: "capture-candidate",
+		idempotency_key: "candidate-1",
+		change_id: ID.change,
+		attempt_id: ID.attempt,
 	},
 	"record-proof": {
 		action: "record-proof",
@@ -390,7 +402,7 @@ const requests = {
 			ended_at: T.proofEnd,
 			artifacts: proof.artifacts,
 			environment: proof.environment,
-			provenance: proof.provenance,
+			provenance: { source: proof.provenance.source },
 		},
 	},
 	"record-review": {
@@ -414,7 +426,6 @@ const requests = {
 		idempotency_key: "accept-1",
 		change_id: ID.change,
 		attempt_id: ID.attempt,
-		candidate_snapshot: { ...candidateIdentity, stability: "stable", collector: "host-observed", captured_at: T.candidate },
 	},
 };
 
@@ -860,9 +871,9 @@ const invalid = {
 		value: withPatch(approval, { decided_at: "2026-09-17T12:00:00Z", receipt: { ...approval.receipt, responded_at: "2026-09-17T12:00:00Z" } }),
 	},
 	"approval-responded-before-issued": {
-		description: "A decision cannot precede the request it answers.",
-		subject: "receipt",
-		expect: [{ code: "receipt-mismatch", path: "/receipt/responded_at" }],
+		description: "A decision cannot precede the request it answers; the record itself is inconsistent.",
+		subject: "record",
+		expect: [{ code: "invalid-value", path: "/receipt/responded_at" }],
 		value: withPatch(approval, { decided_at: "2026-09-17T10:39:00Z", receipt: { ...approval.receipt, responded_at: "2026-09-17T10:39:00Z" } }),
 	},
 	"approval-unknown-field-approve": {
@@ -994,6 +1005,101 @@ const invalid = {
 			v.proof.check = { kind: "test" };
 			return v;
 		})(),
+	},
+	"record-unknown-field-prototype-name": {
+		description: "A field named like an Object.prototype member is still an unknown field.",
+		subject: "record",
+		expect: [{ code: "unknown-field", path: "/constructor" }],
+		value: withPatch(change, { constructor: { approve: true } }),
+	},
+	"request-prototype-name-smuggle": {
+		description: "`in` would have let a prototype name through; the request shape uses own-property checks.",
+		subject: "request",
+		expect: [{ code: "unknown-field", path: "/toString" }],
+		value: { ...requests.status, toString: { approve: true } },
+	},
+	"request-create-duplicate-scenarios": {
+		description: "Record-level rules apply to the request body too, so the caller sees the error at the request path.",
+		subject: "request",
+		expect: [{ code: "duplicate-id", path: "/acceptance_scenarios/1/id" }],
+		value: { ...requests.create, acceptance_scenarios: [change.acceptance_scenarios[0], { ...change.acceptance_scenarios[1], id: "S1" }] },
+	},
+	"request-proof-attested-by-from-caller": {
+		description: "attested_by is set by the adapter; a caller cannot vouch for itself.",
+		subject: "request",
+		expect: [{ code: "unknown-field", path: "/proof/provenance/attested_by" }],
+		value: (() => {
+			const v = clone(requests["record-proof"]);
+			v.proof.provenance.attested_by = "adapter";
+			return v;
+		})(),
+	},
+	"request-capture-candidate-attested-by-from-caller": {
+		description: "A caller-supplied snapshot cannot declare itself adapter-attested.",
+		subject: "request",
+		expect: [{ code: "unknown-field", path: "/snapshot/attested_by" }],
+		value: { ...requests["capture-candidate"], snapshot: { ...candidateIdentity, stability: "stable", collector: "host-observed", attested_by: "adapter", captured_at: T.candidate } },
+	},
+	"request-acceptance-with-snapshot": {
+		description: "request-acceptance carries no snapshot: the adapter re-reads the tree itself.",
+		subject: "request",
+		expect: [{ code: "unknown-field", path: "/candidate_snapshot" }],
+		value: { ...requests["request-acceptance"], candidate_snapshot: { ...candidateIdentity, stability: "stable", collector: "host-observed", captured_at: T.candidate } },
+	},
+	"approval-trusted-channel-unauthenticated": {
+		description: "A trusted channel binds to the host session; `none` on it is a mislabel.",
+		subject: "record",
+		expect: [{ code: "invalid-value", path: "/receipt/authenticated" }],
+		value: withPatch(approval, { receipt: { ...approval.receipt, authenticated: "none" } }),
+	},
+	"approval-caller-attested-candidate": {
+		description: "A candidate the adapter did not capture itself cannot bind an acceptance.",
+		subject: "receipt-caller-candidate",
+		expect: [{ code: "invalid-value", path: "/candidate_snapshot_id" }],
+		value: clone(approval),
+	},
+	"snapshot-missing-attested-by": {
+		description: "A stored snapshot always says who captured it.",
+		subject: "record",
+		expect: [{ code: "missing-field", path: "/attested_by" }],
+		value: (() => {
+			const v = clone(candidate);
+			delete v.attested_by;
+			return v;
+		})(),
+	},
+	"snapshot-bad-timestamp-keeps-digest-check": {
+		description: "An error outside the identity fields does not hide a digest mismatch.",
+		subject: "record",
+		expect: [
+			{ code: "invalid-timestamp", path: "/captured_at" },
+			{ code: "digest-mismatch", path: "/digest" },
+		],
+		value: withPatch(candidate, { captured_at: "yesterday", digest: sha("wrong") }),
+	},
+	"bundle-duplicate-nonce": {
+		description: "Two approvals bound by one nonce inside a change is a replay the bundle can see.",
+		subject: "bundle",
+		expect: [{ code: "receipt-replayed", path: "/approvals/1/receipt/nonce" }],
+		value: withPatch(bundle, { approvals: [approval, withPatch(approval, { id: "apr_000000000000000000000a02" })] }),
+	},
+	"bundle-proof-omits-obligation-scenario": {
+		description: "A proof that discharges O1 must name O1's scenario.",
+		subject: "bundle",
+		expect: [{ code: "invalid-value", path: "/proofs/0/scenario_ids" }],
+		value: withPatch(bundle, { proofs: [withPatch(proof, { scenario_ids: ["S2"] }), proof2] }),
+	},
+	"acceptance-request-ttl-too-long": {
+		description: "A request cannot stay answerable for more than 24 hours.",
+		subject: "acceptance-request",
+		expect: [{ code: "invalid-value", path: "/expires_at" }],
+		value: withPatch(acceptanceRequest, { expires_at: "2026-09-19T10:40:00Z" }),
+	},
+	"acceptance-request-presentation-digest-mismatch": {
+		description: "A presentation edited after issue no longer matches its digest.",
+		subject: "acceptance-request",
+		expect: [{ code: "digest-mismatch", path: "/presentation_digest" }],
+		value: withPatch(acceptanceRequest, { presentation: { ...presentation, limitations: [] } }),
 	},
 	"request-start-attempt-absolute-manifest-path": {
 		description: "A host-supplied absolute path in a snapshot input is refused.",

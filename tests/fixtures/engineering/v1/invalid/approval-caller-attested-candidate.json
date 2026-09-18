@@ -1,10 +1,10 @@
 {
-	"description": "A decision after the request expired is stale.",
-	"subject": "receipt",
+	"description": "A candidate the adapter did not capture itself cannot bind an acceptance.",
+	"subject": "receipt-caller-candidate",
 	"expect": [
 		{
-			"code": "receipt-expired",
-			"path": "/receipt/responded_at"
+			"code": "invalid-value",
+			"path": "/candidate_snapshot_id"
 		}
 	],
 	"value": {
@@ -19,7 +19,7 @@
 		"candidate_digest": "sha256:94fe657e031903df35eb083f45562e312e97c3728b3356c2af0abd92291454c0",
 		"input_digest": "sha256:da06208db113b6e8f88d33829872b45687c0a2080159526370239f1d3dac43b1",
 		"decision": "accepted",
-		"decided_at": "2026-09-17T12:00:00Z",
+		"decided_at": "2026-09-17T10:45:00Z",
 		"receipt": {
 			"request_id": "acr_000000000000000000000c01",
 			"nonce": "0123456789abcdef0123456789abcdef",
@@ -28,7 +28,7 @@
 			"host": "mcp-server",
 			"host_session": "stdio session 1",
 			"issued_at": "2026-09-17T10:40:00Z",
-			"responded_at": "2026-09-17T12:00:00Z",
+			"responded_at": "2026-09-17T10:45:00Z",
 			"authenticated": "host-session",
 			"attestation": "The connected MCP client answered elicitation/create in the session that issued the request. The client's own consent UI is trusted; the person's identity was not authenticated."
 		},

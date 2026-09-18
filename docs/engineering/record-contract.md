@@ -43,7 +43,7 @@ engineering/
 | Scope pattern | as above, `*` and `**` allowed | `permitted_scope.paths`, `coverage.excluded[].pattern`. |
 | Revision | integer ≥ 1 | CAS token on change and slice. |
 
-Unknown fields are refused everywhere (`unknown-field`); there is no extension bag. Every record carries `schema_version: 1`. Any other value — including a missing field or the string `"1"` — is `unsupported-schema-version` and the record is not read further.
+Unknown fields are refused everywhere (`unknown-field`, checked with own-property semantics so `constructor` or `toString` cannot slip past); there is no extension bag. Every record carries `schema_version: 1`. Any other value — including a missing field or the string `"1"` — is `unsupported-schema-version` and the record is not read further.
 
 ## Canonical digests
 
@@ -72,7 +72,7 @@ Every record has the envelope `schema_version: 1`, `kind`, `id` (of the kind's p
 | `mode` | `fix` \| `feature` \| `refactor` \| `migration` \| `investigation` | |
 | `state` | `draft` \| `planned` \| `active` \| `blocked` \| `accepted` \| `abandoned` | |
 | `baseline` | `{ vcs: git \| none, head?, description? }` | `head` required iff `vcs` is `git` |
-| `scope` | `{ in_scope: string[], non_goals: string[] }` | |
+| `scope` | `{ in_scope: string[], non_goals: string[] }` | entries non-empty |
 | `preserved_contracts` | string[] | |
 | `acceptance_scenarios` | `{ id: LocalId, kind: behavior \| preserved \| non-functional, description }[]` | unique `id`; non-empty once `state` ≠ `draft` |
 | `references` | `{ id, version, digest }[]` | may be empty — zero references is the ordinary in-place change |
@@ -110,7 +110,7 @@ Every record has the envelope `schema_version: 1`, `kind`, `id` (of the kind's p
 | `supersedes_attempt_id` | attempt ID | the observation this corrects; the earlier record is never rewritten |
 | `superseded_by_attempt_id` | attempt ID | present iff `outcome` is `superseded` |
 | `block_reason` | | iff `blocked` |
-| `failure_summary` | string | optional |
+| `failure_summary` | non-empty string | optional |
 
 `blocked` is a missing environment, permission, input, or acceptance. `failed` is a completed check that failed. They are never merged.
 
@@ -125,8 +125,9 @@ Every record has the envelope `schema_version: 1`, `kind`, `id` (of the kind's p
 | `coverage` | `{ excluded: { pattern, reason }[], uncovered_relevant_inputs: path[] }` | `reason` ∈ `engineering-namespace` \| `generated` \| `ignored` \| `secret` \| `host-declared`; a non-empty `uncovered_relevant_inputs` means revalidate or block, never assume freshness |
 | `stability` | `stable` \| `unstable` | `unstable` when the tree moved during capture; an unstable candidate cannot bind an acceptance |
 | `collector` | see proof | an `agent-claimed` snapshot cannot bind an acceptance |
+| `attested_by` | `adapter` \| `caller` | adapter-set (see § Attestation); only an `adapter` candidate can bind an acceptance |
 | `captured_at` | timestamp | |
-| `digest` | | recomputed over `{ coverage, manifest, repository }` |
+| `digest` | | recomputed over `{ coverage, manifest, repository }`; an error elsewhere on the record does not suppress a mismatch |
 
 The engineering namespace and generated evidence are excluded from the manifest (they would self-invalidate); the brief, plan, and selected references are in `attempt.inputs` instead. The host collects; the framework validates and compares (E03 owns collection semantics).
 
@@ -147,9 +148,18 @@ The engineering namespace and generated evidence are excluded from the manifest 
 | `observer` | string | required for `manual-observation` |
 | `artifacts` | `{ id: art_…, label, media_type?, raw_digest, raw_size, sanitized_digest?, retained }[]` | unique `id`; referenced by ID only — a `path` is `unknown-field`, so a host-supplied path is never an output destination |
 | `environment` | `{ summary, digest }` | optional |
-| `provenance` | `{ source, run_reference? }` | `run_reference` required for `ci-reported` |
+| `provenance` | `{ source, run_reference?, attested_by }` | `run_reference` required for `ci-reported`; `attested_by` adapter-set (see § Attestation) — a caller cannot vouch for itself |
 
-`agent-claimed` is a legal record so that a claim can be kept and later contradicted; it satisfies no obligation (`OBSERVED_COLLECTORS` excludes it, and no obligation may name it as its minimum). A record containing `result: passed` is a proof only by its collector, never by its text.
+`agent-claimed` is a legal record so that a claim can be kept and later contradicted; it satisfies no obligation (`OBSERVED_COLLECTORS` excludes it, and no obligation may name it as its minimum). A record containing `result: passed` is a proof only by its collector, never by its text — and its collector is only as good as `provenance.attested_by` says.
+
+### Attestation: who vouches for `collector`, `result`, and `stability`
+
+`collector`, `result`, `exit_code`, and `stability` are caller text on the tool path: a model calling `record-proof` can spell `host-observed`. The contract does not pretend otherwise; it labels it. `attested_by` is set by the adapter and is `unknown-field` on every input shape:
+
+- `adapter` — the adapter itself captured the snapshot with its read-only repository utilities (E03), or observed the command's exit (no v1 adapter does the latter; the MCP server never runs commands).
+- `caller` — the values arrived in a tool payload and are the caller's claim; the adapter recorded them as such.
+
+Rules: the acceptance gate requires the **candidate snapshot** to be `attested_by: adapter` — the adapter re-reads the tree itself (`request-acceptance` carries no snapshot; `capture-candidate`'s `snapshot` is ignored whenever the adapter can read the working directory, and a caller-supplied one is recorded `caller` and cannot bind acceptance). **Proofs** may be `caller`-attested — on MCP v1 they always are — and `buildAcceptanceRequest` then adds a fixed limitation line to the presentation ("*n* of *m* proofs are caller-attested: the host session reported the result; the framework did not observe the command."), so the person deciding sees exactly that. "Host-reported" is never spelled "independently authenticated" anywhere in a record or a presentation.
 
 ### review (`rvw_`)
 
@@ -172,9 +182,9 @@ The engineering namespace and generated evidence are excluded from the manifest 
 | `decision` | `accepted` \| `rejected` | |
 | `decided_at` | timestamp | |
 | `receipt` | see below | |
-| `human_note` | string | optional, verbatim from the person |
+| `human_note` | non-empty string | optional, verbatim from the person |
 
-`receipt`: `{ request_id: acr_…, nonce, presentation_digest, channel, host, host_session?, issued_at, responded_at, authenticated, attestation }`. `channel` ∈ `mcp-elicitation` | `host-native` | `cooperative-file` | `agent-declared`. `authenticated` ∈ `none` | `host-session`; a `cooperative-file` or `agent-declared` receipt with anything but `none` is `invalid-value`. `responded_at` ≥ `issued_at`. `attestation` is the adapter's own plain-language statement of what it did and did not verify, shown to the reader of the record.
+`receipt`: `{ request_id: acr_…, nonce, presentation_digest, channel, host, host_session?, issued_at, responded_at, authenticated, attestation }`. `channel` ∈ `mcp-elicitation` | `host-native` | `cooperative-file` | `agent-declared`. `authenticated` ∈ `none` | `host-session` and is determined by the channel: a trusted channel (`mcp-elicitation`, `host-native`) must say `host-session`, an untrusted one must say `none`; either mislabel is `invalid-value`. A malformed nonce is `invalid-value` (not `invalid-id`). `responded_at` ≥ `issued_at`. `attestation` is the adapter's own plain-language statement of what it did and did not verify, shown to the reader of the record.
 
 ## Acceptance request (`acr_`)
 
@@ -182,15 +192,28 @@ Not a record kind; the object the core issues (`buildAcceptanceRequest`, pure) a
 
 ```text
 { schema_version: 1, id, change_id, slice_id, attempt_id, candidate_snapshot_id,
-  candidate_digest, input_digest, nonce, issued_at, expires_at (> issued_at),
+  candidate_digest, input_digest, nonce, issued_at,
+  expires_at (> issued_at, at most ACCEPTANCE_REQUEST_MAX_TTL_MS = 24 h later),
   presentation: { title, requested_outcome, slice_deliverable, candidate_summary,
-                  proof_summary: { obligation_id, result, collector }[],
+                  proof_summary: { obligation_id, result, collector, attested_by }[],
                   review_summary: { review_id, separation, remaining_blockers }[],
                   limitations: string[] },
   presentation_digest }
 ```
 
-`candidate_summary` is `"<n> manifest entries (<f> files, <s> symlinks); <dirty|clean> tree at <head8>|no VCS; digest <full digest>"`. `limitations` are supplied by the gate and shown verbatim; they say what the evidence does not cover. The fixture `valid/acceptance-request.json` is byte-for-byte what `buildAcceptanceRequest` produces from the fixture bundle.
+`candidate_summary` is `"<n> manifest entries (<f> files, <s> symlinks); <dirty|clean> tree at <head8>|no VCS; digest <full digest>"`. `limitations` begin with the lines `standardLimitations` derives from the records (caller-attested proof count; "reviewer separation is declared, not authenticated") followed by whatever the gate adds; a caller can add lines, never remove the standard ones. The fixture `valid/acceptance-request.json` is byte-for-byte what `buildAcceptanceRequest` produces from the fixture bundle.
+
+## State transitions
+
+`CHANGE_STATE_TRANSITIONS`, `SLICE_STATE_TRANSITIONS`, and `ATTEMPT_OUTCOME_TRANSITIONS` in `types.ts` are the closed tables; `isAllowedTransition(kind, from, to)` reads them and the store emits `invalid-transition` for anything else. The same state is never a transition; `accepted` and `abandoned`/`superseded` are terminal.
+
+| Kind | From → to |
+|---|---|
+| change | `draft` → `planned`, `abandoned`; `planned` → `active`, `draft`, `abandoned`; `active` → `blocked`, `accepted`, `abandoned`; `blocked` → `active`, `abandoned` |
+| slice | `pending` → `active`, `abandoned`; `active` → `blocked`, `accepted`, `abandoned`; `blocked` → `active`, `abandoned` |
+| attempt | `running` → `failed`, `blocked`, `ready-for-review`, `needs-human-acceptance`, `superseded`; `failed`/`blocked` → `superseded`; `ready-for-review` → `needs-human-acceptance`, `accepted`, `blocked`, `superseded`; `needs-human-acceptance` → `accepted`, `blocked`, `superseded` |
+
+A change becomes `accepted` only when the store records an acceptance, never through a `plan` update. An attempt is never `accepted` straight from `running`.
 
 ## Required records for acceptance
 
@@ -201,8 +224,8 @@ Not a record kind; the object the core issues (`buildAcceptanceRequest`, pure) a
 | change | state `active`; every slice in the slice's `depends_on` is `accepted` |
 | slice | state `active`; every `proof_obligations[].id` discharged |
 | attempt | outcome `ready-for-review` or `needs-human-acceptance`; `candidate_snapshot_id` set |
-| snapshot | baseline and candidate present; candidate `stability: stable`, `collector` ≠ `agent-claimed`; candidate digest equals the tree re-read at acceptance time |
-| proof | one per obligation with `result: passed`, `collector` at or above the obligation's `minimum_collector` (`COLLECTOR_RANK`: `host-observed` 3 > `ci-reported` 2 > `manual-observation` 1 > `agent-claimed` 0, which satisfies nothing; `collectorSatisfies`), `snapshot_id` = the candidate |
+| snapshot | baseline and candidate present; candidate `stability: stable`, `collector` ≠ `agent-claimed`, `attested_by: adapter`; `checkCandidateFreshness(candidate, reread)` passes against the tree the adapter re-reads at acceptance time |
+| proof | one per obligation with `result: passed`, `collector` at or above the obligation's `minimum_collector` (`COLLECTOR_RANK`: `host-observed` 3 > `ci-reported` 2 > `manual-observation` 1 > `agent-claimed` 0, which satisfies nothing; `collectorSatisfies`), `snapshot_id` = the candidate, `scenario_ids` naming the obligation's scenario; caller-attested proofs count and are disclosed in the presentation |
 | review | at least one with `separation: declared-separate`, bound to the candidate and input digests, `remaining_blockers` empty |
 | approval | `decision: accepted`; receipt passes `evaluateApprovalReceipt` (trusted channel, known request, unconsumed nonce, all bindings equal) |
 
@@ -215,11 +238,13 @@ All pure; all deterministic (the same value yields the same error list, in trave
 | Function | Checks |
 |---|---|
 | `validateRecord(value)` / `validateRecordOfKind(kind, value)` / `parseRecord(text)` | one record: version gate, kind, shape, grammar, enums, its own cross-field rules |
-| `validateChangeBundle({ change, slices, attempts, snapshots, proofs, reviews, approvals })` | every record, then references: unique IDs, `change_id` equality (`cross-change-reference`), slice deps/scenarios, snapshot roles and ownership, proof obligation/snapshot, review/approval candidate and digest bindings |
+| `validateChangeBundle({ change, slices, attempts, snapshots, proofs, reviews, approvals })` | every record, then references: unique IDs, `change_id` equality (`cross-change-reference`), slice deps/scenarios, snapshot roles and ownership, proof obligation/snapshot/scenario, review/approval candidate and digest bindings, one approval per nonce (`receipt-replayed`) |
 | `validateAcceptanceRequest(value)` | shape, `expires_at` > `issued_at`, presentation digest |
-| `validateChangeRequest(value)` | one `codecarto_change` request: action, the action's fields only |
-| `evaluateApprovalReceipt(approval, { request, consumed_nonces, attempt, candidate })` | the receipt against the issued request; see § Human approval |
-| `buildAcceptanceRequest(args)` | the request from bound records; throws if the candidate is not the attempt's |
+| `validateChangeRequest(value)` | one `codecarto_change` request: action, the action's fields only, plus the record-level rules that apply to the body (a `create` with duplicate scenario IDs fails at the request path) |
+| `evaluateApprovalReceipt(approval, { request, consumed_nonces, attempt, candidate })` | re-validates all four inputs (an invalid one is `invalid-request`), then the receipt against the issued request; see § Human approval. `consumed_nonces` are the nonces bound by approvals *other than* the one under evaluation |
+| `checkCandidateFreshness(candidate, reread)` | the adapter's re-read tree against the bound candidate: `digest-mismatch /digest` when the bytes moved |
+| `buildAcceptanceRequest(args)` / `standardLimitations(proofs, reviews)` | the request from bound records (throws if the candidate is not the attempt's); the limitation lines every presentation carries |
+| `isAllowedTransition(kind, from, to)` | the state tables |
 
 Result shape: `{ ok: true, value }` or `{ ok: false, errors: { code, path, message }[] }`, `path` a JSON-pointer-like location (`/manifest/3/path`). Error codes (closed set, `ENGINEERING_ERROR_CODES`): `invalid-request`, `invalid-action`, `unsupported-schema-version`, `unknown-field`, `missing-field`, `invalid-type`, `invalid-id`, `invalid-local-id`, `invalid-path`, `invalid-enum`, `invalid-digest`, `invalid-timestamp`, `invalid-value`, `digest-mismatch`, `duplicate-id`, `unknown-reference`, `cross-change-reference`, `invalid-state`, `invalid-transition`, `stale-revision`, `idempotency-conflict`, `not-found`, `proof-not-observed`, `blocking-objection`, `receipt-unknown-request`, `receipt-replayed`, `receipt-mismatch`, `receipt-expired`, `untrusted-channel`, `needs-human-acceptance`. `invalid-state`, `invalid-transition`, `stale-revision`, `idempotency-conflict`, `not-found`, `proof-not-observed`, `blocking-objection`, and `needs-human-acceptance` are reserved for the store, gate, and adapter (E02, E06, E07); the validators emit the others.
 
@@ -230,21 +255,22 @@ One additive, experimental MCP tool (E07 registers it) over typed core operation
 | Action | Arguments | Result |
 |---|---|---|
 | `create` | `title, mode, requested_outcome, baseline, scope, preserved_contracts, acceptance_scenarios, references?` | `{ change }` in state `draft` |
-| `status` | `change_id?` | `{ changes: summary[] }` or one change's bundle plus corrupt-record report |
+| `status` | `change_id?` | `StatusResult { changes: ChangeSummary[], change?: ChangeBundle, corrupt: CorruptChangeReport[] }` — a corrupt change directory is reported, never hidden |
 | `plan` | `change_id, expected_revision, brief_markdown?, plan_markdown?, slices: SliceInput[]` | `{ change, slices }`; stale `expected_revision` is `stale-revision` |
-| `start-attempt` | `change_id, slice_id, baseline_snapshot: SnapshotInput, inputs: { brief_digest, plan_digest, references }, parent_attempt_id?` | `{ attempt, snapshot }` |
-| `record-proof` | `change_id, attempt_id, proof: ProofInput` | `{ proof }` |
+| `start-attempt` | `change_id, slice_id, inputs: { brief_digest, plan_digest, references }, baseline_snapshot?: SnapshotInput, parent_attempt_id?` | `{ attempt, snapshot }` — the adapter captures the baseline itself when it can read the tree |
+| `capture-candidate` | `change_id, attempt_id, snapshot?: SnapshotInput` | `{ attempt, snapshot }` — binds `candidate_snapshot_id`; the attempt stays `running`; repeatable until a proof references the candidate |
+| `record-proof` | `change_id, attempt_id, proof: ProofInput` | `{ proof }` — `proof.snapshot_id` must be the attempt's bound candidate (or baseline for a RED run) |
 | `record-review` | `change_id, attempt_id, review: ReviewInput` | `{ review }` |
-| `check` | `change_id, attempt_id?` | the gate's eligibility report (E06) |
-| `request-acceptance` | `change_id, attempt_id, candidate_snapshot: SnapshotInput` | `{ outcome: accepted \| rejected \| needs-human-acceptance, request, approval?, reason? }` |
+| `check` | `change_id, attempt_id?` | `CheckResult { outcome: eligible \| blocked \| needs-human-acceptance \| accepted, requirements: AcceptanceRequirementStatus[], errors, next: { action, reason } }` — one requirement row per entry of the acceptance table |
+| `request-acceptance` | `change_id, attempt_id` | `{ outcome: accepted \| rejected \| needs-human-acceptance, request, approval?, reason? }` — the adapter re-reads the tree and runs `checkCandidateFreshness` before presenting anything |
 
 Mutating actions (all but `status` and `check`) accept `idempotency_key` (1–200 chars): a retry with the same key and payload returns the first result; the same key with a different payload is `idempotency-conflict`. A lost acknowledgement never implies re-running an external command.
 
-Every result uses `ChangeResult`: `{ ok: true, action, result }` or `{ ok: false, action?, errors }`. The MCP adapter mirrors it in `structuredContent` and renders `text` from the same object, so both carry the same semantic result.
+Every result uses `ChangeResult<A>`: `{ ok: true, action, result: ChangeResults[A] }` or `{ ok: false, action?, errors }`; `ChangeResults` in `types.ts` maps each action to its result payload. The MCP adapter mirrors it in `structuredContent` and renders `text` from the same object, so both carry the same semantic result.
 
 **Capability negotiation.** `HostCapabilities { human_acceptance: mcp-elicitation | host-native | none, label? }` is supplied by the adapter from what it knows about the transport (for MCP: whether the client declared the `elicitation` capability at initialize). It is not a request field: `host` on any request is `unknown-field`. A model cannot raise its own host's capability.
 
-**No approval field.** There is no `approve` action. `approve`, `approved`, `approval`, `decision`, `receipt`, `human_accepted`, and any other field outside the table are `unknown-field` on every action. `request-acceptance` asks; it never grants.
+**No approval field.** There is no `approve` action. `approve`, `approved`, `approval`, `decision`, `receipt`, `human_accepted`, `attested_by`, and any other field outside the table are `unknown-field` on every action. `request-acceptance` asks; it never grants.
 
 ## Human approval and threat boundary
 
@@ -256,7 +282,7 @@ The claim "a person accepted exactly this candidate, having seen exactly this pr
 
 | Actor | Can | Cannot (by this contract) |
 |---|---|---|
-| The model, through ordinary tool calls | call any `codecarto_change` action with any payload; write any file the host lets it write | put a decision into a request; mint an approval through the tool; raise host capability; change a nonce or presentation after issue |
+| The model, through ordinary tool calls | call any `codecarto_change` action with any payload — including a proof whose `collector` says `host-observed`; write any file the host lets it write | put a decision into a request; mint an approval through the tool; raise host capability; vouch for its own claims (`attested_by`); supply the candidate the gate accepts; change a nonce or presentation after issue |
 | The host adapter (MCP server process, Pi extension) | issue requests, present them, obtain the decision on its own channel, mint the approval in-process | claim `authenticated: host-session` on a cooperative or agent-declared channel |
 | The MCP client (Claude Code, Codex, Cursor, …) | answer `elicitation/create` after showing it to the user, or decline | be verified by the server to have actually shown it |
 | A person at the keyboard | approve or reject in the host's UI; edit files on disk | be identified by name or credential — v1 has no identity |
@@ -264,30 +290,32 @@ The claim "a person accepted exactly this candidate, having seen exactly this pr
 
 ### The receipt path
 
-1. The gate (E06) verifies the required records and re-reads the candidate; on any gap it returns `blocked`/`needs-human-acceptance` and no request is issued.
+1. The gate (E06) verifies the required records, then the adapter re-reads the tree and runs `checkCandidateFreshness` against the bound (adapter-attested) candidate; on any gap or a moved tree it returns `blocked`/`needs-human-acceptance` and no request is issued.
 2. The core builds an `AcceptanceRequest` with a fresh `acr_` ID and nonce, a bounded `expires_at`, and the presentation; the store durably writes it under `requests/` before anything is shown.
 3. The adapter presents `presentation` verbatim through a channel the model does not control:
-   - **`mcp-elicitation`**: the server sends `elicitation/create` (a server-initiated JSON-RPC request the SDK already supports as `elicitInput`) with a form whose only field is the decision plus an optional note. The client's UI shows it; the answer returns over the transport. The model's tool-call arguments are never the channel.
+   - **`mcp-elicitation`**: the server sends `elicitation/create` (a server-initiated JSON-RPC request; SDK 1.30's `Server.elicitInput`, which requires the client to have declared the `elicitation.form` capability at initialize) with a form whose only field is the decision plus an optional note. The client's UI shows it; the answer returns over the transport as the client's JSON-RPC response. The model's tool-call arguments are never the channel.
    - **`host-native`**: an in-process UI such as Pi's `ctx.ui.confirm` is called by the adapter's own code with the presentation.
-4. The adapter — not the caller — mints the `ApprovalRecord` in-process with the receipt fields copied from the request and the decision copied from the channel, then stores it and marks the nonce consumed. The `request-acceptance` result carries the record.
-5. Any later reader runs `evaluateApprovalReceipt` with the stored request and the consumed-nonce set.
+4. The adapter — not the caller — mints the `ApprovalRecord` in-process with the receipt fields copied from the request and the decision copied from the channel, runs `evaluateApprovalReceipt` against the nonces already bound by *other* approvals, and only then stores it. The `request-acceptance` result carries the record.
+5. Any later reader runs `evaluateApprovalReceipt` with the stored request and the nonces of every other approval in the change; `validateChangeBundle` independently refuses two approvals on one nonce.
 
 ### Rejections (each is a fixture under `tests/fixtures/engineering/v1/invalid/`)
 
 | Situation | Refused as |
 |---|---|
-| Receipt names a request the store never issued | `receipt-unknown-request` |
-| Nonce already bound to an approval (replay, duplicate ingestion, copied file) | `receipt-replayed` |
+| Receipt names a request the store never issued (the store knows only what is under `requests/`; see the same-user limitation — a hand-written request plus a matching hand-written approval is exactly that bypass) | `receipt-unknown-request` |
+| Nonce already bound to another approval (replay, duplicate ingestion, copied file); two approvals on one nonce in a bundle | `receipt-replayed` |
 | Nonce, slice, attempt, snapshot, candidate digest, input digest, presentation digest, or issue time differs from the request | `receipt-mismatch` at that field |
 | Approval, request, or attempt name different changes | `cross-change-reference` |
-| Candidate re-read after presentation has a different digest (edited after proof/review) | `receipt-mismatch /candidate_digest` |
-| Attempt re-bound to another candidate, or inputs changed | `receipt-mismatch` |
-| Answered after `expires_at`, or decided outside the window | `receipt-expired` |
-| Answered before issue | `receipt-mismatch /receipt/responded_at` |
-| Candidate `unstable` or `agent-claimed` | `invalid-value /candidate_snapshot_id` |
+| Tree re-read by the adapter differs from the bound candidate (edited after proof/review) — E06 runs this before issuing and again before minting | `digest-mismatch /digest` from `checkCandidateFreshness` |
+| Stored candidate record rewritten with the same ID, attempt re-bound to another candidate or slice, or inputs changed | `receipt-mismatch` at that field |
+| Answered after `expires_at`, or decided outside the window; request valid longer than 24 h | `receipt-expired`; `invalid-value /expires_at` |
+| Answered before issue | `invalid-value /receipt/responded_at` (record-level) |
+| Candidate `unstable`, `agent-claimed`, or not adapter-attested | `invalid-value /candidate_snapshot_id` |
+| Any of approval, attempt, candidate, or request fails its own validator | `invalid-request` — the receipt is not evaluated on malformed inputs |
 | Channel `cooperative-file` or `agent-declared` | `untrusted-channel` |
 | `approve: true`, `approval: {…}`, `decision`, `receipt`, or `host` in any request; `action: approve` | `unknown-field` / `invalid-action` |
-| Untrusted channel claiming `authenticated: host-session` | `invalid-value /receipt/authenticated` |
+| Untrusted channel claiming `authenticated: host-session`, or trusted channel claiming `none` | `invalid-value /receipt/authenticated` |
+| Prototype-named field (`constructor`, `toString`) used to carry a payload | `unknown-field` |
 
 ### What is attested versus authenticated
 
@@ -315,6 +343,8 @@ Every record, including approvals and consumed nonces, is a file the same OS use
 ### Decision record
 
 The receipt design above is proposed as the v1 trusted path and is what the fixtures and validators implement. The maintainer's remaining call is whether **MCP elicitation, which trusts the connected client to have shown the form, is an acceptable pilot channel** given the consequence table. If it is not, E06/E07 stay blocked on a channel that E01 does not have: there is no cross-client mechanism by which an MCP server can verify a human saw a prompt. Pi's `host-native` channel does not depend on that call.
+
+Two inputs the decision should weigh, neither settled by this contract: (a) which target clients implement form elicitation today — this commit verifies the SDK's server side only, not any client; (b) that on MCP every proof is caller-attested (the server never runs commands), so the human's decision rests on the host session's report plus the adapter's own re-read of the tree, and the presentation says so.
 
 ## Compatibility
 

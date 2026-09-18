@@ -61,6 +61,12 @@ const {
 	collectorSatisfies,
 	COLLECTOR_RANK,
 	isTimestamp,
+	isAllowedTransition,
+	checkCandidateFreshness,
+	standardLimitations,
+	CHANGE_STATE_TRANSITIONS,
+	ATTEMPT_OUTCOME_TRANSITIONS,
+	ACCEPTANCE_REQUEST_MAX_TTL_MS,
 } = engineering;
 
 async function readJson(relPath) {
@@ -135,7 +141,7 @@ test("enum spellings and prefixes are pinned exactly", () => {
 	assert.deepEqual(ATTEMPT_OUTCOMES, ["running", "failed", "blocked", "ready-for-review", "needs-human-acceptance", "accepted", "superseded"]);
 	assert.deepEqual(APPROVAL_CHANNELS, ["mcp-elicitation", "host-native", "cooperative-file", "agent-declared"]);
 	assert.deepEqual(TRUSTED_APPROVAL_CHANNELS, ["mcp-elicitation", "host-native"]);
-	assert.deepEqual(CHANGE_ACTIONS, ["create", "status", "plan", "start-attempt", "record-proof", "record-review", "check", "request-acceptance"]);
+	assert.deepEqual(CHANGE_ACTIONS, ["create", "status", "plan", "start-attempt", "capture-candidate", "record-proof", "record-review", "check", "request-acceptance"]);
 	assert.ok(!CHANGE_ACTIONS.includes("approve"), "no approve action");
 	assert.equal(new Set(ENGINEERING_ERROR_CODES).size, ENGINEERING_ERROR_CODES.length);
 	assert.deepEqual(
@@ -268,6 +274,10 @@ test("every invalid fixture is refused with the expected code at the expected pa
 					return evaluateApprovalReceipt(fixture.value, receiptContext());
 				case "receipt-replay":
 					return evaluateApprovalReceipt(fixture.value, receiptContext({ consumed_nonces: new Set([valid.approval.receipt.nonce]) }));
+				case "receipt-caller-candidate":
+					return evaluateApprovalReceipt(fixture.value, receiptContext({ candidate: { ...valid.candidate, attested_by: "caller" } }));
+				case "acceptance-request":
+					return validateAcceptanceRequest(fixture.value);
 				default:
 					throw new Error(`${file}: unknown subject ${fixture.subject}`);
 			}
@@ -289,7 +299,7 @@ test("every invalid fixture is refused with the expected code at the expected pa
 			assert.equal(typeof error.message, "string");
 		}
 	}
-	assert.deepEqual([...subjects].sort(), ["bundle", "receipt", "receipt-replay", "record", "request", "request-valid"], "every validator has negative coverage");
+	assert.deepEqual([...subjects].sort(), ["acceptance-request", "bundle", "receipt", "receipt-caller-candidate", "receipt-replay", "record", "request", "request-valid"], "every validator has negative coverage");
 });
 
 test("an unsupported schema version is refused without reading the rest of the record", () => {
@@ -306,8 +316,8 @@ test("an unsupported schema version is refused without reading the rest of the r
 test("no agent-authored payload becomes human acceptance", () => {
 	// 1. There is no action and no field through which a caller approves.
 	assert.deepEqual(codesAt(validateChangeRequest({ action: "approve", change_id: valid.change.id })), ["invalid-action /action"]);
-	for (const field of ["approve", "approved", "approval", "decision", "receipt", "human_accepted", "host"]) {
-		const request = { action: "request-acceptance", change_id: valid.change.id, attempt_id: valid.attempt.id, candidate_snapshot: stripSnapshot(valid.candidate), [field]: true };
+	for (const field of ["approve", "approved", "approval", "decision", "receipt", "human_accepted", "host", "attested_by", "constructor", "__proto__"]) {
+		const request = JSON.parse(`{"action":"request-acceptance","change_id":"${valid.change.id}","attempt_id":"${valid.attempt.id}",${JSON.stringify(field)}:true}`);
 		assert.ok(codesAt(validateChangeRequest(request)).includes(`unknown-field /${field}`), field);
 	}
 	// 2. A record spelled by the model is structurally legal but never a trusted receipt.
@@ -322,32 +332,37 @@ test("no agent-authored payload becomes human acceptance", () => {
 	assert.deepEqual(codesAt(evaluateApprovalReceipt(cooperative, receiptContext())), ["untrusted-channel /receipt/channel"]);
 });
 
-function stripSnapshot(snapshot) {
-	const { schema_version, kind, id, created_at, change_id, attempt_id, role, digest, ...input } = snapshot;
-	return input;
-}
-
 test("a receipt is single-use and bound to one request, candidate, and presentation", () => {
 	const ctx = receiptContext();
 	assert.deepEqual(codesAt(evaluateApprovalReceipt(valid.approval, { ...ctx, consumed_nonces: [valid.approval.receipt.nonce] })), ["receipt-replayed /receipt/nonce"]);
 	assert.deepEqual(codesAt(evaluateApprovalReceipt(valid.approval, { ...ctx, request: undefined })), ["receipt-unknown-request /receipt/request_id"]);
-	// The candidate moved after presentation: the stored digest no longer matches the tree the host re-read.
-	const movedCandidate = { ...valid.candidate, digest: digestOf({ moved: true }) };
-	assert.deepEqual(codesAt(evaluateApprovalReceipt(valid.approval, { ...ctx, candidate: movedCandidate })), ["receipt-mismatch /candidate_digest"]);
+	// The stored candidate record was replaced by one with the same id and different bytes.
+	const rewritten = { ...valid.candidate, repository: { ...valid.candidate.repository, dirty: false } };
+	rewritten.digest = computeSnapshotDigest(rewritten);
+	assert.deepEqual(codesAt(evaluateApprovalReceipt(valid.approval, { ...ctx, candidate: rewritten })), ["receipt-mismatch /candidate_digest"]);
 	// The attempt was re-pointed at another candidate.
 	const rebound = { ...valid.attempt, candidate_snapshot_id: "snp_00000000000000000000d002" };
 	assert.deepEqual(codesAt(evaluateApprovalReceipt(valid.approval, { ...ctx, attempt: rebound })), ["receipt-mismatch /candidate_snapshot_id"]);
 	// The inputs changed after review.
-	const newInputs = { ...valid.attempt, inputs: { ...valid.attempt.inputs, digest: digestOf({ other: true }) } };
+	const replanned = { ...valid.attempt.inputs, plan_digest: digestOfBytes("a revised plan") };
+	const newInputs = { ...valid.attempt, inputs: { ...replanned, digest: computeInputDigest(replanned) } };
 	assert.deepEqual(codesAt(evaluateApprovalReceipt(valid.approval, { ...ctx, attempt: newInputs })), ["receipt-mismatch /input_digest"]);
 	// The request was issued for another change.
 	const otherChange = { ...valid.request, change_id: "chg_00000000000000000000c002" };
 	assert.deepEqual(codesAt(evaluateApprovalReceipt(valid.approval, { ...ctx, request: otherChange })), ["cross-change-reference /change_id"]);
 	// The tree was moving while captured.
 	assert.deepEqual(codesAt(evaluateApprovalReceipt(valid.approval, { ...ctx, candidate: { ...valid.candidate, stability: "unstable" } })), ["invalid-value /candidate_snapshot_id"]);
-	// Several mismatches are all reported, in a fixed order.
+	// Several mismatches are all reported, once each, in a fixed order.
 	const mangled = { ...valid.approval, slice_id: "slc_00000000000000000000e002", input_digest: digestOf(1) };
-	assert.deepEqual(codesAt(evaluateApprovalReceipt(mangled, ctx)), ["receipt-mismatch /slice_id", "receipt-mismatch /input_digest", "receipt-mismatch /input_digest"]);
+	assert.deepEqual(codesAt(evaluateApprovalReceipt(mangled, ctx)), ["receipt-mismatch /slice_id", "receipt-mismatch /input_digest"]);
+	// Inputs are re-validated: garbage timestamps cannot slip past NaN comparisons.
+	const garbage = { ...valid.approval, decided_at: "garbage" };
+	assert.deepEqual(codesAt(evaluateApprovalReceipt(garbage, ctx)), ["invalid-request /"]);
+	assert.deepEqual(codesAt(evaluateApprovalReceipt(valid.approval, { ...ctx, request: { ...valid.request, nonce: "short" } })), ["invalid-request /receipt/request_id"]);
+	// The adapter's own re-read is the freshness check; a moved tree is a digest mismatch and nothing carries over.
+	assert.equal(checkCandidateFreshness(valid.candidate, valid.candidate).ok, true);
+	const moved = { ...valid.candidate, repository: { ...valid.candidate.repository, dirty: false } };
+	assert.deepEqual(codesAt(checkCandidateFreshness(valid.candidate, moved)), ["digest-mismatch /digest"]);
 });
 
 test("buildAcceptanceRequest reproduces the fixture request byte for byte and refuses an unbound candidate", () => {
@@ -362,9 +377,12 @@ test("buildAcceptanceRequest reproduces the fixture request byte for byte and re
 		candidate: valid.candidate,
 		proofs: [valid.proof, valid.proof2],
 		reviews: [valid.review],
-		limitations: valid.request.presentation.limitations,
+		limitations: ["No CI run exists for this candidate."],
 	});
 	assert.deepEqual(built, valid.request);
+	assert.deepEqual(standardLimitations([valid.proof, valid.proof2], [valid.review]), valid.request.presentation.limitations.slice(0, 2), "caller attestation is always disclosed");
+	assert.deepEqual(standardLimitations([{ ...valid.proof, provenance: { ...valid.proof.provenance, attested_by: "adapter" } }], []), []);
+	assert.equal(ACCEPTANCE_REQUEST_MAX_TTL_MS, 24 * 60 * 60 * 1000);
 	assert.equal(validateAcceptanceRequest(built).ok, true);
 	assert.throws(() => buildAcceptanceRequest({ ...builtArgs(built), candidate: valid.baseline }), /not the attempt's bound candidate/);
 	function builtArgs() {
@@ -388,6 +406,22 @@ test("agent-claimed is a legal collector that satisfies no obligation, and defer
 	assert.equal(collectorSatisfies("manual-observation", "manual-observation"), true);
 	assert.deepEqual(deriveRemainingBlockers(valid.review.objections), []);
 	assert.deepEqual(deriveRemainingBlockers([{ id: "A", severity: "blocking", disposition: "deferred" }, { id: "B", severity: "advisory", disposition: "open" }, { id: "C", severity: "blocking", disposition: "open" }]), ["A", "C"]);
+});
+
+test("state transitions are a closed table", () => {
+	assert.equal(isAllowedTransition("change", "draft", "planned"), true);
+	assert.equal(isAllowedTransition("change", "draft", "accepted"), false);
+	assert.equal(isAllowedTransition("change", "active", "active"), false, "same state is not a transition");
+	assert.equal(isAllowedTransition("change", "accepted", "active"), false, "accepted is terminal");
+	assert.equal(isAllowedTransition("slice", "pending", "active"), true);
+	assert.equal(isAllowedTransition("attempt", "running", "accepted"), false, "an attempt is never accepted straight from running");
+	assert.equal(isAllowedTransition("attempt", "failed", "superseded"), true);
+	assert.equal(isAllowedTransition("attempt", "nonsense", "failed"), false);
+	for (const table of [CHANGE_STATE_TRANSITIONS, ATTEMPT_OUTCOME_TRANSITIONS]) {
+		for (const [from, next] of Object.entries(table)) assert.ok(!next.includes(from), `${from} does not transition to itself`);
+	}
+	assert.deepEqual(CHANGE_STATE_TRANSITIONS.accepted, []);
+	assert.deepEqual(ATTEMPT_OUTCOME_TRANSITIONS.accepted, []);
 });
 
 test("timestamps are RFC 3339 UTC instants", () => {

@@ -3,6 +3,11 @@
 	"idempotency_key": "attempt-1",
 	"change_id": "chg_00000000000000000000c001",
 	"slice_id": "slc_00000000000000000000e001",
+	"inputs": {
+		"brief_digest": "sha256:32dd3ea09fe69f5a22d4cc1dd9d549ed808c48e42dd5ff683b1e1400d46247ae",
+		"plan_digest": "sha256:67d2de7f421a0b8104cad0aabfd6740aa11c7403618f9e7e33be5d8cbfc4da17",
+		"references": []
+	},
 	"baseline_snapshot": {
 		"repository": {
 			"vcs": "git",
@@ -45,10 +50,5 @@
 		"stability": "stable",
 		"collector": "host-observed",
 		"captured_at": "2026-09-17T10:10:05Z"
-	},
-	"inputs": {
-		"brief_digest": "sha256:32dd3ea09fe69f5a22d4cc1dd9d549ed808c48e42dd5ff683b1e1400d46247ae",
-		"plan_digest": "sha256:67d2de7f421a0b8104cad0aabfd6740aa11c7403618f9e7e33be5d8cbfc4da17",
-		"references": []
 	}
 }
