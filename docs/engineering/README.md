@@ -13,6 +13,8 @@
 
 For E11 evaluation, read the [preregistered pilot tasks](pilot-selection.md) and [evaluation rubric](evaluation-rubric.md). These are planning and measurement documents, not permission to execute pilots or start held tasks.
 
+The first pilot has run: the [B01 report](pilot-b01-2026-09-20.md) records what the preregistered acceptance checks caught that the implementer did not, including a blocking defect found by the mandated independent review in a change whose CI was green. It was executed by a host agent against those checks rather than by a CodeCartographer engine, which does not exist yet — it measures whether the checks are usable and load-bearing, not whether an automated loop can run them.
+
 The [Helix/Traverse discussion](../plans/2026-09-17-helix-patterns.md) is retained as design history. Its P1–P6 proposals are not all current implementation instructions; its precedence note identifies the adjustments made after dogfooding.
 
 ## A new agent session's handoff

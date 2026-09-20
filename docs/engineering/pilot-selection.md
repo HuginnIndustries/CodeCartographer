@@ -25,6 +25,8 @@ Use a known pinned starting point even if #412 is fixed before Traverse exists. 
 
 **Existing issue:** [#412](https://github.com/HuginnIndustries/CodeCartographer/issues/412). This is a real test-harness isolation defect, not a defect in production remote-URL resolution.
 
+> **Run and reported.** B01 was executed on 2026-09-20 and its fix merged as [`c4030a4`](https://github.com/HuginnIndustries/CodeCartographer/commit/c4030a4); all six acceptance checks are satisfied. See the [B01 pilot report](pilot-b01-2026-09-20.md). It was run by a host agent against these checks, **not** through a CodeCartographer engine — E02 storage and E05/E06 evidence collection do not exist yet — so it measures whether the checks are usable and load-bearing, not whether an automated loop can execute them. The acceptance checks below are preserved as written; the fix having landed upstream does not invalidate a later replay from the pinned revision, which must be labeled a replay.
+
 **Requested outcome:** Git-backed tests that already isolate global/system configuration must also prevent injected `GIT_CONFIG_COUNT` entries from rewriting fixture remotes. A contributor's command-scoped Git configuration must not make these fixtures fail or alter the intended fixture provenance.
 
 ### Selection evidence, observed at the pinned revision
