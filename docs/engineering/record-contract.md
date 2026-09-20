@@ -129,7 +129,34 @@ Every record has the envelope `schema_version: 1`, `kind`, `id` (of the kind's p
 | `captured_at` | timestamp | |
 | `digest` | | recomputed over `{ coverage, manifest, repository }`; an error elsewhere on the record does not suppress a mismatch |
 
-The engineering namespace and generated evidence are excluded from the manifest (they would self-invalidate); the brief, plan, and selected references are in `attempt.inputs` instead. The host collects; the framework validates and compares (E03 owns collection semantics).
+The engineering namespace and generated evidence are excluded from the manifest (they would self-invalidate); the brief, plan, and selected references are in `attempt.inputs` instead. The host collects; the framework validates and compares.
+
+#### Collection semantics (E03)
+
+`core/engineering/snapshots.ts` turns what a host observed into that identity. It is pure: the host walks the tree, this normalizes, excludes, orders, and judges coverage. `collectSnapshot` validates every path **before** deciding anything about it, refuses a duplicate path in any combination of kinds (a collector that reports one path twice cannot say what it saw), sorts the manifest in UTF-8 byte order, and records a symlink's link text without ever following it.
+
+Order matters in one specific way: an absolute, traversing, or NUL-bearing string must be refused *before* it can be matched against an exclusion or a secret name, because the exclusion it would land in is itself inside the digest. The same applies to the inputs the caller supplies — `repository` is shape-checked rather than passed through, and an exclusion pattern the matcher cannot actually apply is refused instead of recorded, since a disclosure that is never honoured claims narrower coverage than the snapshot really has.
+
+Two consequences of that rule are easy to miss, and both were real collisions before they were closed:
+
+- **Nothing is coerced into an identity.** A non-boolean `executable` is refused, not read as `false`; a `head` that is not a string is refused, not stringified. Coercion means two different observations share one digest — exactly the failure the snapshot exists to prevent.
+- **A path must be orderable.** `compareUtf8` encodes to UTF-8, which maps every unpaired surrogate to U+FFFD, so two distinct strings can compare equal. A comparator that is not a total order makes the manifest sort depend on enumeration order, and the same tree yields two digests. Paths and patterns carrying an unpaired surrogate or a literal U+FFFD are refused.
+
+Exclusions are deduplicated by **pattern**, not by pattern-and-reason: one pattern has one meaning, and re-declaring a built-in rule under a different reason is a contradiction rather than a second coverage entry. A whole-tree `**` exclusion is refused outright — it would empty the manifest and give every repository the same identity.
+
+| Rule | Why |
+|---|---|
+| `coverage` is inside the digest | A capture that quietly stopped covering a path would otherwise be byte-identical to one where the path was read and unchanged |
+| An unreadable file becomes an `uncovered_relevant_input`, never an omission | The file we could not read is exactly the one whose change we would miss |
+| A secret file is excluded by name and its digest is **never** recorded | A digest of a credential file is still an oracle for it; the exclusion is disclosed so the reader knows coverage is partial |
+| `stability` is outside the digest | A re-capture of an unchanged tree must not look edited merely because the first capture raced |
+| A non-empty `uncovered_relevant_inputs` blocks acceptance (`candidateMayBindAcceptance`) | The collector knows it did not look at something relevant, so an unchanged digest cannot mean an unchanged tree |
+| An **absent or unreadable** `coverage` blocks acceptance too | A reader that cannot see the coverage cannot conclude the tree was fully observed; a degradation must lower trust, never raise it |
+| The same exclusion declared twice is one exclusion | Otherwise an identical tree gets two identities depending on how the host phrased its configuration |
+
+`diffSnapshots` explains what moved — added, removed, modified, mode-changed, type-changed, and coverage drift — so a freshness failure can be read by a person. It does not replace `checkCandidateFreshness`, which answers *whether* the tree moved; the gate uses that, the presentation uses this.
+
+**Documented limitations.** Collection is only as honest as the host: a host that under-reports its own gaps produces a confident-looking snapshot, which is why `uncovered_relevant_inputs` blocks rather than warns. An excluded secret's *content* is outside the identity, so rotating a credential does not change the tree digest — the exclusion is disclosed instead. A symlink's target is recorded, never resolved, so a link pointing outside the repository is identified but its destination is not covered. Revalidation is conservative by construction: any doubt resolves to a different digest and a re-run, never to reuse.
 
 ### proof (`prf_`)
 
