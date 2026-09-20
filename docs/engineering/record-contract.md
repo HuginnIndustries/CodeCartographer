@@ -133,7 +133,9 @@ The engineering namespace and generated evidence are excluded from the manifest 
 
 #### Collection semantics (E03)
 
-`core/engineering/snapshots.ts` turns what a host observed into that identity. It is pure: the host walks the tree, this normalizes, excludes, orders, and judges coverage. `collectSnapshot` sorts the manifest in UTF-8 byte order, refuses a duplicate path outright (a collector that reports one path twice cannot say what it saw), records a symlink's link text without ever following it, and rejects an absolute or traversing path rather than normalizing it away.
+`core/engineering/snapshots.ts` turns what a host observed into that identity. It is pure: the host walks the tree, this normalizes, excludes, orders, and judges coverage. `collectSnapshot` validates every path **before** deciding anything about it, refuses a duplicate path in any combination of kinds (a collector that reports one path twice cannot say what it saw), sorts the manifest in UTF-8 byte order, and records a symlink's link text without ever following it.
+
+Order matters in one specific way: an absolute, traversing, or NUL-bearing string must be refused *before* it can be matched against an exclusion or a secret name, because the exclusion it would land in is itself inside the digest. The same applies to the inputs the caller supplies — `repository` is shape-checked rather than passed through, and an exclusion pattern the matcher cannot actually apply is refused instead of recorded, since a disclosure that is never honoured claims narrower coverage than the snapshot really has.
 
 | Rule | Why |
 |---|---|
@@ -142,6 +144,8 @@ The engineering namespace and generated evidence are excluded from the manifest 
 | A secret file is excluded by name and its digest is **never** recorded | A digest of a credential file is still an oracle for it; the exclusion is disclosed so the reader knows coverage is partial |
 | `stability` is outside the digest | A re-capture of an unchanged tree must not look edited merely because the first capture raced |
 | A non-empty `uncovered_relevant_inputs` blocks acceptance (`candidateMayBindAcceptance`) | The collector knows it did not look at something relevant, so an unchanged digest cannot mean an unchanged tree |
+| An **absent or unreadable** `coverage` blocks acceptance too | A reader that cannot see the coverage cannot conclude the tree was fully observed; a degradation must lower trust, never raise it |
+| The same exclusion declared twice is one exclusion | Otherwise an identical tree gets two identities depending on how the host phrased its configuration |
 
 `diffSnapshots` explains what moved — added, removed, modified, mode-changed, type-changed, and coverage drift — so a freshness failure can be read by a person. It does not replace `checkCandidateFreshness`, which answers *whether* the tree moved; the gate uses that, the presentation uses this.
 

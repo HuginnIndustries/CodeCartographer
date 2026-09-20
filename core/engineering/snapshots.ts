@@ -17,6 +17,7 @@
 import { compareUtf8, computeSnapshotDigest } from "./digest.ts";
 import { isRepoRelativePath } from "./ids.ts";
 import { isSecretFile } from "../secrets.ts";
+import { EXCLUSION_REASONS } from "./types.ts";
 import type { Collector, CoverageExclusion, ExclusionReason, ManifestEntry, RepoRelativePath, SnapshotRole, VcsKind } from "./types.ts";
 
 /**
@@ -82,9 +83,38 @@ function secretExclusion(path: string): CoverageExclusion {
 	return { pattern: path, reason: "secret" };
 }
 
-/** Whether a glob-ish scope pattern covers a path. Supports a trailing `**`, a `*` segment, and exact paths. */
+/**
+ * The pattern shapes this module can actually apply. Anything else is
+ * refused at collection rather than recorded: an exclusion the matcher
+ * silently never applies would disclose narrower coverage than the snapshot
+ * really has, which is the one thing coverage exists to prevent.
+ *
+ * Supported: an exact path, `dir/**` (the directory and everything under
+ * it), `dir/*` (one level), a `*.ext` basename suffix, `**​/*.ext` at any
+ * depth, and `**` alone.
+ */
+export function isSupportedPattern(pattern: unknown): pattern is string {
+	if (typeof pattern !== "string" || pattern.length === 0 || pattern.includes("\0")) return false;
+	// A pattern that is only whitespace cannot name anything; the path
+	// grammar tolerates it, the matcher must not.
+	if (pattern.trim() !== pattern || pattern.trim().length === 0) return false;
+	if (pattern === "**") return true;
+	if (pattern.startsWith("**/*.")) return !pattern.slice(5).includes("/") && !pattern.slice(5).includes("*");
+	if (pattern.startsWith("*.")) return !pattern.slice(2).includes("/") && !pattern.slice(2).includes("*");
+	if (pattern.endsWith("/**")) return isRepoRelativePath(pattern.slice(0, -3));
+	if (pattern.endsWith("/*")) return isRepoRelativePath(pattern.slice(0, -2));
+	return isRepoRelativePath(pattern);
+}
+
+/** Whether a supported scope pattern covers a path. Unsupported patterns never reach here. */
 export function patternCovers(pattern: string, path: string): boolean {
+	if (pattern === "**") return true;
 	if (pattern === path) return true;
+	if (pattern.startsWith("**/*.")) return path.endsWith(pattern.slice(4));
+	if (pattern.startsWith("*.")) {
+		const base = path.slice(path.lastIndexOf("/") + 1);
+		return base.endsWith(pattern.slice(1)) && base.length > pattern.length - 1;
+	}
 	if (pattern.endsWith("/**")) {
 		const prefix = pattern.slice(0, -3);
 		return path === prefix || path.startsWith(prefix + "/");
@@ -94,7 +124,6 @@ export function patternCovers(pattern: string, path: string): boolean {
 		if (!path.startsWith(prefix + "/")) return false;
 		return !path.slice(prefix.length + 1).includes("/");
 	}
-	if (pattern === "**") return true;
 	return false;
 }
 
@@ -131,10 +160,49 @@ function normalizeEntry(entry: ObservedEntry): { ok: true; entry: ManifestEntry 
  */
 export function collectSnapshot(input: CollectionInput): { ok: true; value: CollectionResult } | { ok: false; errors: { path: string; message: string }[] } {
 	const errors: { path: string; message: string }[] = [];
-	const excluded: CoverageExclusion[] = [...ALWAYS_EXCLUDED, ...(input.excluded ?? [])];
 	const uncovered = new Set<string>();
 	const dropped: { path: string; reason: ExclusionReason }[] = [];
 	const byPath = new Map<string, ManifestEntry>();
+	const seenPath = new Set<string>();
+
+	// The repository block is digested verbatim, so its shape is checked
+	// rather than trusted: an unvalidated pass-through would let a caller put
+	// arbitrary keys (or a non-boolean `dirty`) inside the identity.
+	const repo = input.repository;
+	if (repo === null || typeof repo !== "object") {
+		errors.push({ path: "/repository", message: "repository must be an object" });
+	} else {
+		const extra = Object.keys(repo).filter((k) => !["vcs", "head", "dirty"].includes(k));
+		if (extra.length > 0) errors.push({ path: "/repository", message: `unknown field(s): ${extra.join(", ")}` });
+		if (repo.vcs !== "git" && repo.vcs !== "none") errors.push({ path: "/repository/vcs", message: "vcs must be `git` or `none`" });
+		if (typeof repo.dirty !== "boolean") errors.push({ path: "/repository/dirty", message: "dirty must be a boolean" });
+		if (repo.vcs === "git" && repo.head !== undefined && !/^[0-9a-f]{40}$/.test(String(repo.head))) {
+			errors.push({ path: "/repository/head", message: "head must be a 40-character lowercase hex revision" });
+		}
+		if (repo.vcs === "none" && repo.head !== undefined) errors.push({ path: "/repository/head", message: "head is meaningless without a vcs" });
+	}
+
+	// Exclusions are validated before any are applied. An unsupported pattern
+	// is refused, never recorded: a disclosure the matcher cannot honour would
+	// claim narrower coverage than the snapshot actually has.
+	const excluded: CoverageExclusion[] = [...ALWAYS_EXCLUDED];
+	for (const rule of input.excluded ?? []) {
+		if (rule === null || typeof rule !== "object") {
+			errors.push({ path: "/excluded", message: "each exclusion must be an object" });
+			continue;
+		}
+		if (!isSupportedPattern(rule.pattern)) {
+			errors.push({ path: "/excluded", message: `unsupported exclusion pattern ${JSON.stringify(rule.pattern)}; it would be disclosed but never applied` });
+			continue;
+		}
+		if (!EXCLUSION_REASONS.includes(rule.reason as never)) {
+			errors.push({ path: "/excluded", message: `unknown exclusion reason ${JSON.stringify(rule.reason)}` });
+			continue;
+		}
+		// Deduped: the same rule declared twice is one rule, and must not
+		// change the identity of an otherwise identical tree.
+		if (!excluded.some((e) => e.pattern === rule.pattern && e.reason === rule.reason)) excluded.push({ pattern: rule.pattern, reason: rule.reason });
+	}
 
 	for (const raw of input.uncovered_relevant_inputs ?? []) {
 		if (!isRepoRelativePath(raw)) errors.push({ path: `/uncovered_relevant_inputs`, message: `not a repository-relative POSIX path: ${JSON.stringify(raw)}` });
@@ -143,6 +211,21 @@ export function collectSnapshot(input: CollectionInput): { ok: true; value: Coll
 
 	for (const entry of input.entries) {
 		const path = entry.path;
+		// Validate the path FIRST. Deciding to exclude or drop a path before
+		// establishing that it *is* a repository-relative path would let an
+		// absolute, traversing, or NUL-bearing string reach `coverage` — and
+		// `coverage` is inside the digest.
+		if (!isRepoRelativePath(path)) {
+			errors.push({ path: "/entries", message: `not a repository-relative POSIX path: ${JSON.stringify(path)}` });
+			continue;
+		}
+		// One path, one observation: a collector that reports the same path
+		// twice — in any combination of kinds — cannot say what it saw.
+		if (seenPath.has(path)) {
+			errors.push({ path: `/entries/${path}`, message: "duplicate path: the collector reported one path twice" });
+			continue;
+		}
+		seenPath.add(path);
 		const hit = excluded.find((rule) => patternCovers(rule.pattern, path));
 		if (hit) {
 			dropped.push({ path, reason: hit.reason });
@@ -155,17 +238,12 @@ export function collectSnapshot(input: CollectionInput): { ok: true; value: Coll
 			continue;
 		}
 		if (entry.type === "unreadable") {
-			if (!isRepoRelativePath(path)) errors.push({ path: "/entries", message: `unreadable entry has an invalid path: ${JSON.stringify(path)}` });
-			else uncovered.add(path);
+			uncovered.add(path);
 			continue;
 		}
 		const normalized = normalizeEntry(entry);
 		if (normalized.ok === false) {
 			errors.push({ path: `/entries/${path}`, message: normalized.reason });
-			continue;
-		}
-		if (byPath.has(path)) {
-			errors.push({ path: `/entries/${path}`, message: "duplicate path: the collector reported one path twice" });
 			continue;
 		}
 		byPath.set(path, normalized.entry);
@@ -216,9 +294,16 @@ export function candidateMayBindAcceptance(candidate: {
 	if (candidate.stability !== "stable") reasons.push("the tree moved during capture; an unstable candidate cannot bind an acceptance");
 	if (candidate.collector === "agent-claimed") reasons.push("collector is agent-claimed; an agent's account of the tree is not an observation of it");
 	if (candidate.attested_by !== "adapter") reasons.push(`attested_by is ${candidate.attested_by}; only an adapter-captured candidate binds an acceptance`);
-	const uncovered = candidate.coverage?.uncovered_relevant_inputs ?? [];
-	if (uncovered.length > 0) {
-		reasons.push(`${uncovered.length} relevant input(s) were not covered (${uncovered.slice(0, 3).join(", ")}${uncovered.length > 3 ? ", …" : ""}); an unchanged digest cannot mean an unchanged tree`);
+	// Coverage is required, not optional. A reader that cannot see the
+	// coverage cannot conclude the tree was fully observed, so an absent or
+	// malformed one must block rather than default to "nothing uncovered" —
+	// a degradation may lower trust, never raise it.
+	const uncovered = (candidate as { coverage?: { uncovered_relevant_inputs?: unknown } }).coverage?.uncovered_relevant_inputs;
+	if (!Array.isArray(uncovered)) {
+		reasons.push("coverage.uncovered_relevant_inputs is missing or not a list; a candidate whose coverage cannot be read may not bind an acceptance");
+	} else if (uncovered.length > 0) {
+		const shown = uncovered.slice(0, 3).map((value) => String(value));
+		reasons.push(`${uncovered.length} relevant input(s) were not covered (${shown.join(", ")}${uncovered.length > 3 ? ", …" : ""}); an unchanged digest cannot mean an unchanged tree`);
 	}
 	return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }

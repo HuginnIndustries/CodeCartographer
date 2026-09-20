@@ -18,6 +18,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const engineering = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/index.ts`).href);
 const barrel = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const { collectSnapshot, candidateMayBindAcceptance, diffSnapshots, patternCovers, ALWAYS_EXCLUDED, computeSnapshotDigest, validateRecord, checkCandidateFreshness } = engineering;
+const { isSupportedPattern } = engineering;
 
 const sha = (text) => "sha256:" + createHash("sha256").update(text).digest("hex");
 const file = (path, body, extra = {}) => ({ path, type: "file", digest: sha(body), executable: false, size: Buffer.byteLength(body), ...extra });
@@ -43,7 +44,7 @@ test("the module is re-exported through both barrels and imports no side-effecti
 	const source = await readFile(join(REPO_ROOT, "core/engineering/snapshots.ts"), "utf8");
 	const imports = [...source.matchAll(/^import .*? from "(.*?)";$/gm)].map((m) => m[1]);
 	assert.deepEqual(
-		imports.sort(),
+		[...new Set(imports)].sort(),
 		["../secrets.ts", "./digest.ts", "./ids.ts", "./types.ts"],
 		"snapshots.ts imports only the contract's own modules and the shared secret-path list",
 	);
@@ -270,6 +271,113 @@ test("exclusion patterns match the paths they claim and no others", () => {
 	assert.ok(built.coverage.excluded.some((e) => e.pattern === "dist/**" && e.reason === "generated"));
 	// Excluding a build directory must not be mistakable for excluding source.
 	assert.notEqual(built.digest, ok(collect(tree())).digest, "the exclusion list is part of the identity");
+});
+
+test("a path is validated before any exclusion decision, so no unvalidated string reaches the identity", () => {
+	// Review finding: exclusion and secret matching ran BEFORE the path check,
+	// so a secret-like basename or a covering host pattern smuggled an
+	// absolute, traversing, or NUL-bearing string into coverage.excluded —
+	// and coverage is inside the digest.
+	for (const bad of ["/home/someone/.netrc", "../../.npmrc", "ok/\u0000bad/.npmrc", "/etc/shadow"]) {
+		const viaSecret = collect([file("src/a.ts", "x"), { path: bad, type: "file", digest: sha("s"), executable: false, size: 1 }]);
+		assert.equal(viaSecret.ok, false, `secret-like basename must not bypass path validation: ${bad}`);
+		assert.match(viaSecret.errors.map((e) => e.message).join(" "), /repository-relative/);
+		const viaExclusion = collect([file("src/a.ts", "x"), { path: bad, type: "file", digest: sha("s"), executable: false, size: 1 }], {
+			excluded: [{ pattern: "vendor/**", reason: "host-declared" }],
+		});
+		assert.equal(viaExclusion.ok, false, `a host exclusion must not bypass path validation: ${bad}`);
+	}
+	// An unreadable entry gets the same treatment.
+	assert.equal(collect([{ path: "/abs/unreadable", type: "unreadable", reason: "denied" }]).ok, false);
+});
+
+test("one path, one observation: a duplicate in any combination of kinds is refused", () => {
+	// Review finding: duplicate detection lived after the unreadable branch, so
+	// file+unreadable for one path produced a snapshot claiming the path was
+	// both fingerprinted and not covered.
+	const pairs = [
+		[file("src/a.ts", "x"), { path: "src/a.ts", type: "unreadable", reason: "raced" }],
+		[{ path: "src/a.ts", type: "unreadable", reason: "raced" }, file("src/a.ts", "x")],
+		[file("src/a.ts", "x"), { path: "src/a.ts", type: "symlink", target: "./b.ts" }],
+		[file("src/a.ts", "x"), file("src/a.ts", "y")],
+	];
+	for (const entries of pairs) {
+		const result = collect(entries);
+		assert.equal(result.ok, false, JSON.stringify(entries.map((e) => e.type)));
+		assert.match(result.errors.map((e) => e.message).join(" "), /duplicate path/);
+	}
+});
+
+test("an exclusion the matcher cannot apply is refused, not disclosed", () => {
+	// Review finding: patternCovers silently returned false for `*.log` and
+	// `**/*.log`, so those exclusions were recorded in coverage — and in the
+	// digest — while every matching file stayed in the manifest. Disclosed
+	// coverage was narrower than actual coverage, which inverts the point.
+	assert.equal(isSupportedPattern("*.log"), true);
+	assert.equal(isSupportedPattern("**/*.log"), true);
+	assert.equal(patternCovers("*.log", "app.log"), true);
+	assert.equal(patternCovers("*.log", "src/app.log"), true, "a basename suffix matches at any depth");
+	assert.equal(patternCovers("**/*.log", "src/deep/app.log"), true);
+	assert.equal(patternCovers("*.log", "applog"), false, "the dot is part of the suffix");
+
+	for (const unsupported of ["src/**/x", "", "  ", "a\u0000b", "/abs/**", "../escape/**", "**/**", "*.l*g", 42, null]) {
+		assert.equal(isSupportedPattern(unsupported), false, JSON.stringify(unsupported));
+		const result = collect(tree(), { excluded: [{ pattern: unsupported, reason: "generated" }] });
+		assert.equal(result.ok, false, `unsupported pattern must be refused: ${JSON.stringify(unsupported)}`);
+		assert.match(result.errors.map((e) => e.message).join(" "), /unsupported exclusion pattern|each exclusion must be an object/);
+	}
+	// An unknown reason is refused too: the reason is what a reader trusts.
+	assert.equal(collect(tree(), { excluded: [{ pattern: "dist/**", reason: "because" }] }).ok, false);
+});
+
+test("declaring the same exclusion twice does not change the tree's identity", () => {
+	// Review finding: only the secret case was deduped, so a host that listed
+	// a rule twice produced a different digest for an identical tree.
+	const once = ok(collect(tree(), { excluded: [{ pattern: "dist/**", reason: "generated" }] }));
+	const twice = ok(collect(tree(), { excluded: [{ pattern: "dist/**", reason: "generated" }, { pattern: "dist/**", reason: "generated" }] }));
+	assert.equal(twice.digest, once.digest, "a repeated rule is one rule");
+	const redeclared = ok(collect(tree(), { excluded: [{ pattern: ".codecarto/engineering/**", reason: "engineering-namespace" }] }));
+	assert.equal(redeclared.digest, ok(collect(tree())).digest, "re-declaring the built-in rule is a no-op");
+	// But a different reason for the same pattern is a different disclosure.
+	const otherReason = ok(collect(tree(), { excluded: [{ pattern: "dist/**", reason: "ignored" }] }));
+	assert.notEqual(otherReason.digest, once.digest);
+});
+
+test("the repository block is validated, not passed through into the digest", () => {
+	// Review finding: repository was digested verbatim, so a caller could put
+	// arbitrary keys or a string `dirty` inside the tree's identity.
+	const bad = [
+		{ vcs: "git", head: "a".repeat(40), dirty: "false" },
+		{ vcs: "git", head: "a".repeat(40), dirty: false, sneaky: "extra" },
+		{ vcs: "svn", dirty: false },
+		{ vcs: "git", head: "not-a-revision", dirty: false },
+		{ vcs: "none", head: "a".repeat(40), dirty: false },
+		{ vcs: "git", head: 1.5, dirty: false },
+		null,
+		"git",
+	];
+	for (const repository of bad) {
+		const result = collectSnapshot({ entries: tree(), repository });
+		assert.equal(result.ok, false, JSON.stringify(repository));
+	}
+	assert.equal(collectSnapshot({ entries: tree(), repository: { vcs: "git", head: "a".repeat(40), dirty: false } }).ok, true);
+	assert.equal(collectSnapshot({ entries: tree(), repository: { vcs: "none", dirty: true } }).ok, true);
+});
+
+test("a candidate whose coverage cannot be read may not bind an acceptance", () => {
+	// Review finding: `candidate.coverage?.uncovered_relevant_inputs ?? []`
+	// made coverage optional, so omitting it returned ok:true — a degradation
+	// that RAISED trust. An unreadable coverage must block.
+	const base = { role: "candidate", stability: "stable", collector: "host-observed", attested_by: "adapter" };
+	for (const coverage of [undefined, null, {}, { uncovered_relevant_inputs: null }, { uncovered_relevant_inputs: "" }, { uncovered_relevant_inputs: "abc" }, { uncovered_relevant_inputs: 5 }]) {
+		const result = candidateMayBindAcceptance({ ...base, coverage });
+		assert.equal(result.ok, false, JSON.stringify(coverage));
+		assert.match(result.reasons.join(" "), /coverage\.uncovered_relevant_inputs is missing or not a list/);
+	}
+	// A length-spoofing object is not an array and does not pass.
+	assert.equal(candidateMayBindAcceptance({ ...base, coverage: { uncovered_relevant_inputs: { length: 0 } } }).ok, false);
+	// The honest empty case still passes.
+	assert.deepEqual(candidateMayBindAcceptance({ ...base, coverage: { uncovered_relevant_inputs: [] } }), { ok: true });
 });
 
 test("a record carries no absolute path, home directory, or environment value", () => {
