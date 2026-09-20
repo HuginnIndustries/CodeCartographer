@@ -84,6 +84,18 @@ function secretExclusion(path: string): CoverageExclusion {
 }
 
 /**
+ * A string safe to use as an identity component. `compareUtf8` encodes to
+ * UTF-8 before comparing, and that encoding maps every lone surrogate to
+ * U+FFFD — so `"a\uD800"` and `"a\uFFFD"` compare EQUAL while canonicalizing
+ * differently. A comparator that says two distinct strings are equal is not
+ * a total order, and the manifest sort built on it stops being deterministic:
+ * the same tree, enumerated in two orders, yields two digests. Refuse them.
+ */
+function isSortableIdentity(value: string): boolean {
+	return !/[\uD800-\uDFFF]/.test(value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "")) && !value.includes("\uFFFD");
+}
+
+/**
  * The pattern shapes this module can actually apply. Anything else is
  * refused at collection rather than recorded: an exclusion the matcher
  * silently never applies would disclose narrower coverage than the snapshot
@@ -98,19 +110,37 @@ export function isSupportedPattern(pattern: unknown): pattern is string {
 	// A pattern that is only whitespace cannot name anything; the path
 	// grammar tolerates it, the matcher must not.
 	if (pattern.trim() !== pattern || pattern.trim().length === 0) return false;
-	if (pattern === "**") return true;
+	if (!isSortableIdentity(pattern)) return false;
+	// `**` excludes the entire tree, producing an empty manifest that is
+	// identical for every repository. It has no legitimate use here.
+	if (pattern === "**") return false;
+	// A suffix pattern must actually have a suffix: `*.` and `**/*.` match a
+	// trailing dot and nothing useful.
+	if (pattern === "*." || pattern === "**/*.") return false;
 	if (pattern.startsWith("**/*.")) return !pattern.slice(5).includes("/") && !pattern.slice(5).includes("*");
 	if (pattern.startsWith("*.")) return !pattern.slice(2).includes("/") && !pattern.slice(2).includes("*");
 	if (pattern.endsWith("/**")) return isRepoRelativePath(pattern.slice(0, -3));
 	if (pattern.endsWith("/*")) return isRepoRelativePath(pattern.slice(0, -2));
+	// An exact path, and only an exact path. A bare directory name would be
+	// disclosed as an exclusion but match nothing inside it — coverage
+	// narrower than reality, which is finding 4's defect in another shape.
+	// A directory must say so: `dir/**` or `dir/*`. (`isRepoRelativePath`
+	// already refuses any remaining `*`, so no extra guard is needed here —
+	// adding one would be unreachable code that looks load-bearing.)
 	return isRepoRelativePath(pattern);
 }
 
 /** Whether a supported scope pattern covers a path. Unsupported patterns never reach here. */
 export function patternCovers(pattern: string, path: string): boolean {
-	if (pattern === "**") return true;
 	if (pattern === path) return true;
-	if (pattern.startsWith("**/*.")) return path.endsWith(pattern.slice(4));
+	// `**/*.log` and `*.log` must agree on what a `.log` basename is. Both
+	// require a non-empty stem, so a file literally named `.log` is NOT
+	// covered by either; disagreeing would make coverage depend on which
+	// spelling the host happened to use.
+	if (pattern.startsWith("**/*.")) {
+		const base = path.slice(path.lastIndexOf("/") + 1);
+		return base.endsWith(pattern.slice(4)) && base.length > pattern.length - 4;
+	}
 	if (pattern.startsWith("*.")) {
 		const base = path.slice(path.lastIndexOf("/") + 1);
 		return base.endsWith(pattern.slice(1)) && base.length > pattern.length - 1;
@@ -145,7 +175,11 @@ function normalizeEntry(entry: ObservedEntry): { ok: true; entry: ManifestEntry 
 	if (entry.type === "file") {
 		if (!Number.isInteger(entry.size) || entry.size < 0) return { ok: false, reason: "size is not a non-negative integer" };
 		if (typeof entry.digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(entry.digest)) return { ok: false, reason: "digest is not sha256:<64 hex>" };
-		return { ok: true, entry: { path: entry.path, type: "file", digest: entry.digest, executable: entry.executable === true, size: entry.size } };
+		// Coercing a non-boolean here would be a collision: a host that reports
+		// `executable: 1` would produce the identity of a NON-executable file,
+		// and a file that gains the executable bit is a behaviour change.
+		if (typeof entry.executable !== "boolean") return { ok: false, reason: "executable is not a boolean" };
+		return { ok: true, entry: { path: entry.path, type: "file", digest: entry.digest, executable: entry.executable, size: entry.size } };
 	}
 	return { ok: false, reason: entry.reason || "unreadable" };
 }
@@ -169,14 +203,16 @@ export function collectSnapshot(input: CollectionInput): { ok: true; value: Coll
 	// rather than trusted: an unvalidated pass-through would let a caller put
 	// arbitrary keys (or a non-boolean `dirty`) inside the identity.
 	const repo = input.repository;
-	if (repo === null || typeof repo !== "object") {
+	if (repo === null || typeof repo !== "object" || Object.getPrototypeOf(repo) !== Object.prototype) {
 		errors.push({ path: "/repository", message: "repository must be an object" });
 	} else {
 		const extra = Object.keys(repo).filter((k) => !["vcs", "head", "dirty"].includes(k));
 		if (extra.length > 0) errors.push({ path: "/repository", message: `unknown field(s): ${extra.join(", ")}` });
 		if (repo.vcs !== "git" && repo.vcs !== "none") errors.push({ path: "/repository/vcs", message: "vcs must be `git` or `none`" });
 		if (typeof repo.dirty !== "boolean") errors.push({ path: "/repository/dirty", message: "dirty must be a boolean" });
-		if (repo.vcs === "git" && repo.head !== undefined && !/^[0-9a-f]{40}$/.test(String(repo.head))) {
+		// `String(head)` would accept `["a".repeat(40)]`, which then reaches the
+		// digest as an array: the shape must be checked, not stringified.
+		if (repo.vcs === "git" && repo.head !== undefined && (typeof repo.head !== "string" || !/^[0-9a-f]{40}$/.test(repo.head))) {
 			errors.push({ path: "/repository/head", message: "head must be a 40-character lowercase hex revision" });
 		}
 		if (repo.vcs === "none" && repo.head !== undefined) errors.push({ path: "/repository/head", message: "head is meaningless without a vcs" });
@@ -199,13 +235,22 @@ export function collectSnapshot(input: CollectionInput): { ok: true; value: Coll
 			errors.push({ path: "/excluded", message: `unknown exclusion reason ${JSON.stringify(rule.reason)}` });
 			continue;
 		}
-		// Deduped: the same rule declared twice is one rule, and must not
-		// change the identity of an otherwise identical tree.
-		if (!excluded.some((e) => e.pattern === rule.pattern && e.reason === rule.reason)) excluded.push({ pattern: rule.pattern, reason: rule.reason });
+		// Deduped by PATTERN, not by pattern+reason: one pattern has one
+		// meaning. Keying on the pair would let a host re-declare a built-in
+		// rule under another reason and get a second coverage entry — a
+		// spurious second identity for an identical tree.
+		const already = excluded.find((e) => e.pattern === rule.pattern);
+		if (already) {
+			if (already.reason !== rule.reason) {
+				errors.push({ path: "/excluded", message: `pattern ${JSON.stringify(rule.pattern)} is declared twice with different reasons (${already.reason}, ${rule.reason}); one pattern has one meaning` });
+			}
+			continue;
+		}
+		excluded.push({ pattern: rule.pattern, reason: rule.reason });
 	}
 
 	for (const raw of input.uncovered_relevant_inputs ?? []) {
-		if (!isRepoRelativePath(raw)) errors.push({ path: `/uncovered_relevant_inputs`, message: `not a repository-relative POSIX path: ${JSON.stringify(raw)}` });
+		if (!isRepoRelativePath(raw) || !isSortableIdentity(raw)) errors.push({ path: `/uncovered_relevant_inputs`, message: `not a repository-relative POSIX path: ${JSON.stringify(raw)}` });
 		else uncovered.add(raw);
 	}
 
@@ -217,6 +262,13 @@ export function collectSnapshot(input: CollectionInput): { ok: true; value: Coll
 		// `coverage` is inside the digest.
 		if (!isRepoRelativePath(path)) {
 			errors.push({ path: "/entries", message: `not a repository-relative POSIX path: ${JSON.stringify(path)}` });
+			continue;
+		}
+		// A path the sort cannot order deterministically cannot be an identity
+		// component; without this the same tree yields two digests depending on
+		// the order the host happened to enumerate it in.
+		if (!isSortableIdentity(path)) {
+			errors.push({ path: "/entries", message: `path contains an unpaired surrogate or replacement character and cannot be ordered deterministically: ${JSON.stringify(path)}` });
 			continue;
 		}
 		// One path, one observation: a collector that reports the same path

@@ -137,6 +137,13 @@ The engineering namespace and generated evidence are excluded from the manifest 
 
 Order matters in one specific way: an absolute, traversing, or NUL-bearing string must be refused *before* it can be matched against an exclusion or a secret name, because the exclusion it would land in is itself inside the digest. The same applies to the inputs the caller supplies — `repository` is shape-checked rather than passed through, and an exclusion pattern the matcher cannot actually apply is refused instead of recorded, since a disclosure that is never honoured claims narrower coverage than the snapshot really has.
 
+Two consequences of that rule are easy to miss, and both were real collisions before they were closed:
+
+- **Nothing is coerced into an identity.** A non-boolean `executable` is refused, not read as `false`; a `head` that is not a string is refused, not stringified. Coercion means two different observations share one digest — exactly the failure the snapshot exists to prevent.
+- **A path must be orderable.** `compareUtf8` encodes to UTF-8, which maps every unpaired surrogate to U+FFFD, so two distinct strings can compare equal. A comparator that is not a total order makes the manifest sort depend on enumeration order, and the same tree yields two digests. Paths and patterns carrying an unpaired surrogate or a literal U+FFFD are refused.
+
+Exclusions are deduplicated by **pattern**, not by pattern-and-reason: one pattern has one meaning, and re-declaring a built-in rule under a different reason is a contradiction rather than a second coverage entry. A whole-tree `**` exclusion is refused outright — it would empty the manifest and give every repository the same identity.
+
 | Rule | Why |
 |---|---|
 | `coverage` is inside the digest | A capture that quietly stopped covering a path would otherwise be byte-identical to one where the path was read and unchanged |

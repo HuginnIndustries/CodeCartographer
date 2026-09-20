@@ -18,10 +18,13 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const engineering = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/index.ts`).href);
 const barrel = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const { collectSnapshot, candidateMayBindAcceptance, diffSnapshots, patternCovers, ALWAYS_EXCLUDED, computeSnapshotDigest, validateRecord, checkCandidateFreshness } = engineering;
-const { isSupportedPattern } = engineering;
+const { isSupportedPattern, compareUtf8 } = engineering;
 
 const sha = (text) => "sha256:" + createHash("sha256").update(text).digest("hex");
 const file = (path, body, extra = {}) => ({ path, type: "file", digest: sha(body), executable: false, size: Buffer.byteLength(body), ...extra });
+
+/** The plain repository block the second-review regressions build on. */
+const REPOSITORY = { vcs: "git", head: "a".repeat(40), dirty: false };
 
 /** A small, realistic tree. */
 function tree(overrides = []) {
@@ -395,4 +398,118 @@ test("a record carries no absolute path, home directory, or environment value", 
 	for (const entry of collected.manifest) {
 		assert.ok(!entry.path.startsWith("/") && !entry.path.includes(".."), entry.path);
 	}
+});
+
+// --- Second adversarial review (Fable 5.1) --------------------------------
+// Every case below is a two-trees-one-digest collision or a spurious-drift
+// bug found reviewing the FIXES from the first review. They are regressions,
+// not hypotheticals: each digest pair here was observed colliding.
+
+test("a non-boolean executable is refused, never coerced to false", () => {
+	// Observed: `executable: 1` and `executable: "true"` both produced the
+	// digest of a NON-executable file, so a tree whose script carries the
+	// executable bit was indistinguishable from one where it does not.
+	for (const bad of [1, 0, "true", "false", null, {}, []]) {
+		const r = collectSnapshot({ entries: [file("bin/run.sh", "#!/bin/sh\n", { executable: bad })], repository: REPOSITORY });
+		assert.equal(r.ok, false, `executable: ${JSON.stringify(bad)} must be refused`);
+		assert.match(r.errors[0].message, /executable is not a boolean/);
+	}
+	const yes = collectSnapshot({ entries: [file("bin/run.sh", "#!/bin/sh\n", { executable: true })], repository: REPOSITORY });
+	const no = collectSnapshot({ entries: [file("bin/run.sh", "#!/bin/sh\n", { executable: false })], repository: REPOSITORY });
+	assert.notEqual(yes.value.digest, no.value.digest, "the executable bit must change the identity");
+});
+
+test("a path the sort cannot order deterministically is refused", () => {
+	// compareUtf8 encodes to UTF-8, which maps every lone surrogate to U+FFFD,
+	// so "a\uD800" and "a\uFFFD" compared EQUAL. A non-total comparator made
+	// the manifest sort order-dependent: the same tree, enumerated in two
+	// orders, produced two different digests.
+	assert.equal(compareUtf8("a\uD800", "a\uFFFD"), 0, "the comparator really does collapse these");
+	for (const bad of ["a\uD800", "a\uDFFF", "a\uFFFD", "dir/\uD800x"]) {
+		const r = collectSnapshot({ entries: [file(bad, "x")], repository: REPOSITORY });
+		assert.equal(r.ok, false, `${JSON.stringify(bad)} must be refused`);
+		assert.match(r.errors[0].message, /unpaired surrogate|replacement character/);
+	}
+	// A correctly paired surrogate is a real character and stays accepted.
+	const ok = collectSnapshot({ entries: [file("src/\u{1F600}.ts", "x")], repository: REPOSITORY });
+	assert.equal(ok.ok, true, "an astral character is a legitimate filename");
+});
+
+test("the repository block is shape-checked, not stringified", () => {
+	// Observed: String(head) accepted ["a".repeat(40)], which then reached the
+	// digest as an array; a non-plain prototype threw out of canonicalJson
+	// instead of returning ok:false.
+	const entries = [file("src/index.ts", "x")];
+	for (const head of [["a".repeat(40)], 40, null, { toString: () => "a".repeat(40) }]) {
+		const r = collectSnapshot({ entries, repository: { vcs: "git", head, dirty: false } });
+		assert.equal(r.ok, false, `head ${JSON.stringify(head)} must be refused`);
+	}
+	const weird = collectSnapshot({ entries, repository: Object.assign(Object.create({ vcs: "git" }), { dirty: false }) });
+	assert.equal(weird.ok, false, "a non-plain repository object is refused, not thrown on");
+});
+
+test("one pattern has one meaning, and a whole-tree exclusion is refused", () => {
+	// Re-declaring a built-in rule under another reason produced a SECOND
+	// coverage entry — a spurious second identity for an identical tree.
+	const entries = [file("src/index.ts", "x")];
+	const plain = collectSnapshot({ entries, repository: REPOSITORY });
+	const redeclared = collectSnapshot({
+		entries,
+		repository: REPOSITORY,
+		excluded: [{ pattern: ALWAYS_EXCLUDED[0].pattern, reason: "host-declared" }],
+	});
+	assert.equal(redeclared.ok, false, "the same pattern under two reasons is a contradiction, not a second entry");
+	assert.match(redeclared.errors[0].message, /declared twice with different reasons/);
+	// Declaring it identically is a no-op, not drift.
+	const same = collectSnapshot({ entries, repository: REPOSITORY, excluded: [{ ...ALWAYS_EXCLUDED[0] }] });
+	assert.equal(same.value.digest, plain.value.digest, "an identical re-declaration must not change identity");
+	// `**` would empty the manifest, giving every repository one identity.
+	const all = collectSnapshot({ entries, repository: REPOSITORY, excluded: [{ pattern: "**", reason: "host-declared" }] });
+	assert.equal(all.ok, false, "a whole-tree exclusion is refused");
+});
+
+test("a disclosed exclusion is one the matcher actually applies", () => {
+	// The first review's fix covered *.log; the same defect survived in two
+	// other shapes: a bare directory name matched nothing inside it, and the
+	// two spellings of a suffix rule disagreed about a bare `.log` file.
+	assert.equal(isSupportedPattern("build"), true, "an exact path is supported");
+	assert.equal(patternCovers("build", "build"), true);
+	assert.equal(patternCovers("build", "build/out.js"), false, "a bare name is NOT a directory rule");
+	assert.equal(isSupportedPattern("build/"), false, "a trailing slash is not a supported spelling");
+	assert.equal(patternCovers("build/**", "build/out.js"), true, "a directory must say so");
+	// A pattern carrying a `*` the matcher does not implement must be refused
+	// outright, not accepted and then silently matched against nothing.
+	for (const bad of ["src/*.ts", "a*b", "src/**/x"]) {
+		assert.equal(isSupportedPattern(bad), false, `${bad} is not a shape the matcher implements`);
+		const r = collectSnapshot({ entries: [file("src/index.ts", "x")], repository: REPOSITORY, excluded: [{ pattern: bad, reason: "host-declared" }] });
+		assert.equal(r.ok, false, `${bad} must be refused by the collector, not disclosed`);
+	}
+	// Both spellings must agree, or coverage depends on how the host phrased it.
+	assert.equal(patternCovers("*.log", ".log"), patternCovers("**/*.log", ".log"), "spellings must agree");
+	assert.equal(patternCovers("*.log", ".log"), false, "a file named `.log` has no stem");
+	assert.equal(patternCovers("*.log", "a.log.bak"), false);
+	for (const bad of ["*.", "**/*."]) assert.equal(isSupportedPattern(bad), false, `${bad} matches nothing useful`);
+	// And the exclusion is really applied: a matching file leaves the manifest.
+	const collected = collectSnapshot({
+		entries: [file("src/index.ts", "x"), file("run.log", "noise")],
+		repository: REPOSITORY,
+		excluded: [{ pattern: "*.log", reason: "host-declared" }],
+	});
+	assert.deepEqual(collected.value.manifest.map((e) => e.path), ["src/index.ts"], "the excluded file is really dropped");
+	assert.ok(collected.value.dropped.some((d) => d.path === "run.log"), "and is disclosed as dropped");
+});
+
+test("no secret digest appears anywhere in the entire serialized snapshot", () => {
+	// The earlier test only grepped `coverage`; this greps the whole result,
+	// including `dropped`, which is where a leak would actually land.
+	const body = "AKIA_EXAMPLE_SECRET\n";
+	const collected = collectSnapshot({
+		entries: [file("src/index.ts", "x"), file(".env", body), file("config/credentials.json", body)],
+		repository: REPOSITORY,
+	});
+	const serialized = JSON.stringify(collected.value);
+	assert.ok(!serialized.includes(sha(body).slice(7)), "the secret's digest must not appear anywhere");
+	assert.ok(!serialized.includes(body.trim()), "nor its contents");
+	assert.ok(!collected.value.manifest.some((e) => e.path === ".env"), "and it is not in the manifest");
+	assert.ok(collected.value.dropped.some((d) => d.path === ".env" && d.digest === undefined), "dropped discloses the path without a digest");
 });
