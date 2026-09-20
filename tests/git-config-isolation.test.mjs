@@ -26,13 +26,20 @@ import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 import assert from "node:assert/strict";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * The isolation helper as a file:// URL. A bare Windows path (`D:\\...`) is
+ * not a valid ESM specifier, so interpolating REPO_ROOT directly into an
+ * `import` inside a generated probe fails with ERR_UNSUPPORTED_ESM_URL_SCHEME.
+ */
+const HELPER_URL = pathToFileURL(join(REPO_ROOT, "tests/helpers/git-config-isolation.mjs")).href;
 
 /** A path git reads as empty config. Matches the helper's own constant. */
 const ABSENT = join(tmpdir(), "codecarto-tests-absent-gitconfig");
@@ -96,7 +103,7 @@ test("the injected rewrite really does reach git — the defect is real", async 
 
 test("the helper neutralizes the injected rewrite in a fresh child process", async () => {
 	const out = await runChild(
-		`import "${REPO_ROOT}/tests/helpers/git-config-isolation.mjs";
+		`import "${HELPER_URL}";
 		import { execFile } from "node:child_process";
 		import { mkdtemp } from "node:fs/promises";
 		import { tmpdir } from "node:os";
@@ -126,7 +133,7 @@ test("isolation survives a large injected config set, not just one entry", async
 		many[`GIT_CONFIG_VALUE_${i}`] = v;
 	}
 	const out = await runChild(
-		`import "${REPO_ROOT}/tests/helpers/git-config-isolation.mjs";
+		`import "${HELPER_URL}";
 		import { execFile } from "node:child_process";
 		import { promisify } from "node:util";
 		const run = promisify(execFile);
@@ -148,7 +155,7 @@ test("the helper runs before the modules under test, not merely at module scope"
 	// appears silently the first time one does. Here the probe imports the
 	// isolation first, so the observer must see a clean environment.
 	const out = await runChild(
-		`import "${REPO_ROOT}/tests/helpers/git-config-isolation.mjs";
+		`import "${HELPER_URL}";
 		import { execFile } from "node:child_process";
 		import { promisify } from "node:util";
 		const run = promisify(execFile);
@@ -181,7 +188,7 @@ test("GIT_CONFIG_PARAMETERS is neutralized, not merely counted down", async () =
 
 	// Then prove the helper closes it.
 	const out = await runChild(
-		`import "${REPO_ROOT}/tests/helpers/git-config-isolation.mjs";
+		`import "${HELPER_URL}";
 		import { execFile } from "node:child_process";
 		import { mkdtemp } from "node:fs/promises";
 		import { tmpdir } from "node:os";
