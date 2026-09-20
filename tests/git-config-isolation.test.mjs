@@ -34,6 +34,9 @@ import assert from "node:assert/strict";
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+/** A path git reads as empty config. Matches the helper's own constant. */
+const ABSENT = join(tmpdir(), "codecarto-tests-absent-gitconfig");
+
 /** The rewrite that reproduces #412: SSH-syntax remotes routed over HTTPS. */
 const INJECTED = {
 	GIT_CONFIG_COUNT: "1",
@@ -139,9 +142,11 @@ test("the helper runs before the modules under test, not merely at module scope"
 	// is evaluated before the importing module's body, so three lines at
 	// module scope run AFTER the code under test has been imported — and in
 	// broadside-repo-collection.test.mjs the guard sat after a dynamic
-	// `await import()` of that very code. A module that reads the rewrite at
-	// import time therefore saw it. Here the probe imports the isolation
-	// first, so the observer module must see a clean environment.
+	// `await import()` of that very code. No module under test currently
+	// resolves git configuration while it is being evaluated, so that was a
+	// latent hazard rather than a live failure — but it is the kind that
+	// appears silently the first time one does. Here the probe imports the
+	// isolation first, so the observer must see a clean environment.
 	const out = await runChild(
 		`import "${REPO_ROOT}/tests/helpers/git-config-isolation.mjs";
 		import { execFile } from "node:child_process";
@@ -153,6 +158,44 @@ test("the helper runs before the modules under test, not merely at module scope"
 		INJECTED,
 	);
 	assert.equal(out, "clean", "the rewrite is gone before anything else is imported");
+});
+
+test("GIT_CONFIG_PARAMETERS is neutralized, not merely counted down", async () => {
+	// The fourth source, and the one the first version of this fix missed.
+	// Git uses it to hand `-c key=value` to its OWN subprocesses, so it
+	// arrives without anyone setting it deliberately — running the suite
+	// under `git bisect run` is enough. It carries its own entries, so
+	// GIT_CONFIG_COUNT=0 does not disarm it.
+	const injected = { GIT_CONFIG_PARAMETERS: "'url.https://github.com/.insteadOf'='git@github.com:'" };
+
+	// First prove the vector is real: with the other three neutralized but
+	// this one left alone, the rewrite still reaches a fixture.
+	await withTempDir(async (dir) => {
+		await execFileAsync("git", ["-C", dir, "init", "--quiet"]);
+		await execFileAsync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:Acme/Tool.git"]);
+		const { stdout } = await execFileAsync("git", ["-C", dir, "remote", "get-url", "origin"], {
+			env: { ...process.env, ...injected, GIT_CONFIG_GLOBAL: ABSENT, GIT_CONFIG_SYSTEM: ABSENT, GIT_CONFIG_COUNT: "0" },
+		});
+		assert.equal(stdout.trim(), "https://github.com/Acme/Tool.git", "the vector is real: COUNT=0 does not disarm it");
+	});
+
+	// Then prove the helper closes it.
+	const out = await runChild(
+		`import "${REPO_ROOT}/tests/helpers/git-config-isolation.mjs";
+		import { execFile } from "node:child_process";
+		import { mkdtemp } from "node:fs/promises";
+		import { tmpdir } from "node:os";
+		import { join } from "node:path";
+		import { promisify } from "node:util";
+		const run = promisify(execFile);
+		const dir = await mkdtemp(join(tmpdir(), "probe-"));
+		await run("git", ["-C", dir, "init", "--quiet"]);
+		await run("git", ["-C", dir, "remote", "add", "origin", "git@github.com:Acme/Tool.git"]);
+		const { stdout } = await run("git", ["-C", dir, "remote", "get-url", "origin"]);
+		process.stdout.write(stdout.trim());`,
+		injected,
+	);
+	assert.equal(out, "git@github.com:Acme/Tool.git", "the SCP-syntax remote survives GIT_CONFIG_PARAMETERS");
 });
 
 test("every guarded file imports the isolation helper first", async () => {
@@ -201,11 +244,26 @@ test("isolation does not touch the user's Git configuration", async () => {
 	// B01-A5. The helper only ever assigns to process.env of its own process.
 	const { readFile } = await import("node:fs/promises");
 	const source = await readFile(join(REPO_ROOT, "tests/helpers/git-config-isolation.mjs"), "utf8");
-	assert.ok(!/execFile|spawn|writeFile|git config/.test(source), "the helper runs no commands and writes no files");
-	const assignments = [...source.matchAll(/env\.[A-Z_]+\s*=/g)].map((m) => m[0]);
-	assert.deepEqual(
-		assignments.sort(),
-		["env.GIT_CONFIG_COUNT =", "env.GIT_CONFIG_GLOBAL =", "env.GIT_CONFIG_SYSTEM ="].sort(),
-		"it sets exactly the three Git configuration sources and nothing else",
-	);
+	// Scan the CODE, not the prose: the comments legitimately discuss
+	// `git config` and the variables git reads, and an assertion that greps
+	// the whole file fails the moment the documentation improves.
+	const code = source
+		.split("\n")
+		.filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*") && !line.trim().startsWith("/*"))
+		.join("\n");
+	assert.ok(!/execFile|spawn|writeFile|appendFile|"git"|'git'/.test(code), "the helper runs no commands and writes no files");
+	// An allow-list, not an exact set: the point is that the helper touches
+	// NOTHING outside git's own configuration variables. Pinning the exact
+	// triple made this test fail the moment a fourth source (
+	// GIT_CONFIG_PARAMETERS) had to be neutralized — a test that resists
+	// widening the isolation it exists to protect.
+	const touched = [...source.matchAll(/(?:delete\s+)?env\.([A-Z_]+)/g)].map((m) => m[1]);
+	assert.ok(touched.length > 0, "the helper must touch something");
+	for (const name of touched) {
+		assert.match(name, /^GIT_CONFIG(_[A-Z]+)?$/, `${name} is outside git's configuration variables`);
+	}
+	// And every source git reads from the environment is actually covered.
+	for (const required of ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"]) {
+		assert.ok(touched.includes(required), `${required} must be neutralized`);
+	}
 });
