@@ -16,7 +16,7 @@ Tracking issue: **[398](https://github.com/HuginnIndustries/CodeCartographer/iss
 
 | ID | Task | Depends on | Issue |
 |---|---|---|---|
-| E01 | Freeze v1 engineering record and approval contracts | none | [399](https://github.com/HuginnIndustries/CodeCartographer/issues/399) |
+| E01 | Freeze v1 engineering record and approval contracts — **done**, merged `b868fd9` | none | [399](https://github.com/HuginnIndustries/CodeCartographer/issues/399) |
 | E02 | Persist isolated changes and immutable attempts | E01 | [400](https://github.com/HuginnIndustries/CodeCartographer/issues/400) |
 | E03 | Bind records to stable input and candidate snapshots | E01 | [401](https://github.com/HuginnIndustries/CodeCartographer/issues/401) |
 | E04 | Plan a repository-local change without a library | E02, E03, E09 | [402](https://github.com/HuginnIndustries/CodeCartographer/issues/402) |
@@ -27,8 +27,11 @@ Tracking issue: **[398](https://github.com/HuginnIndustries/CodeCartographer/iss
 | E09 | Add slice-to-scenario traceability to planning artifacts | none | [407](https://github.com/HuginnIndustries/CodeCartographer/issues/407) |
 | E10 | Assess verification seams and agent addressability | E09 (shared template/invariant files) | [408](https://github.com/HuginnIndustries/CodeCartographer/issues/408) |
 | E11 | Verify the end-to-end loop and second-change continuity | E08, E10 | [409](https://github.com/HuginnIndustries/CodeCartographer/issues/409) |
+| E12 | Establish and attest storage protection continuity (D3) | E01 | [418](https://github.com/HuginnIndustries/CodeCartographer/issues/418) |
 
-Initial parallel work: E01 and E09. E02/E03 can run after E01 with distinct files; coordinate their single `core/index.ts` export edit. E04/E05 can run when their prerequisites are merged. Do not combine all issues into one PR.
+Eligible now: **E02 and E03**, in parallel — they touch distinct files and share only the `core/index.ts` / engineering barrel export, which must be kept small and coordinated. **E12** is also eligible and independent; it carries D3, the one E01 decision left unresolved, so that E02 does not have to answer it. E09 remains on maintainer hold. E04/E05 open when their prerequisites are merged. Do not combine issues into one PR.
+
+**The standing consequence of D3.** Until E12 settles how a host attests protection continuity, `CurrentStorage.protection` is never `continuous-since-initialization` on any host we have tested, so every acceptance classifies `cooperative` and `VERIFIED_ACCEPTANCE_INTEGRATIONS` stays empty. Downstream issues consume that reading and surface it; none of them may add a default, fallback, or bypass that makes `verified` reachable without the mechanism.
 
 ## Common acceptance and handoff contract
 
@@ -57,7 +60,7 @@ Expected successful outcome: every targeted assertion passes and the repository'
 
 **Objective:** give downstream agents one reviewed, executable contract, including an honest host-approval boundary.
 
-**Status:** candidate contract merged (PR #414) and locally verified; **E01 acceptance pending** — [#399](https://github.com/HuginnIndustries/CodeCartographer/issues/399) stays open until the maintainer records the decisions in the contract's [decision record](record-contract.md#decision-record), and E02/E03 stay blocked until it is closed. Files as listed below plus `core/engineering/ids.ts`, `core/engineering/digest.ts`, and the fixture generator `tests/fixtures/engineering/v1/generate.mjs`.
+**Status: closed.** Merged through PR #414 (candidate), #415 (claims vs observations, conditional channel, at-rest trust), and #417 (D1–D5 decisions, the live-check findings, and enforcement of the TTL, presentation-disclosure, and registry-shape rules) at `b868fd9`. The maintainer performed the D1 live interactive check; its findings are in the contract's [decision record](record-contract.md#decision-record). `VERIFIED_ACCEPTANCE_INTEGRATIONS` stays empty and the `cooperative` policy stays unauthorized, so no host produces a `verified` acceptance until D3 ([#418](https://github.com/HuginnIndustries/CodeCartographer/issues/418)) is settled — the intended, honest outcome, not a gap. Files as listed below plus `core/engineering/ids.ts`, `core/engineering/digest.ts`, and the fixture generator `tests/fixtures/engineering/v1/generate.mjs`.
 
 **Depends on:** none. **Read:** `docs/engineering/record-contract.md`, `core/types.ts`, `core/utils.ts`, `core/status.ts`, `core/secrets.ts`, `core/synthesis.ts`, existing guard and closure tests.
 
