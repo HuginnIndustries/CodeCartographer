@@ -132,8 +132,10 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	}
 	const dir = join(REPO_ROOT, "core", "engineering");
 	const files = (await readdir(dir)).filter((n) => n.endsWith(".ts")).sort();
-	assert.deepEqual(files, ["digest.ts", "ids.ts", "index.ts", "types.ts", "validation.ts"]);
-	const layer = { types: 0, ids: 1, digest: 1, validation: 2, index: 3 };
+	assert.deepEqual(files, ["digest.ts", "ids.ts", "index.ts", "snapshots.ts", "types.ts", "validation.ts"]);
+	// snapshots (E03) sits beside validation: both consume types/ids/digest and
+	// neither imports the other.
+	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, index: 3 };
 	for (const file of files) {
 		const source = await readFile(join(dir, file), "utf8");
 		const name = file.slice(0, -3);
@@ -144,8 +146,11 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 				assert.ok(layer[dep] < layer[name], `${file} imports ${target}, which is not below it`);
 				assert.notEqual(dep, "index", `${file} imports the barrel`);
 			} else if (name !== "index") {
-				// The only Node modules the contract may touch: hashing and randomness.
-				assert.ok(["node:crypto"].includes(target), `${file} imports ${target}; validators are pure`);
+				// The only Node modules the contract may touch: hashing and
+				// randomness. `../secrets.ts` is the one in-repo exception: the
+				// secret-path list is shared with the analysis side so both
+				// surfaces withhold the same files, and it is itself pure.
+				assert.ok(["node:crypto", "../secrets.ts"].includes(target), `${file} imports ${target}; validators are pure`);
 			}
 		}
 		assert.doesNotMatch(source, /\bfetch\s*\(|process\.env|child_process|node:fs|node:net|node:http/, `${file} reaches outside its arguments`);

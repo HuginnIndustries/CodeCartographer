@@ -129,7 +129,23 @@ Every record has the envelope `schema_version: 1`, `kind`, `id` (of the kind's p
 | `captured_at` | timestamp | |
 | `digest` | | recomputed over `{ coverage, manifest, repository }`; an error elsewhere on the record does not suppress a mismatch |
 
-The engineering namespace and generated evidence are excluded from the manifest (they would self-invalidate); the brief, plan, and selected references are in `attempt.inputs` instead. The host collects; the framework validates and compares (E03 owns collection semantics).
+The engineering namespace and generated evidence are excluded from the manifest (they would self-invalidate); the brief, plan, and selected references are in `attempt.inputs` instead. The host collects; the framework validates and compares.
+
+#### Collection semantics (E03)
+
+`core/engineering/snapshots.ts` turns what a host observed into that identity. It is pure: the host walks the tree, this normalizes, excludes, orders, and judges coverage. `collectSnapshot` sorts the manifest in UTF-8 byte order, refuses a duplicate path outright (a collector that reports one path twice cannot say what it saw), records a symlink's link text without ever following it, and rejects an absolute or traversing path rather than normalizing it away.
+
+| Rule | Why |
+|---|---|
+| `coverage` is inside the digest | A capture that quietly stopped covering a path would otherwise be byte-identical to one where the path was read and unchanged |
+| An unreadable file becomes an `uncovered_relevant_input`, never an omission | The file we could not read is exactly the one whose change we would miss |
+| A secret file is excluded by name and its digest is **never** recorded | A digest of a credential file is still an oracle for it; the exclusion is disclosed so the reader knows coverage is partial |
+| `stability` is outside the digest | A re-capture of an unchanged tree must not look edited merely because the first capture raced |
+| A non-empty `uncovered_relevant_inputs` blocks acceptance (`candidateMayBindAcceptance`) | The collector knows it did not look at something relevant, so an unchanged digest cannot mean an unchanged tree |
+
+`diffSnapshots` explains what moved — added, removed, modified, mode-changed, type-changed, and coverage drift — so a freshness failure can be read by a person. It does not replace `checkCandidateFreshness`, which answers *whether* the tree moved; the gate uses that, the presentation uses this.
+
+**Documented limitations.** Collection is only as honest as the host: a host that under-reports its own gaps produces a confident-looking snapshot, which is why `uncovered_relevant_inputs` blocks rather than warns. An excluded secret's *content* is outside the identity, so rotating a credential does not change the tree digest — the exclusion is disclosed instead. A symlink's target is recorded, never resolved, so a link pointing outside the repository is identified but its destination is not covered. Revalidation is conservative by construction: any doubt resolves to a different digest and a re-run, never to reuse.
 
 ### proof (`prf_`)
 
