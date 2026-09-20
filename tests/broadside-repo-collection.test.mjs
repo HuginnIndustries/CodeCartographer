@@ -12,6 +12,7 @@
 //       refused before pricing, and the manifests present name candidates
 //       that the source-file counts decide between.
 
+import "./helpers/git-config-isolation.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -35,11 +36,6 @@ const {
 	runBroadsideSubmit,
 	statusText,
 } = await import(pathToFileURL(`${REPO_ROOT}/core/broadside.ts`).href);
-
-// Git fixtures must not inherit the developer's global config (see
-// release-cycle notes): a `url.insteadOf` or `commit.gpgsign` breaks them.
-process.env.GIT_CONFIG_GLOBAL = join(tmpdir(), "cc-no-such-gitconfig");
-process.env.GIT_CONFIG_SYSTEM = join(tmpdir(), "cc-no-such-gitconfig");
 
 async function git(dir, ...args) {
 	await execFileAsync("git", ["-C", dir, ...args], { maxBuffer: 16 * 1024 * 1024 });

@@ -8,16 +8,13 @@
 //
 // Everything here runs offline. No model, no network, no API key.
 
+import "./helpers/git-config-isolation.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
-const ABSENT_GIT_CONFIG = join(tmpdir(), "codecarto-tests-absent-gitconfig");
-process.env.GIT_CONFIG_GLOBAL = ABSENT_GIT_CONFIG;
-process.env.GIT_CONFIG_SYSTEM = ABSENT_GIT_CONFIG;
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const {
