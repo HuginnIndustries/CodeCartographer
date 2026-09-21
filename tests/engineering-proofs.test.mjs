@@ -487,3 +487,147 @@ test("a snapshot record tampered into the wrong attempt's directory is detected"
 		);
 	});
 });
+
+// --- Found in adversarial review of the first implementation ------------
+// `discharges` is the field a gate reads. Every case below returned true on
+// the reviewed commit.
+
+const SNAPSHOT_BASELINE = await readFixture("snapshot-baseline.json");
+
+test("a proof against a baseline snapshot cannot discharge", async () => {
+	// The one I caused. An earlier revision deleted the `role === "candidate"`
+	// term because a mutation removing it left every test green — reasoning
+	// that only holds while `candidate_snapshot_id` is DEFINED. E01 makes it
+	// optional: a `running` attempt has no candidate yet, the mismatch
+	// comparison short-circuits, and a proof bound to the baseline discharged.
+	//
+	// The mutation survived because no test covered the state where the term
+	// mattered. A surviving mutation means "untested", not "unnecessary".
+	await withWorkspace(async ({ store }) => {
+		const running = { ...ATTEMPT, id: "att_0000000000000000000000b1", outcome: "running" };
+		delete running.candidate_snapshot_id;
+		delete running.ended_at;
+		const baseline = { ...SNAPSHOT_BASELINE, attempt_id: running.id };
+		await store.put(running);
+		await store.put(baseline);
+
+		const result = await ingestProof(store, observed({ attempt_id: running.id, snapshot_id: baseline.id }));
+		assert.equal(result.ok, true, `a baseline proof is still a real observation: ${JSON.stringify(result.errors)}`);
+		assert.equal(result.authority, "observed");
+		assert.equal(result.discharges, false, "a proof against the baseline discharged an obligation about the candidate");
+	});
+});
+
+test("an attempt that has already concluded cannot be advanced by new evidence", async () => {
+	// `accepted` is the dangerous one: a fresh passing proof reported as
+	// discharging against a closed attempt makes evidence appear to support a
+	// decision that was taken without it.
+	for (const outcome of ["failed", "accepted"]) {
+		await withWorkspace(async ({ store }) => {
+			// The attempt must be BOUND to the candidate the proof names, or
+			// `boundToCurrentCandidate` is already false and this test passes
+			// without ever exercising the terminal-outcome rule. A first draft
+			// built `bound` and never stored it, and a mutation deleting the
+			// rule stayed green.
+			const candidate = { ...SNAPSHOT, id: "snp_0000000000000000000000c1" };
+			const concluded = { ...ATTEMPT, id: "att_0000000000000000000000c1", outcome, candidate_snapshot_id: candidate.id };
+			await store.put(concluded);
+			await store.put({ ...candidate, attempt_id: concluded.id });
+
+			const result = await ingestProof(store, observed({ attempt_id: concluded.id, snapshot_id: candidate.id }));
+			assert.equal(result.ok, true, `a proof on a ${outcome} attempt is still a real observation: ${JSON.stringify(result.errors)}`);
+			assert.equal(result.discharges, false, `a ${outcome} attempt was advanced by new evidence`);
+		});
+	}
+});
+
+test("a proof naming a scenario that is not in the change is refused", async () => {
+	// Only the obligation -> proof direction was checked, so a proof could
+	// name scenarios existing nowhere in the change and still discharge,
+	// inflating the coverage a reader computes from `scenario_ids`.
+	await withWorkspace(async ({ store }) => {
+		const result = await ingestProof(store, observed({ scenario_ids: ["S1", "S_NOT_IN_CHANGE"] }));
+		assert.equal(result.ok, false, "a proof naming an unknown scenario was accepted");
+		assert.ok(
+			result.errors.some((e) => e.code === "unknown-reference" && /S_NOT_IN_CHANGE/.test(e.message)),
+			JSON.stringify(result.errors),
+		);
+	});
+});
+
+test("an unstable snapshot blocks discharge on its own", async () => {
+	// The earlier unstable test gave its snapshot a fresh id, so the
+	// superseded-candidate rule already forced `discharges: false` and the
+	// unstable rule was never exercised — a test passing for the wrong reason.
+	// This binds the attempt TO the unstable snapshot, so nothing else can
+	// account for the result.
+	await withWorkspace(async ({ store }) => {
+		const attempt = { ...ATTEMPT, id: "att_0000000000000000000000e1" };
+		const unstable = { ...SNAPSHOT, id: "snp_0000000000000000000000e1", attempt_id: attempt.id, stability: "unstable" };
+		await store.put({ ...attempt, candidate_snapshot_id: unstable.id });
+		await store.put(unstable);
+
+		const result = await ingestProof(store, observed({ attempt_id: attempt.id, snapshot_id: unstable.id }));
+		assert.equal(result.ok, true, JSON.stringify(result.errors));
+		assert.equal(result.discharges, false, "a proof against a tree that moved during capture discharged");
+	});
+});
+
+test("the payload is snapshotted, so a getter cannot show two different values", async () => {
+	// E04 shipped a TOCTOU of exactly this shape. It fails here because
+	// `stripDerived` spreads the payload into a plain object before any logic
+	// runs — a property the module depends on and that a refactor to
+	// `delete payload[field]` would silently remove.
+	await withWorkspace(async ({ store }) => {
+		let reads = 0;
+		const payload = { ...observed() };
+		Object.defineProperty(payload, "collector", {
+			get() {
+				reads += 1;
+				return reads <= 1 ? "host-observed" : "agent-claimed";
+			},
+			enumerable: true,
+			configurable: true,
+		});
+		const result = await ingestProof(store, payload);
+		assert.equal(result.ok, true, JSON.stringify(result.errors));
+		assert.equal(reads, 1, "the payload field was read more than once");
+		assert.equal(result.proof.collector, "host-observed", "the stored record disagrees with the validated one");
+	});
+});
+
+test("an open attempt bound to its candidate does discharge", async () => {
+	// The control for the terminal-outcome test. Without it, a `false` from
+	// any other cause would look like the rule working.
+	await withWorkspace(async ({ store }) => {
+		const candidate = { ...SNAPSHOT, id: "snp_0000000000000000000000c2" };
+		const open = { ...ATTEMPT, id: "att_0000000000000000000000c2", outcome: "ready-for-review", candidate_snapshot_id: candidate.id };
+		await store.put(open);
+		await store.put({ ...candidate, attempt_id: open.id });
+
+		const result = await ingestProof(store, observed({ attempt_id: open.id, snapshot_id: candidate.id }));
+		assert.equal(result.ok, true, JSON.stringify(result.errors));
+		assert.equal(result.discharges, true, "an open, correctly-bound, observed pass failed to discharge");
+	});
+});
+
+test("a baseline snapshot planted at the candidate's id cannot discharge", async () => {
+	// Why `role === "candidate"` is kept even though `candidate_snapshot_id`
+	// names a candidate by construction. Through the store API the term is
+	// redundant; under tampering it is not, and when `storage_boundary` is
+	// `none` any process as the user can plant a record.
+	await withWorkspace(async ({ store }) => {
+		const attempt = { ...ATTEMPT, id: "att_0000000000000000000000f2", candidate_snapshot_id: "snp_0000000000000000000000f2" };
+		await store.put(attempt);
+		// A BASELINE record occupying the candidate's id, written directly.
+		const planted = { ...SNAPSHOT_BASELINE, id: "snp_0000000000000000000000f2", attempt_id: attempt.id, role: "baseline" };
+		const slot = join(store.root, "changes", CHANGE.id, "attempts", attempt.id, "snapshots", `${planted.id}.json`);
+		await mkdir(dirname(slot), { recursive: true });
+		await writeFile(slot, JSON.stringify(planted));
+
+		const result = await ingestProof(store, observed({ attempt_id: attempt.id, snapshot_id: planted.id }));
+		if (result.ok) {
+			assert.equal(result.discharges, false, "a planted baseline at the candidate's id discharged");
+		}
+	});
+});

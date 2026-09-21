@@ -29,7 +29,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 
 import { engineeringPaths } from "./ids.ts";
 import { proofAuthority, proofDischarges, validateRecord } from "./validation.ts";
-import type { EvidenceAuthority, ProofRecord, SliceRecord, AttemptRecord, SnapshotRecord, AssurancePolicy } from "./types.ts";
+import type { EvidenceAuthority, ProofRecord, SliceRecord, AttemptRecord, SnapshotRecord, ChangeRecord, AssurancePolicy } from "./types.ts";
 import type { EngineeringStore } from "./store.ts";
 
 export interface IngestError {
@@ -68,6 +68,29 @@ function fail(errors: IngestError[], path: string, code: IngestError["code"], me
  */
 const DERIVED_FIELDS = ["authority", "discharges"] as const;
 
+/**
+ * Attempt outcomes after which no new evidence can advance the attempt.
+ * `accepted` matters most: a fresh passing proof reported as discharging
+ * against a closed attempt would make evidence appear to support a decision
+ * taken without it.
+ */
+const TERMINAL_ATTEMPT_OUTCOMES = new Set(["failed", "blocked", "accepted", "superseded"]);
+
+/**
+ * Strip the fields this module derives, and — just as importantly — SNAPSHOT
+ * the payload.
+ *
+ * The spread is doing security work that is easy to miss. It copies every own
+ * enumerable property into a plain object before any logic runs, so each
+ * field is read exactly once and a getter cannot return one value to the
+ * validator and another to the authority computation. A Proxy collapses on
+ * first touch for the same reason. E04 shipped precisely that TOCTOU bug
+ * because it read one field three times.
+ *
+ * Do NOT refactor this to `delete payload[field]` in place: that would keep
+ * the caller's object — getters, Proxy traps and all — live through every
+ * later read, silently reopening the class.
+ */
 function stripDerived(payload: Record<string, unknown>): Record<string, unknown> {
 	const clean: Record<string, unknown> = { ...payload };
 	for (const field of DERIVED_FIELDS) delete clean[field];
@@ -183,6 +206,20 @@ export async function ingestProof(store: EngineeringStore, payload: unknown, opt
 	if (slice && !obligation) {
 		fail(errors, "/obligation_id", "unknown-reference", `slice ${slice.id} declares no obligation ${proof.obligation_id}`);
 	}
+	// Only the obligation -> proof direction was checked, so a proof could
+	// name scenarios that exist nowhere in the change and still discharge,
+	// inflating the coverage a reader would compute from `scenario_ids`.
+	const change = await readRecord<ChangeRecord>(store, "change", proof.change_id, {});
+	const knownScenarios = new Set((change?.acceptance_scenarios ?? []).map((scenario) => scenario.id));
+	let unknownScenarios = false;
+	if (change) {
+		for (const [i, id] of proof.scenario_ids.entries()) {
+			if (!knownScenarios.has(id)) {
+				unknownScenarios = true;
+				fail(errors, `/scenario_ids/${i}`, "unknown-reference", `no scenario ${id} in change ${proof.change_id}`);
+			}
+		}
+	}
 	if (obligation && obligation.scenario_id !== undefined && !proof.scenario_ids.includes(obligation.scenario_id)) {
 		// A result that proves something other than what the obligation is for
 		// discharges nothing; accepting it would let a passing lint stand in
@@ -201,12 +238,31 @@ export async function ingestProof(store: EngineeringStore, payload: unknown, opt
 	// against a candidate the attempt no longer points at is evidence about
 	// superseded bytes. It stays on the record — it is a truthful account of
 	// what ran — but it cannot discharge an obligation about the current tree.
-	// No `role === "candidate"` term: `candidate_snapshot_id` names a
-	// candidate by construction, so a baseline snapshot never equals it and
-	// the comparison below already excludes one. A mutation check proved the
-	// term could be deleted with no test noticing — it was decoration.
-	const supersededCandidate =
-		snapshot !== null && attempt.candidate_snapshot_id !== undefined && attempt.candidate_snapshot_id !== snapshot.id;
+	// A proof discharges only against the bytes the attempt is CURRENTLY
+	// offering as its candidate.
+	//
+	// The `role === "candidate"` term below was once deleted as decoration,
+	// because a mutation check removing it left every test green. That
+	// reasoning was wrong, and the way it was wrong is worth recording: the
+	// term is redundant ONLY while `candidate_snapshot_id` is defined. E01
+	// makes it optional — a `running` attempt has no candidate yet — and in
+	// that state the mismatch comparison short-circuits to false, so a proof
+	// bound to the BASELINE snapshot discharged. The mutation survived not
+	// because the term did nothing but because no test covered the state where
+	// it mattered.
+	//
+	// Stated positively: there must BE a current candidate, and the proof must
+	// name it.
+	const boundToCurrentCandidate =
+		snapshot !== null && snapshot.role === "candidate" && attempt.candidate_snapshot_id !== undefined && attempt.candidate_snapshot_id === snapshot.id;
+
+	// An attempt that has already concluded cannot be advanced by new
+	// evidence. `accepted` is the dangerous one: ingesting a fresh passing
+	// proof against a closed attempt and reporting `discharges: true` would
+	// let evidence appear to support a decision that was made without it.
+	// A proof is still RETAINED here — it is a true record of what ran — but
+	// it discharges nothing.
+	const attemptConcluded = TERMINAL_ATTEMPT_OUTCOMES.has(attempt.outcome);
 	// NOT a rule: "the check started before the snapshot was captured". That
 	// ordering is the normal one — an agent runs the check, then captures the
 	// candidate that records the tree it ran against. E01's own valid proof
@@ -262,7 +318,16 @@ export async function ingestProof(store: EngineeringStore, payload: unknown, opt
 	const policy: AssurancePolicy = options.policy ?? "verified";
 	const authority = proofAuthority(proof);
 	const unstableSnapshot = snapshot?.stability === "unstable";
-	const discharges = obligation !== undefined && !unstableSnapshot && !supersededCandidate && proofDischarges(proof, obligation, policy);
+	const discharges =
+		obligation !== undefined &&
+		boundToCurrentCandidate &&
+		!unstableSnapshot &&
+		!attemptConcluded &&
+		// No `!unknownScenarios` term: an unknown scenario is a REFUSAL above,
+		// so this expression is never reached in that state. A mutation check
+		// proved the term unreachable — the same dead-guard class five earlier
+		// deletions came from.
+		proofDischarges(proof, obligation, policy);
 
 	return { ok: true, proof, authority, discharges, replayed: put.replayed };
 }
@@ -308,11 +373,12 @@ export interface ExportedProofSummary {
  * completed one.
  */
 export function exportProofSummary(proof: ProofRecord): ExportedProofSummary {
+	// No `redacted` check here either. The ingestion-side twin of this guard
+	// was deleted once it was shown that `validateRecord` refuses the field as
+	// `unknown-field`, but this copy survived the sweep — the same dead guard,
+	// one function away. That is exactly the R11 class-sweep failure: fixing
+	// the reported instance and leaving its sibling.
 	const artifacts: ExportedArtifact[] = proof.artifacts.map((artifact) => {
-		const redacted = (artifact as { redacted?: unknown }).redacted === true;
-		if (redacted && artifact.sanitized_digest === undefined) {
-			throw new Error(`artifact ${artifact.id} is marked redacted but carries no sanitized digest; refusing to export an unverifiable redaction`);
-		}
 		return {
 			id: artifact.id,
 			label: artifact.label,
