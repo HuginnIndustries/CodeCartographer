@@ -20,3 +20,4 @@ export * from "./snapshots.ts";
 export * from "./planning.ts";
 export * from "./store.ts";
 export * from "./proofs.ts";
+export * from "./gates.ts";

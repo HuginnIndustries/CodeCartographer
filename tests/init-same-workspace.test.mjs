@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
+const { ENGINEERING_NAMESPACE } = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/ids.ts`).href);
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
 const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
 
@@ -34,6 +35,15 @@ async function listFiles(dir, prefix = "") {
 	const out = [];
 	for (const entry of await readdir(dir, { withFileTypes: true })) {
 		const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+		// The engineering namespace is RUNTIME state, not part of the packaged
+		// template, and `node --test` runs test files concurrently: another
+		// file plants and removes a record under `.codecarto/engineering/` in
+		// this very checkout. Listing it made this assertion depend on another
+		// test's timing — a once-in-seven-runs failure whose diff was a single
+		// engineering record present in one listing and gone from the next.
+		// Excluding it compares what this test is actually about: the framework
+		// files the template ships.
+		if (!prefix && entry.name === ENGINEERING_NAMESPACE) continue;
 		if (entry.isDirectory()) out.push(...await listFiles(join(dir, entry.name), rel));
 		else out.push(rel);
 	}
