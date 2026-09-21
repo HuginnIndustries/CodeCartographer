@@ -28,7 +28,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { proofAuthority, proofDischarges } from "./validation.ts";
+import { checkCandidateFreshness, proofAuthority, proofDischarges } from "./validation.ts";
 import type {
 	AssurancePolicy,
 	AttemptRecord,
@@ -36,6 +36,7 @@ import type {
 	ProofRecord,
 	ReviewRecord,
 	SliceRecord,
+	SnapshotInput,
 	SnapshotRecord,
 	StorageBoundary,
 } from "./types.ts";
@@ -54,7 +55,10 @@ export interface GateBlocker {
 		| "review-missing"
 		| "review-mismatched"
 		| "dependency-unaccepted"
-		| "attempt-not-ready";
+		| "attempt-not-ready"
+		| "record-unreadable"
+		| "review-not-independent"
+		| "proof-scenario-uncovered";
 	/** What is wrong, in the reader's terms. Free text from records is neutralized. */
 	detail: string;
 	/** What would clear it. A gate that refuses without saying what to fix gets routed around. */
@@ -84,6 +88,15 @@ export interface GateRequest {
 	change_id: string;
 	attempt_id: string;
 	host: HostCapability;
+	/**
+	 * The adapter's re-read of the working tree at acceptance time, if it
+	 * performed one. ACCEPTANCE_REQUIRED_RECORDS requires the candidate digest
+	 * to equal the tree the adapter re-reads; only the adapter can do that
+	 * read — this module sees the record store, not the repository — so a
+	 * missing re-read is disclosed as a limitation rather than silently
+	 * treated as a pass.
+	 */
+	candidate_reread?: Pick<SnapshotInput, "coverage" | "manifest" | "repository">;
 	/** Defaults to `verified`. `cooperative` is a host-operator policy set outside the workspace. */
 	policy?: AssurancePolicy;
 }
@@ -116,14 +129,23 @@ async function readRecord<T>(store: EngineeringStore, kind: string, id: string, 
 	}
 }
 
-/** Everything under an attempt of one kind, skipping records that no longer parse. */
-async function readAll<T>(store: EngineeringStore, kind: string, ids: string[], context: Record<string, string>): Promise<T[]> {
+/**
+ * Everything under an attempt of one kind, and the ids that would not parse.
+ *
+ * Unreadable records are REPORTED, never silently skipped — the same rule the
+ * store applies to its own listings: a corrupt record that vanishes is
+ * indistinguishable from one that was never written, which is how history goes
+ * missing quietly.
+ */
+async function readAll<T>(store: EngineeringStore, kind: string, ids: string[], context: Record<string, string>): Promise<{ records: T[]; unreadable: string[] }> {
 	const records: T[] = [];
+	const unreadable: string[] = [];
 	for (const id of ids) {
 		const record = await readRecord<T>(store, kind, id, context);
 		if (record) records.push(record);
+		else unreadable.push(`${kind} ${id}`);
 	}
-	return records;
+	return { records, unreadable };
 }
 
 /**
@@ -133,11 +155,7 @@ async function readAll<T>(store: EngineeringStore, kind: string, ids: string[], 
  * only afterwards, so an incapable host can never hide an unproved obligation
  * behind a capability notice.
  */
-export async function evaluateAcceptanceGate(
-	store: EngineeringStore,
-	request: GateRequest,
-	supplied?: { proofs?: ProofRecord[]; reviews?: ReviewRecord[] },
-): Promise<GateOutcome> {
+export async function evaluateAcceptanceGate(store: EngineeringStore, request: GateRequest): Promise<GateOutcome> {
 	const blockers: GateBlocker[] = [];
 	const limitations: string[] = [];
 	const policy: AssurancePolicy = request.policy ?? "verified";
@@ -150,7 +168,7 @@ export async function evaluateAcceptanceGate(
 			blockers: [
 				{
 					code: "attempt-not-ready",
-					detail: `no ${change ? "attempt" : "change"} record for ${change ? request.attempt_id : request.change_id}`,
+					detail: `no ${change ? "attempt" : "change"} record for ${safeText(change ? request.attempt_id : request.change_id)}`,
 					remedy: "create the change and attempt before evaluating acceptance",
 				},
 			],
@@ -159,6 +177,35 @@ export async function evaluateAcceptanceGate(
 	}
 
 	const slice = await readRecord<SliceRecord>(store, "slice", attempt.slice_id, { changeId: request.change_id });
+
+	// ACCEPTANCE_REQUIRED_RECORDS names the states each record must be in.
+	// Without these, an `accepted` attempt could be accepted a second time, a
+	// `failed` attempt could be offered as if it had succeeded, and an
+	// `abandoned` slice or change could be accepted after being given up on.
+	if (change.state !== "active") {
+		blockers.push({
+			code: "attempt-not-ready",
+			detail: `change ${change.id} is ${safeText(change.state)}, not active`,
+			remedy: "only an active change may be accepted; reopen it or accept the change it was superseded by",
+		});
+	}
+	if (slice && slice.state !== "active") {
+		blockers.push({
+			code: "attempt-not-ready",
+			detail: `slice ${slice.id} is ${safeText(slice.state)}, not active`,
+			remedy: slice.state === "accepted" ? "this slice is already accepted; a second acceptance decides nothing" : "only an active slice may be accepted",
+		});
+	}
+	if (attempt.outcome !== "ready-for-review" && attempt.outcome !== "needs-human-acceptance") {
+		blockers.push({
+			code: "attempt-not-ready",
+			detail: `attempt ${attempt.id} is ${safeText(attempt.outcome)}`,
+			remedy:
+				attempt.outcome === "accepted"
+					? "this attempt is already accepted; soliciting a second approval asks a human to decide something already decided"
+					: "an attempt must reach ready-for-review or needs-human-acceptance before acceptance may be offered",
+		});
+	}
 	const candidateId = attempt.candidate_snapshot_id;
 	const candidate = candidateId ? await readRecord<SnapshotRecord>(store, "snapshot", candidateId, { changeId: request.change_id, attemptId: attempt.id }) : null;
 
@@ -178,11 +225,61 @@ export async function evaluateAcceptanceGate(
 		});
 	}
 
-	const proofs = supplied?.proofs ?? (await readAll<ProofRecord>(store, "proof", await listIds(store, request.change_id, attempt.id, "proofs"), { changeId: request.change_id, attemptId: attempt.id }));
-	const reviews = supplied?.reviews ?? (await readAll<ReviewRecord>(store, "review", await listIds(store, request.change_id, attempt.id, "reviews"), { changeId: request.change_id, attemptId: attempt.id }));
+	// `stability` is a property recorded AT CAPTURE. It says nothing about
+	// whether the tree moved afterwards, which is the freshness the contract
+	// actually requires.
+	if (candidate) {
+		if (request.candidate_reread) {
+			const fresh = checkCandidateFreshness(candidate, request.candidate_reread);
+			if (fresh.ok === false) {
+				const reason = fresh.errors[0]?.message ?? "digest mismatch";
+				blockers.push({
+					code: "proof-stale",
+					detail: `the working tree no longer matches candidate ${candidate.id}: ${safeText(reason)}`,
+					remedy: "recapture the candidate and re-run the checks; the proofs describe bytes that are no longer there",
+				});
+			}
+		} else {
+			limitations.push(
+				"the adapter supplied no re-read of the working tree, so nothing here shows the tree still matches the candidate; the proofs describe the bytes captured at snapshot time",
+			);
+		}
+	}
+
+	// Records come from the store and nowhere else. An earlier revision took
+	// caller-supplied proofs and reviews as an override, which let the agent
+	// whose work is being judged choose the evidence it would be judged on:
+	// with an open blocking objection on disk, passing a clean review turned
+	// `refused` into `may-accept`. A gate whose input the subject controls is
+	// not a gate.
+	const proofRead = await readAll<ProofRecord>(store, "proof", await listIds(store, request.change_id, attempt.id, "proofs"), { changeId: request.change_id, attemptId: attempt.id });
+	const reviewRead = await readAll<ReviewRecord>(store, "review", await listIds(store, request.change_id, attempt.id, "reviews"), { changeId: request.change_id, attemptId: attempt.id });
+	const proofs = proofRead.records;
+	const reviews = reviewRead.records;
+
+	// H3: a record that will not parse is NOT the same fact as a record that
+	// was never written, and `store.ts` says so in as many words about its own
+	// listing. A corrupt review that carried a blocking objection would
+	// otherwise become no objection at all.
+	for (const unreadable of [...proofRead.unreadable, ...reviewRead.unreadable]) {
+		blockers.push({
+			code: "record-unreadable",
+			detail: `${safeText(unreadable)} could not be read`,
+			remedy: "repair or remove the unreadable record; a record that cannot be read is not an absent record",
+		});
+	}
 
 	// ---- every obligation must be discharged, against THIS candidate ----
 	for (const obligation of slice?.proof_obligations ?? []) {
+		// Only `obligation_id` is matched here, deliberately. A proof is read
+		// from `changes/<change_id>/attempts/<attempt_id>/proofs/`, and the
+		// store files it by the ids the RECORD carries — so a proof naming a
+		// different change lands in a different directory and is never listed
+		// for this attempt. Re-checking `change_id`/`attempt_id` here looked
+		// like defence in depth and was verified unreachable: with the check
+		// removed, a proof rewritten to a foreign change still produced
+		// `obligation-unproved`, identical output. A guard that cannot fire is
+		// indistinguishable from one that works, so it is not kept.
 		const forObligation = proofs.filter((p) => p.obligation_id === obligation.id);
 		if (forObligation.length === 0) {
 			blockers.push({
@@ -204,9 +301,22 @@ export async function evaluateAcceptanceGate(
 			});
 			continue;
 		}
-		const discharging = onCandidate.find((p) => proofDischarges(p, obligation, policy));
+		// H2: `proofDischarges` checks the obligation id, result, collector and
+		// authority — not which scenarios the proof claims to exercise. E01
+		// requires the proof to name the obligation's scenario, and enforces it
+		// in bundle validation only, so the gate must do it here.
+		const covering = onCandidate.filter((p) => (p.scenario_ids ?? []).includes(obligation.scenario_id));
+		if (covering.length === 0) {
+			blockers.push({
+				code: "proof-scenario-uncovered",
+				detail: `obligation ${obligation.id} names scenario ${obligation.scenario_id}, which no proof of it claims to exercise`,
+				remedy: `record a proof for ${obligation.id} whose scenario_ids include ${obligation.scenario_id}`,
+			});
+			continue;
+		}
+		const discharging = covering.find((p) => proofDischarges(p, obligation, policy));
 		if (!discharging) {
-			const failed = onCandidate.find((p) => p.result !== "passed");
+			const failed = covering.find((p) => p.result !== "passed");
 			if (failed) {
 				blockers.push({
 					code: "proof-failed",
@@ -216,7 +326,7 @@ export async function evaluateAcceptanceGate(
 			} else {
 				// Passed, but the authority is too weak: a caller-reported
 				// claim, or a collector below the obligation's minimum.
-				const claimed = onCandidate.find((p) => proofAuthority(p) === "claimed");
+				const claimed = covering.find((p) => proofAuthority(p) === "claimed");
 				blockers.push({
 					code: "proof-claimed",
 					detail: claimed
@@ -257,23 +367,68 @@ export async function evaluateAcceptanceGate(
 			detail: "every review of this attempt looked at a different candidate than the one being accepted",
 			remedy: "review the current candidate; a review of other bytes does not carry over",
 		});
+	} else if (!onThisCandidate.some((r) => r.reviewer?.separation === "declared-separate")) {
+		// ACCEPTANCE_REQUIRED_RECORDS: "at least one with `separation:
+		// declared-separate`". An earlier revision downgraded this to a
+		// limitation on the argument that a same-context review is still a
+		// review. That is arguable, but it is not what the contract says, and
+		// the contract is explicit that the requirement lives there rather
+		// than in this module. Same-context reviews still produce the
+		// limitation below when they accompany an independent one.
+		blockers.push({
+			code: "review-not-independent",
+			detail: "every review of this candidate was made in the same context as the work",
+			remedy: "obtain at least one review from a declared-separate reviewer; a same-context review is a review, but the contract requires an independent one",
+		});
 	}
 
 	for (const review of onThisCandidate) {
 		for (const objection of review.objections ?? []) {
 			if (objection.severity !== "blocking") continue;
-			// E01 is explicit: `deferred` keeps a blocking objection blocking.
-			// Only `resolved` (with evidence) or `withdrawn` clears it, and
-			// deferral is precisely how a blocker becomes a non-blocker when
+			// NOTE: the store refuses both an out-of-domain disposition and a
+			// `resolved` objection without `resolution_evidence`, so the two
+			// extra conditions below are cross-checks against validator drift,
+			// not reachable states. Kept cheap and stated plainly.
+			//
+			// Allow-list what CLEARS, never what blocks. Listing the blocking
+			// dispositions means any unrecognised string — schema drift, a new
+			// E01 disposition, a hand-edited record — falls through as cleared.
+			// Only `withdrawn`, or `resolved` carrying the resolution evidence
+			// E01 requires exactly when resolved, closes a blocking objection;
+			// `deferred` is precisely how a blocker quietly stops blocking when
 			// nobody is checking.
-			if (objection.disposition === "open" || objection.disposition === "deferred") {
+			const cleared =
+				objection.disposition === "withdrawn" ||
+				(objection.disposition === "resolved" && typeof objection.resolution_evidence === "string" && objection.resolution_evidence.trim().length > 0);
+			if (!cleared) {
 				blockers.push({
 					code: "objection-open",
-					detail: `blocking objection ${objection.id} is ${objection.disposition}: ${safeText(objection.statement)}`,
+					detail: `blocking objection ${objection.id} is ${safeText(objection.disposition)}${objection.disposition === "resolved" ? " but carries no resolution evidence" : ""}: ${safeText(objection.statement)}`,
 					remedy: `resolve ${objection.id} with evidence, or withdraw it; deferring does not clear a blocking objection`,
 				});
 			}
 		}
+		// E01 defines `remaining_blockers` as exactly the blocking objections
+		// that are open or deferred, and `validateReview` enforces it — but
+		// only when the objections are well-formed enough to derive from
+		// (`derivable`). Every route tried to store a disagreement was refused
+		// (out-of-domain disposition, missing severity, ghost id), so this
+		// check is NOT currently reachable through the store and no test can
+		// honestly assert it fires.
+		//
+		// It is kept anyway, unlike the unreachable proof-binding check
+		// removed above, for one reason: that one duplicated a guarantee the
+		// store's own layout provides, while this one guards against a
+		// conditional validator weakening. Recorded as untested rather than
+		// dressed up as covered.
+		if ((review.remaining_blockers ?? []).length > 0) {
+			blockers.push({
+				code: "objection-open",
+				detail: `review ${review.id} lists ${review.remaining_blockers.length} remaining blocker(s): ${review.remaining_blockers.map((id) => safeText(id)).join(", ")}`,
+				remedy: "close every remaining blocker, or correct the review if its objections and remaining_blockers disagree",
+			});
+		}
+
 		if (review.reviewer?.separation !== "declared-separate") {
 			limitations.push(
 				`review ${review.id} was made in the same context as the work (${safeText(review.reviewer?.context)}); it is a review, but not an independent one`,
@@ -341,6 +496,22 @@ async function listIds(store: EngineeringStore, changeId: string, attemptId: str
 }
 
 /**
+ * Render record-authored text so it cannot be read as this document's own
+ * structure.
+ *
+ * `safeText` collapses newlines, which stops an attacker OPENING a line. It
+ * does not stop text that matches a line the document already begins — a
+ * limitation rendered as `- # Acceptance may be offered` still contains the
+ * heading as a whole line once a reader's eye (or a renderer that stops at the
+ * first `#`) reaches it. Escaping the leading markdown character at render
+ * time closes that, and does so for every future call site rather than relying
+ * on each one remembering to sanitize.
+ */
+function inert(value: string): string {
+	return value.replace(/^([#>`~\-*_=+|])/, "\\$1").replace(/(^|\s)(#{1,6}\s)/g, "$1\\$2");
+}
+
+/**
  * The gate outcome as text a person reads before deciding.
  *
  * Record-authored free text is already collapsed onto one line by `safeText`
@@ -360,7 +531,7 @@ export function describeGateOutcome(outcome: GateOutcome): string {
 	if (outcome.state === "refused") {
 		lines.push(`## Blockers (${outcome.blockers.length})`, "");
 		for (const blocker of outcome.blockers) {
-			lines.push(`- **${blocker.code}** — ${blocker.detail}`, `  - Remedy: ${blocker.remedy}`);
+			lines.push(`- **${blocker.code}** — ${inert(blocker.detail)}`, `  - Remedy: ${inert(blocker.remedy)}`);
 		}
 		lines.push("");
 	} else if (outcome.state === "needs-human-acceptance") {
@@ -371,7 +542,7 @@ export function describeGateOutcome(outcome: GateOutcome): string {
 
 	if (outcome.limitations.length > 0) {
 		lines.push("## What this does not establish", "");
-		for (const limitation of outcome.limitations) lines.push(`- ${limitation}`);
+		for (const limitation of outcome.limitations) lines.push(`- ${inert(limitation)}`);
 		lines.push("");
 	}
 

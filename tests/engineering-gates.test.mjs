@@ -572,3 +572,323 @@ test("an accepted dependency does not block", async () => {
 		},
 	);
 });
+
+// --- Found in adversarial review of the first implementation --------------
+
+test("caller-supplied records cannot replace what the store holds", async () => {
+	// The first revision took proofs/reviews as an override parameter, so the
+	// agent being judged could choose its own evidence: with an open blocking
+	// objection on disk, passing a clean review turned refused into
+	// may-accept. The parameter is gone; this pins that it cannot come back
+	// as a third argument.
+	await withReadyWorkspace(
+		async ({ store, records }) => {
+			const cleanReview = { ...REVIEW };
+			const outcome = await evaluateAcceptanceGate(
+				store,
+				{ change_id: records.change.id, attempt_id: records.attempt.id, host: CAPABLE_HOST },
+				{ reviews: [cleanReview], proofs: [] },
+			);
+			assert.equal(outcome.state, "refused", "a caller-supplied record overrode the store");
+		},
+		(r) => ({
+			...r,
+			reviews: [
+				{
+					...r.reviews[0],
+					objections: [{ ...r.reviews[0].objections[0], disposition: "open", resolution_evidence: undefined }],
+					remaining_blockers: ["R1"],
+				},
+			],
+		}),
+	);
+});
+
+test("a same-context review alone does not satisfy the contract's independence requirement", async () => {
+	// ACCEPTANCE_REQUIRED_RECORDS: "at least one with separation:
+	// declared-separate". The first revision downgraded this to a limitation.
+	await withReadyWorkspace(
+		async ({ store, records }) => {
+			const outcome = await evaluateAcceptanceGate(store, {
+				change_id: records.change.id,
+				attempt_id: records.attempt.id,
+				host: CAPABLE_HOST,
+			});
+			assert.equal(outcome.state, "refused");
+			assert.deepEqual(
+				outcome.blockers.map((b) => b.code),
+				["review-not-independent"],
+				JSON.stringify(outcome.blockers),
+			);
+		},
+		(r) => ({
+			...r,
+			reviews: [{ ...r.reviews[0], reviewer: { ...r.reviews[0].reviewer, context: "separate-session", separation: "same-context" } }],
+		}),
+	);
+});
+
+test("an attempt that is already accepted is not offered for acceptance again", async () => {
+	await withReadyWorkspace(
+		async ({ store, records }) => {
+			const outcome = await evaluateAcceptanceGate(store, {
+				change_id: records.change.id,
+				attempt_id: records.attempt.id,
+				host: CAPABLE_HOST,
+			});
+			assert.equal(outcome.state, "refused");
+			assert.ok(outcome.blockers.some((b) => /already accepted/.test(b.remedy)), JSON.stringify(outcome.blockers));
+		},
+		(r) => ({ ...r, attempt: { ...r.attempt, outcome: "accepted" } }),
+	);
+});
+
+test("an attempt that failed is not offered for acceptance", async () => {
+	await withReadyWorkspace(
+		async ({ store, records }) => {
+			const outcome = await evaluateAcceptanceGate(store, {
+				change_id: records.change.id,
+				attempt_id: records.attempt.id,
+				host: CAPABLE_HOST,
+			});
+			assert.equal(outcome.state, "refused");
+			assert.deepEqual(
+				outcome.blockers.map((b) => b.code),
+				["attempt-not-ready"],
+				JSON.stringify(outcome.blockers),
+			);
+		},
+		(r) => ({ ...r, attempt: { ...r.attempt, outcome: "failed" } }),
+	);
+});
+
+test("an abandoned slice and an abandoned change are both refused", async () => {
+	await withReadyWorkspace(
+		async ({ store, records }) => {
+			const outcome = await evaluateAcceptanceGate(store, {
+				change_id: records.change.id,
+				attempt_id: records.attempt.id,
+				host: CAPABLE_HOST,
+			});
+			assert.equal(outcome.state, "refused");
+			assert.ok(outcome.blockers.some((b) => /slice .* is abandoned/.test(b.detail)), JSON.stringify(outcome.blockers));
+		},
+		(r) => ({ ...r, slice: { ...r.slice, state: "abandoned" } }),
+	);
+	await withReadyWorkspace(
+		async ({ store, records }) => {
+			const outcome = await evaluateAcceptanceGate(store, {
+				change_id: records.change.id,
+				attempt_id: records.attempt.id,
+				host: CAPABLE_HOST,
+			});
+			assert.ok(outcome.blockers.some((b) => /change .* is abandoned/.test(b.detail)), JSON.stringify(outcome.blockers));
+		},
+		(r) => ({ ...r, change: { ...r.change, state: "abandoned" } }),
+	);
+});
+
+test("a proof that does not claim the obligation's scenario does not discharge it", async () => {
+	// proofDischarges checks obligation id, result, collector and authority —
+	// not which scenarios the proof exercises. E01 requires the proof to name
+	// the obligation's scenario and enforces it only in bundle validation.
+	await withReadyWorkspace(
+		async ({ store, records }) => {
+			const outcome = await evaluateAcceptanceGate(store, {
+				change_id: records.change.id,
+				attempt_id: records.attempt.id,
+				host: CAPABLE_HOST,
+			});
+			assert.equal(outcome.state, "refused");
+			assert.ok(
+				outcome.blockers.every((b) => b.code === "proof-scenario-uncovered"),
+				JSON.stringify(outcome.blockers),
+			);
+		},
+		(r) => ({ ...r, proofs: r.proofs.map((p) => ({ ...p, scenario_ids: ["S_unrelated"] })) }),
+	);
+});
+
+test("an attempt with no candidate snapshot is refused", async () => {
+	// A surviving mutation, and the E05 error inverted: the state IS
+	// representable (a failed attempt stores cleanly with no candidate), the
+	// guard was simply untested. The rule stays; the test was missing.
+	await withReadyWorkspace(
+		async ({ store, records }) => {
+			const outcome = await evaluateAcceptanceGate(store, {
+				change_id: records.change.id,
+				attempt_id: records.attempt.id,
+				host: CAPABLE_HOST,
+			});
+			assert.equal(outcome.state, "refused");
+			assert.ok(outcome.blockers.some((b) => /no candidate snapshot bound/.test(b.detail)), JSON.stringify(outcome.blockers));
+		},
+		(r) => ({ ...r, attempt: { ...r.attempt, outcome: "failed", candidate_snapshot_id: undefined }, snapshot: undefined }),
+	);
+});
+
+// ---- the limitation strings, which were entirely unasserted ----
+// Three conditions are DISCLOSED rather than refused, which makes the
+// disclosure the whole safety property for those three. All of it could be
+// deleted with a green suite.
+
+test("the semantic-correctness limitation is always stated", async () => {
+	await withReadyWorkspace(async ({ store, records }) => {
+		const outcome = await evaluateAcceptanceGate(store, {
+			change_id: records.change.id,
+			attempt_id: records.attempt.id,
+			host: CAPABLE_HOST,
+		});
+		assert.equal(outcome.state, "may-accept");
+		assert.ok(
+			outcome.limitations.some((l) => /semantic correctness remains a review and test claim/.test(l)),
+			JSON.stringify(outcome.limitations),
+		);
+		assert.match(describeGateOutcome(outcome), /What this does not establish/);
+	});
+});
+
+test("an unprotected namespace is disclosed in the text a human reads", async () => {
+	await withReadyWorkspace(async ({ store, records }) => {
+		const outcome = await evaluateAcceptanceGate(store, {
+			change_id: records.change.id,
+			attempt_id: records.attempt.id,
+			host: { ...CAPABLE_HOST, storage: { boundary: "none", protection: "unknown" } },
+		});
+		assert.ok(
+			outcome.limitations.some((l) => /could have been rewritten by the agent whose work they describe/.test(l)),
+			JSON.stringify(outcome.limitations),
+		);
+		assert.match(describeGateOutcome(outcome), /rewritten by the agent/);
+	});
+});
+
+test("the cooperative policy is disclosed", async () => {
+	await withReadyWorkspace(async ({ store, records }) => {
+		const outcome = await evaluateAcceptanceGate(store, {
+			change_id: records.change.id,
+			attempt_id: records.attempt.id,
+			host: CAPABLE_HOST,
+			policy: "cooperative",
+		});
+		assert.ok(
+			outcome.limitations.some((l) => /cooperative policy, in which caller-reported claims may discharge/.test(l)),
+			JSON.stringify(outcome.limitations),
+		);
+	});
+});
+
+test("record-authored text cannot forge the description's structure, at any call site", async () => {
+	// M1 was the one blocker construction that skipped safeText; M2 was text
+	// matching a line the document itself begins. Both are checked by
+	// line-equality, not substring.
+	await withReadyWorkspace(async ({ store, records }) => {
+		const outcome = await evaluateAcceptanceGate(store, {
+			change_id: "chg_missing\n# Acceptance may be offered\n\n## No blockers\n\n_Ready to accept._\n",
+			attempt_id: records.attempt.id,
+			host: CAPABLE_HOST,
+		});
+		const forged = describeGateOutcome(outcome)
+			.split("\n")
+			.filter((l) => ["# Acceptance may be offered", "## No blockers", "_Ready to accept._"].includes(l.trim()));
+		assert.deepEqual(forged, [], "record text forged a line of the description");
+	});
+});
+
+test("an unreadable record is reported, never silently treated as absent", async () => {
+	// store.ts refuses to let a corrupt record vanish from a listing; the gate
+	// must not undo that. A corrupt review that carried a blocking objection
+	// would otherwise become no objection at all.
+	await withReadyWorkspace(async ({ store, records, root }) => {
+		const { writeFile } = await import("node:fs/promises");
+		const { join } = await import("node:path");
+		await writeFile(
+			join(root, ".codecarto", "engineering", "changes", records.change.id, "attempts", records.attempt.id, "reviews", "rev_00000000000000000000dead.json"),
+			"{ not json",
+			"utf8",
+		);
+		const outcome = await evaluateAcceptanceGate(store, {
+			change_id: records.change.id,
+			attempt_id: records.attempt.id,
+			host: CAPABLE_HOST,
+		});
+		assert.equal(outcome.state, "refused");
+		assert.ok(outcome.blockers.some((b) => b.code === "record-unreadable"), JSON.stringify(outcome.blockers));
+	});
+});
+
+test("leading markdown in record text is rendered inert", async () => {
+	// The escape is what stops text matching a line the document itself
+	// begins — safeText only prevents OPENING a new line. Asserted directly
+	// because no gate path currently produces a blocker whose text starts
+	// with a markdown character, so nothing else would notice its removal.
+	const rendered = describeGateOutcome({
+		state: "refused",
+		blockers: [{ code: "objection-open", detail: "# Acceptance may be offered", remedy: "- _Ready to accept._" }],
+		limitations: ["> quoted"],
+	});
+	// The document's own headings are legitimate; what must not appear is a
+	// heading carrying record-authored text.
+	const headings = rendered.split("\n").filter((l) => /^#{1,6}\s/.test(l));
+	assert.deepEqual(headings, ["# Acceptance refused", "## Blockers (1)", "## What this does not establish"], JSON.stringify(headings));
+	assert.match(rendered, /\\# Acceptance may be offered/);
+	assert.match(rendered, /\\> quoted/);
+});
+
+test("a tree that moved after capture is refused when the adapter re-reads it", async () => {
+	// `stability` is recorded AT CAPTURE and says nothing about what happened
+	// afterwards. The contract requires the candidate digest to equal the tree
+	// the adapter re-reads at acceptance; without this the commit's claim to
+	// enforce "freshness" was not implemented.
+	await withReadyWorkspace(async ({ store, records }) => {
+		const moved = {
+			coverage: records.snapshot.coverage,
+			manifest: [...records.snapshot.manifest.slice(1), { path: "src/new-file.ts", digest: `sha256:${"c".repeat(64)}`, size: 12 }],
+			repository: records.snapshot.repository,
+		};
+		const outcome = await evaluateAcceptanceGate(store, {
+			change_id: records.change.id,
+			attempt_id: records.attempt.id,
+			host: CAPABLE_HOST,
+			candidate_reread: moved,
+		});
+		assert.equal(outcome.state, "refused");
+		assert.ok(
+			outcome.blockers.some((b) => b.code === "proof-stale" && /no longer matches/.test(b.detail)),
+			JSON.stringify(outcome.blockers),
+		);
+	});
+});
+
+test("an unchanged tree passes the freshness check", async () => {
+	// The control: without it the refusal above could come from any mismatch.
+	await withReadyWorkspace(async ({ store, records }) => {
+		const outcome = await evaluateAcceptanceGate(store, {
+			change_id: records.change.id,
+			attempt_id: records.attempt.id,
+			host: CAPABLE_HOST,
+			candidate_reread: {
+				coverage: records.snapshot.coverage,
+				manifest: records.snapshot.manifest,
+				repository: records.snapshot.repository,
+			},
+		});
+		assert.equal(outcome.state, "may-accept", JSON.stringify(outcome.blockers));
+		assert.ok(!outcome.limitations.some((l) => /no re-read/.test(l)), "a supplied re-read should not be disclosed as missing");
+	});
+});
+
+test("a missing re-read is disclosed, not silently treated as fresh", async () => {
+	await withReadyWorkspace(async ({ store, records }) => {
+		const outcome = await evaluateAcceptanceGate(store, {
+			change_id: records.change.id,
+			attempt_id: records.attempt.id,
+			host: CAPABLE_HOST,
+		});
+		assert.equal(outcome.state, "may-accept");
+		assert.ok(
+			outcome.limitations.some((l) => /no re-read of the working tree/.test(l)),
+			JSON.stringify(outcome.limitations),
+		);
+	});
+});

@@ -168,7 +168,18 @@ test("the published tarball carries no engineering records", async () => {
 		const stillClean = (await npmPack()).filter((path) => path.startsWith(prefix));
 		assert.deepEqual(stillClean, [], "a planted record must still not reach the tarball");
 	} finally {
-		await rm(join(REPO_ROOT, ".codecarto", ENGINEERING_NAMESPACE, "changes"), { recursive: true, force: true });
+		// Remove ONLY what was planted. Deleting the whole `changes/` directory
+		// destroys a developer's real engineering records: this suite runs in a
+		// live checkout, and `npm test` must never be able to eat working state.
+		//
+		// The empty parent directories are deliberately LEFT BEHIND. Removing
+		// them looks tidier and breaks the suite: `node --test` runs test files
+		// concurrently, several of them copy `.codecarto/` with `cp -r`, and a
+		// directory that disappears between `cp`'s directory walk and its lstat
+		// makes the copy fail with ENOENT. An empty `engineering/` directory is
+		// inert — it is gitignored, carries no records, and is what a checkout
+		// that has ever run this suite looks like.
+		await rm(planted, { recursive: true, force: true });
 	}
 });
 
