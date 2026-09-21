@@ -11,14 +11,17 @@ The priorities below are based on two real `full-with-deep-audit` runs:
 - Aimbroidery dogfood: exercised a real isolated-phase compaction, atomic checkpoint creation, fresh-host `/codecarto-open` recovery, provider-stop recovery, and completion through the porting-bundle boundary.
 - FreeAgent dogfood with `codecartographer-pi` v0.11.0: completed 7/7 phases in a clean source tree, produced 312,044 bytes across the seven canonical primary findings, and validated as two `PASS WITH GAPS` plus five `PASS` phases. The final phase used the porting bundle by default, made one targeted lower-level findings read, and did not reopen source files.
 
-Evidence paths for the FreeAgent run:
+Evidence artifacts for the FreeAgent run, named relative to that workspace's
+`.codecarto/`. The run was local and its outputs were never published, so
+these identify *which* artifacts the conclusions below rest on rather than
+pointing anywhere a reader can open:
 
-- `/home/jamessesler/Documents/Github/FreeAgent/.codecarto/workflow/status.yaml`
-- `/home/jamessesler/Documents/Github/FreeAgent/.codecarto/workflow/.usage.local.yaml`
-- `/home/jamessesler/Documents/Github/FreeAgent/.codecarto/THREAD_LOG.md`
-- `/home/jamessesler/Documents/Github/FreeAgent/.codecarto/dashboard.html`
-- `/home/jamessesler/Documents/Github/FreeAgent/.codecarto/findings/porting/reverse-engineering-bundle.md`
-- `/home/jamessesler/Documents/Github/FreeAgent/.codecarto/findings/reimplementation-spec/reimplementation-spec.md`
+- `workflow/status.yaml`
+- `workflow/.usage.local.yaml`
+- `THREAD_LOG.md`
+- `dashboard.html`
+- `findings/porting/reverse-engineering-bundle.md`
+- `findings/reimplementation-spec/reimplementation-spec.md`
 
 ## Confirmed decisions from the FreeAgent run
 
