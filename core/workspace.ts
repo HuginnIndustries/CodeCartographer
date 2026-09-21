@@ -8,6 +8,7 @@ import { appendFile, copyFile, cp, mkdir, readFile, readdir, rename } from "node
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPipelineLabel, recomputeCursor } from "./pipeline.ts";
+import { ENGINEERING_NAMESPACE } from "./engineering/ids.ts";
 import { acquireLock, applyHandoff, autoAssignIds, createEmptyStatus, normalizeStatus, parseHandoff, textOf } from "./status.ts";
 import type { CarryForwardEntry, PhaseHandoff, PipelineFile, PostPipelineEntry, StatusFile, WorkspaceState } from "./types.ts";
 import { atomicWriteFile, compareDottedVersions, newlineIfUnterminated, pathExists } from "./utils.ts";
@@ -148,7 +149,13 @@ const INIT_EXCLUDED_TOP_LEVEL = new Set([
 // Directories that exist in every workspace but whose contents are one
 // project's sessions: closeouts, and scratch (handoffs, checkpoints,
 // amendments) apart from its .gitkeep.
-const INIT_EXCLUDED_DIR_CONTENTS = new Set(["closeouts", "scratch"]);
+//
+// `engineering/` is the same shape of thing and then some: change briefs,
+// attempt records, proofs of what ran on one machine, review objections and
+// human approval receipts. It is private working history, never template
+// content, so a new workspace gets the empty directory and none of the
+// records (E02, #400).
+const INIT_EXCLUDED_DIR_CONTENTS = new Set(["closeouts", "scratch", ENGINEERING_NAMESPACE]);
 // Project state under workflow/: init writes a fresh status.yaml itself, and
 // the two dot-files hold one machine's usage log and session pointer.
 const INIT_EXCLUDED_WORKFLOW_FILES = new Set(["status.yaml", ".usage.local.yaml", ".orchestrator.local.yaml"]);

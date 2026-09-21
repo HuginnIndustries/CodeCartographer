@@ -132,10 +132,16 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	}
 	const dir = join(REPO_ROOT, "core", "engineering");
 	const files = (await readdir(dir)).filter((n) => n.endsWith(".ts")).sort();
-	assert.deepEqual(files, ["digest.ts", "ids.ts", "index.ts", "snapshots.ts", "types.ts", "validation.ts"]);
+	assert.deepEqual(files, ["digest.ts", "ids.ts", "index.ts", "snapshots.ts", "store.ts", "types.ts", "validation.ts"]);
 	// snapshots (E03) sits beside validation: both consume types/ids/digest and
-	// neither imports the other.
-	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, index: 3 };
+	// neither imports the other. store (E02) sits above both: it is the one
+	// file here that is ALLOWED to touch the filesystem, because persisting
+	// records is its entire job, and it consumes the pure layers below it.
+	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, store: 3, index: 4 };
+	// Everything except the store must stay pure. Splitting the rule rather
+	// than dropping it: a validator that gained a `node:fs` import would
+	// still fail, which is the property this test was written for.
+	const PURE = files.filter((f) => !["index.ts", "store.ts"].includes(f));
 	for (const file of files) {
 		const source = await readFile(join(dir, file), "utf8");
 		const name = file.slice(0, -3);
@@ -145,6 +151,14 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 				const dep = target.slice(2, -3);
 				assert.ok(layer[dep] < layer[name], `${file} imports ${target}, which is not below it`);
 				assert.notEqual(dep, "index", `${file} imports the barrel`);
+			} else if (name === "store") {
+				// The store may reach the filesystem and the shared primitives it
+				// would otherwise reimplement: atomic write, transient-error
+				// retry, and the workspace lock.
+				assert.ok(
+					["node:fs/promises", "node:path", "../utils.ts", "../status.ts"].includes(target),
+					`${file} imports ${target}; the store may only use fs, path, and the shared write/lock primitives`,
+				);
 			} else if (name !== "index") {
 				// The only Node modules the contract may touch: hashing and
 				// randomness. `../secrets.ts` is the one in-repo exception: the
@@ -153,7 +167,12 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 				assert.ok(["node:crypto", "../secrets.ts"].includes(target), `${file} imports ${target}; validators are pure`);
 			}
 		}
-		assert.doesNotMatch(source, /\bfetch\s*\(|process\.env|child_process|node:fs|node:net|node:http/, `${file} reaches outside its arguments`);
+		if (PURE.includes(file)) {
+			assert.doesNotMatch(source, /\bfetch\s*\(|process\.env|child_process|node:fs|node:net|node:http/, `${file} reaches outside its arguments`);
+		} else {
+			// Even the store stays off the network and out of the environment.
+			assert.doesNotMatch(source, /\bfetch\s*\(|process\.env|child_process|node:net|node:http/, `${file} reaches beyond the filesystem`);
+		}
 	}
 });
 

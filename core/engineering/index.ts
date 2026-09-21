@@ -17,3 +17,4 @@ export * from "./ids.ts";
 export * from "./digest.ts";
 export * from "./validation.ts";
 export * from "./snapshots.ts";
+export * from "./store.ts";

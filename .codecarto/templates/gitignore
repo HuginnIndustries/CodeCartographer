@@ -50,6 +50,13 @@ dashboard.html
 # until the next --narrate).
 .dashboard-narration.local.md
 
+# Engineering runtime state: change briefs, attempt records, proofs of what
+# ran on this machine, review objections, and human approval receipts. This
+# is one project's private working history, not template content or anything
+# another checkout should receive. The namespace is ignored wholesale; a
+# deliberate shareable export belongs outside it.
+engineering/
+
 # OS artifacts
 .DS_Store
 Thumbs.db
