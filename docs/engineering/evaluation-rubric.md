@@ -37,8 +37,26 @@ A requirement change during the run creates a versioned amendment and may invali
 | R08 | Missing/wrong/stale proof refusal | Negative cases below are rejected at the correct boundary, with distinguishable reasons, without silently changing accepted history. |
 | R09 | Second-change continuity | F01 starts after accepted B01, records its derived baseline, and leaves B01's attempts, evidence, and decision history intact. |
 | R10 | Publication boundary | Local raw data remains local; a deliberately sanitized report has no secrets, home paths, private inventory, or session URLs. Relevant redaction limits are explicit. No merge/release/deployment authority is inferred. |
+| R11 | Class sweep on review findings | For each defect a review reports, the response names the **class** the defect belongs to, enumerates the other instances of that class in the changed surface, and for each instance either closes it or records why it is out of scope. An unanswered class is a blocking finding, not a follow-up. |
 
 All applicable hard gates must pass before claiming the full E11 outcome. A blocked or untested gate means partial verification, not a passing milestone. Hard gates apply to the **final legitimate acceptance path**: deliberately rejected negative-control attempts are successful safety observations, not contradictions. Preserve genuine unsuccessful attempts separately; never delete them to improve the reported success rate.
+
+### R11 in practice
+
+R11 exists because three consecutive review rounds produced the same pattern: the fix closed the reported instance, CI went green, the author believed the work complete, and a defect of the same kind remained one identifier away.
+
+| Round | Reviewer found | Fix closed | Same class still open |
+|---|---|---|---|
+| E03 first review | `repository` digested without validation | `repository` shape-checked | `executable` still coerced to `false` |
+| E03 second review | `executable` coerced | non-booleans refused | — (swept) |
+| B01 pilot review | `GIT_CONFIG_COUNT` not neutralized | `COUNT=0` added | `GIT_CONFIG_PARAMETERS` still live |
+
+In the third case the original failure reproduced byte-for-byte on a branch whose author had just declared it fixed. The sweep each time was cheap — enumerate a surface the implementer already had open:
+
+- *"`repository` reaches the digest unvalidated"* → class: **inputs that reach the digest without a shape check** → sweep `entries`, `excluded`, `uncovered_relevant_inputs`, `repository` → finds `executable` in the first round.
+- *"`GIT_CONFIG_COUNT` is not neutralized"* → class: **environment-reachable git configuration sources** → enumerate all four → finds `GIT_CONFIG_PARAMETERS` before review.
+
+R11 is **not** a mandate to widen every fix. A change that grows without bound is its own defect: the B01 pilot deliberately left `GIT_TEMPLATE_DIR` out of scope and filed it instead, which satisfies R11. What R11 forbids is leaving the question *unasked* — an implementer who never named the class cannot claim the remaining instances are out of scope, because they never looked.
 
 ## Required negative controls
 

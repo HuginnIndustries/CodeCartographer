@@ -515,6 +515,31 @@ export interface ReviewObjection {
 	/** Required exactly when `disposition` is `resolved`. */
 	resolution_evidence?: string;
 	disposition_note?: string;
+	/**
+	 * R11 class sweep. A fix that closes the reported instance while leaving
+	 * a sibling of the same kind one identifier away is the most common way
+	 * a green-CI change stays broken — observed three review rounds running.
+	 *
+	 * `class_statement` names the kind of defect; `instances` enumerates
+	 * every place that kind can occur in the changed surface, each either
+	 * closed or explicitly out of scope with a reason. Absent means the
+	 * question was never asked, which is itself a finding: an implementer
+	 * who never named the class cannot claim the rest are out of scope.
+	 */
+	class_sweep?: ClassSweep;
+}
+
+export interface ClassSweep {
+	/** The kind of defect, not the instance. "Inputs reaching the digest unvalidated", not "repository was unvalidated". */
+	class_statement: string;
+	instances: Array<{
+		/** Where this instance lives — a field path, identifier, or file path. */
+		locus: string;
+		/** `closed` in this change, or `out-of-scope` with a recorded reason. Nothing else is a complete answer. */
+		disposition: "closed" | "out-of-scope";
+		/** Required when `out-of-scope`: why not now, and where it is tracked. */
+		note?: string;
+	}>;
 }
 
 export interface ReviewRecord extends RecordEnvelope<"review"> {

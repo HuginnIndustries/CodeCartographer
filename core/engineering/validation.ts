@@ -651,6 +651,48 @@ const REVIEWER_SHAPE: Shape = {
 	note: opt(nonEmptyString),
 };
 
+/**
+ * R11's class sweep. Fails closed on the shapes that would let it be
+ * satisfied without doing the work: an empty instance list (a sweep that
+ * enumerated nothing), or an `out-of-scope` instance with no reason (which
+ * is an assertion, not an answer).
+ */
+const classSweep: Check = (value, path, errors) => {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		errors.fail(path, "invalid-type", "expected an object");
+		return;
+	}
+	const sweep = value as Record<string, unknown>;
+	nonEmptyString(sweep.class_statement, at(path, "class_statement"), errors);
+	const instances = sweep.instances;
+	if (!Array.isArray(instances)) {
+		errors.fail(at(path, "instances"), "invalid-type", "expected an array");
+		return;
+	}
+	if (instances.length === 0) {
+		errors.fail(at(path, "instances"), "invalid-value", "a sweep that enumerated no instances is not a sweep");
+		return;
+	}
+	for (const [i, raw] of instances.entries()) {
+		const where = at(at(path, "instances"), i);
+		if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+			errors.fail(where, "invalid-type", "expected an object");
+			continue;
+		}
+		const instance = raw as Record<string, unknown>;
+		nonEmptyString(instance.locus, at(where, "locus"), errors);
+		if (instance.disposition !== "closed" && instance.disposition !== "out-of-scope") {
+			errors.fail(at(where, "disposition"), "invalid-value", "expected `closed` or `out-of-scope`");
+			continue;
+		}
+		// Declaring something out of scope without saying why is the failure
+		// mode this whole check exists to prevent.
+		if (instance.disposition === "out-of-scope") {
+			nonEmptyString(instance.note, at(where, "note"), errors);
+		}
+	}
+};
+
 const OBJECTION_SHAPE: Shape = {
 	id: req(localId),
 	severity: req(oneOf(OBJECTION_SEVERITIES)),
@@ -659,6 +701,7 @@ const OBJECTION_SHAPE: Shape = {
 	disposition: req(oneOf(OBJECTION_DISPOSITIONS)),
 	resolution_evidence: opt(nonEmptyString),
 	disposition_note: opt(nonEmptyString),
+	class_sweep: opt(classSweep),
 };
 
 const RECEIPT_SHAPE: Shape = {
