@@ -28,6 +28,30 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * `npm` is a shell shim on Windows (`npm.cmd`), so `execFile("npm", …)` fails
+ * with `spawn npm ENOENT` there. Run the CLI's own entry point with the node
+ * that is already running instead — no shell, no `shell: true` quoting
+ * hazard, and identical behaviour on every platform.
+ */
+async function npmPack() {
+	const npmCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+	const viaCli = await stat(npmCli).then(() => true).catch(() => false);
+	const { stdout } = viaCli
+		? await execFileAsync(process.execPath, [npmCli, "pack", "--dry-run", "--json"], { cwd: REPO_ROOT, maxBuffer: 32 * 1024 * 1024 })
+		: await execFileAsync(process.platform === "win32" ? "npm.cmd" : "npm", ["pack", "--dry-run", "--json"], {
+				cwd: REPO_ROOT,
+				maxBuffer: 32 * 1024 * 1024,
+			});
+	// npm has shipped both shapes for this payload: an array of packages, and
+	// an object keyed by package name. Accept either rather than index [0]
+	// and silently examine `undefined`.
+	const parsed = JSON.parse(stdout);
+	const packed = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+	assert.ok(Array.isArray(packed?.files) && packed.files.length > 0, "npm pack must report a non-empty file list");
+	return packed.files.map((entry) => entry.path.replace(/\\/g, "/"));
+}
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const { copyPackagedWorkspace } = await import(pathToFileURL(`${REPO_ROOT}/core/workspace.ts`).href);
@@ -127,18 +151,11 @@ test("git actually ignores a populated engineering namespace in a workspace usin
 test("the published tarball carries no engineering records", async () => {
 	// The real packing rules, not a reading of files[]. `npm pack --dry-run`
 	// applies files[], .npmignore, and every default exclusion together.
-	const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], { cwd: REPO_ROOT, maxBuffer: 32 * 1024 * 1024 });
-	// npm has shipped both shapes for this payload: an array of packages, and
-	// an object keyed by package name. Accept either rather than index [0]
-	// and silently examine `undefined`.
-	const parsed = JSON.parse(stdout);
-	const packed = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
-	assert.ok(Array.isArray(packed?.files) && packed.files.length > 0, "npm pack must report a non-empty file list");
 	// Anchored to the namespace directory: `templates/reverse-engineering-
 	// bundle.md` is a legitimate template whose NAME contains the word, and a
 	// substring match would call it a leak forever.
 	const prefix = `.codecarto/${ENGINEERING_NAMESPACE}/`;
-	const offenders = packed.files.map((entry) => entry.path.replace(/\\/g, "/")).filter((path) => path.startsWith(prefix));
+	const offenders = (await npmPack()).filter((path) => path.startsWith(prefix));
 	assert.deepEqual(offenders, [], `no engineering record may reach the tarball:\n${offenders.join("\n")}`);
 	// The control. An empty result is worthless if the packer had nothing to
 	// exclude, so a record is PLANTED and the pack re-run. A checkout has no
@@ -148,10 +165,7 @@ test("the published tarball carries no engineering records", async () => {
 	await mkdir(planted, { recursive: true });
 	try {
 		await writeFile(join(planted, "change.json"), '{"synthetic":"pack control, never a real record"}\n', "utf8");
-		const rerun = await execFileAsync("npm", ["pack", "--dry-run", "--json"], { cwd: REPO_ROOT, maxBuffer: 32 * 1024 * 1024 });
-		const reparsed = JSON.parse(rerun.stdout);
-		const repacked = Array.isArray(reparsed) ? reparsed[0] : Object.values(reparsed)[0];
-		const stillClean = repacked.files.map((entry) => entry.path.replace(/\\/g, "/")).filter((path) => path.startsWith(prefix));
+		const stillClean = (await npmPack()).filter((path) => path.startsWith(prefix));
 		assert.deepEqual(stillClean, [], "a planted record must still not reach the tarball");
 	} finally {
 		await rm(join(REPO_ROOT, ".codecarto", ENGINEERING_NAMESPACE, "changes"), { recursive: true, force: true });

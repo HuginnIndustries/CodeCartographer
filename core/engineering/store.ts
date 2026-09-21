@@ -171,8 +171,14 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 	 * catches a symlink planted in a directory we already created.
 	 */
 	async function resolveInside(relativePath: string): Promise<string> {
+		// `engineeringPaths` speaks POSIX, but callers compose with `join`,
+		// which emits `\` on Windows — so the prefix strip below must accept
+		// either separator. Without this the namespace prefix went
+		// unrecognized on Windows and every locked path resolved to
+		// `engineering\engineering\...`, which existed nowhere.
+		const posix = relativePath.replace(/\\/g, "/");
 		const namespacePrefix = `${ENGINEERING_NAMESPACE}/`;
-		const withinNamespace = relativePath.startsWith(namespacePrefix) ? relativePath.slice(namespacePrefix.length) : relativePath;
+		const withinNamespace = posix.startsWith(namespacePrefix) ? posix.slice(namespacePrefix.length) : posix;
 		const absolute = resolve(realRoot, withinNamespace);
 		const rel = relative(realRoot, absolute);
 		if (rel.startsWith("..") || rel.startsWith(`${sep}..`) || resolve(realRoot, rel) !== absolute) {
