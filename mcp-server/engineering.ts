@@ -64,13 +64,24 @@ export type ChangeAction = (typeof CHANGE_ACTIONS)[number];
  * caller gets a reason instead of "unknown action", and a future contributor
  * sees that the omission was a decision.
  */
-const REFUSED_ACTIONS: Record<string, string> = {
+// A null prototype and an Object.hasOwn guard at the lookup, so `action:
+// "constructor"` cannot reach Object's constructor and print native function
+// source as the refusal reason.
+//
+// UNTESTED BY CONSTRUCTION, and deliberately kept: the allow-list below runs
+// after this check and rejects every inherited name anyway, so mutating either
+// guard away leaves the suite green. That makes them defence in depth rather
+// than dead code — if the two checks are ever reordered, or an inherited name
+// is added to CHANGE_ACTIONS, the leak returns. Removing a guard because a
+// mutation survived is exactly the error that let a baseline proof discharge
+// in E05.
+const REFUSED_ACTIONS: Record<string, string> = Object.assign(Object.create(null) as Record<string, string>, {
 	approve: "acceptance requires a trusted channel and a receipt the core can evaluate; it cannot be reached through an ordinary tool argument",
 	accept: "acceptance requires a trusted channel and a receipt the core can evaluate; it cannot be reached through an ordinary tool argument",
 	record: "records are written through their own action; a free-form record write would let a caller choose its own kind",
 	execute: "this surface records what a host did; it never runs anything",
 	run: "this surface records what a host did; it never runs anything",
-};
+});
 
 /**
  * A change id derived from the caller's request key.
@@ -78,21 +89,62 @@ const REFUSED_ACTIONS: Record<string, string> = {
  * Same key, same id — so a retried create collides with its own first write
  * and the store reports the original rather than minting a second change.
  */
+/** ingestProof, with request-blaming store refusals mapped to InvalidParams. */
+async function ingestProofSafely(store: EngineeringStore, payload: Record<string, unknown>) {
+	try {
+		return await ingestProof(store, payload as never);
+	} catch (error) {
+		throw asCallerError(error);
+	}
+}
+
 function deterministicChangeId(requestId: string): string {
 	const digest = createHash("sha256").update(`change:${requestId}`).digest("hex").slice(0, 24);
 	return `chg_${digest}`;
 }
 
 /**
- * A timestamp derived from the request rather than the clock, for the same
- * reason: two retries of one request must serialize to identical bytes.
+ * The wall-clock time of the FIRST call carrying this request id.
+ *
+ * A retry must serialize to the same bytes or the store reports a conflict, so
+ * the timestamp cannot simply be read again. Rather than synthesize one, the
+ * first real time is recovered from the change the earlier call already wrote.
  */
-function deterministicTimestamp(requestId: string, title: string, outcome: string): string {
-	const digest = createHash("sha256").update(`${requestId}\u0000${title}\u0000${outcome}`).digest();
-	// A fixed epoch plus a bounded offset: stable per request, and obviously
-	// synthetic rather than a plausible-looking wall-clock lie.
-	const offsetMs = digest.readUInt32BE(0) % 1_000;
-	return new Date(Date.UTC(2020, 0, 1) + offsetMs).toISOString();
+async function rememberedTimestamp(store: EngineeringStore, requestId: string): Promise<string> {
+	const existing = await store.get("change", deterministicChangeId(requestId)).catch(() => null);
+	const remembered = (existing?.record as ChangeRecord | undefined)?.created_at;
+	return remembered ?? new Date().toISOString();
+}
+
+/** Map a store-level refusal that blames the REQUEST onto a caller-facing code. */
+function asCallerError(error: unknown): unknown {
+	const code = (error as { code?: string } | null)?.code;
+	const message = error instanceof Error ? error.message : String(error);
+	switch (code) {
+		case "idempotency-conflict":
+			// Retrying verbatim will never succeed: the key is already bound to
+			// different bytes. Say so rather than looking like a blip.
+			return new McpError(ErrorCode.InvalidParams, `${message}; use a new request_id or resend the original payload`);
+		case "invalid-enum":
+		case "invalid-value":
+		case "invalid-request":
+		case "stale-revision":
+			return new McpError(ErrorCode.InvalidParams, message);
+		default:
+			return error;
+	}
+}
+
+/**
+ * Strip control characters from free text before it is reported back.
+ *
+ * A title is caller-supplied and reaches a human-readable line. A NUL byte
+ * truncates that line in some terminals and ANSI escapes can repaint it, so a
+ * caller could make the reported record look like something it is not. The
+ * STORED value keeps whatever E01 accepts; this only governs what is shown.
+ */
+function displayText(value: string): string {
+	return value.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
 }
 
 function invalid(message: string): never {
@@ -115,6 +167,9 @@ function requireString(args: Record<string, unknown>, field: string): string {
  * store, by the approval machinery, by proof ingestion. A caller that can set
  * them directly can assert a conclusion rather than report an observation.
  */
+/** States after which a change's approved presentation must not move. */
+const TERMINAL_CHANGE_STATES = new Set(["accepted", "abandoned"]);
+
 const DERIVED_FIELDS = ["state", "decision", "authority", "discharges", "revision_token", "approved_by", "accepted_at"];
 
 function refuseDerivedFields(args: Record<string, unknown>, where: string): void {
@@ -158,7 +213,7 @@ export function createChangeHandler(deps: {
 		if (typeof action !== "string" || action.length === 0) {
 			invalid(`action is required; one of ${CHANGE_ACTIONS.join(", ")}`);
 		}
-		if (REFUSED_ACTIONS[action]) {
+		if (Object.hasOwn(REFUSED_ACTIONS, action)) {
 			throw new McpError(ErrorCode.InvalidParams, `${action} is not available through this surface: ${REFUSED_ACTIONS[action]}`);
 		}
 		if (!(CHANGE_ACTIONS as readonly string[]).includes(action)) {
@@ -210,7 +265,12 @@ async function createChange(store: EngineeringStore, args: ChangeArgs, textResul
 	// digest of the key, the timestamp from the request's own content. Without
 	// a request_id the ordinary fresh values are used and no retry-safety is
 	// claimed.
-	const now = requestId ? deterministicTimestamp(requestId, title, outcome) : new Date().toISOString();
+	// F-3: the timestamp comes from the clock, never from a digest. An earlier
+	// revision derived it from the request so retries produced identical bytes,
+	// but that bounded every created_at in a workspace to 1000 distinct values
+	// in the year 2020 — any consumer ordering by creation time got arbitrary
+	// order. Retry-safety now comes from remembering the first call's timestamp.
+	const now = requestId ? await rememberedTimestamp(store, requestId) : new Date().toISOString();
 	const record = {
 		schema_version: ENGINEERING_SCHEMA_VERSION,
 		kind: "change" as const,
@@ -244,7 +304,16 @@ async function createChange(store: EngineeringStore, args: ChangeArgs, textResul
 	// `request_id` is not part of the change schema and putting it there is
 	// correctly refused. A repeated call with the same key is a no-op that
 	// reports the original id rather than minting a second change.
-	const put = await store.put(record as never, requestId ? { idempotencyKey: requestId } : undefined);
+	let put;
+	try {
+		put = await store.put(record as never, requestId ? { idempotencyKey: requestId } : undefined);
+	} catch (error) {
+		// F-4: a caller's bad argument is not a server fault. StoreError codes
+		// that describe the REQUEST are re-raised as InvalidParams so a host can
+		// branch on them; InternalError invites a retry that fails identically
+		// forever.
+		throw asCallerError(error);
+	}
 	return textResult(`Created change ${put.id} (revision ${put.revision}).`, {
 		change_id: put.id,
 		revision: put.revision,
@@ -261,8 +330,35 @@ async function updateChange(store: EngineeringStore, args: ChangeArgs, textResul
 
 	// The CAS token is carried through rather than papered over: two writers
 	// that cannot see each other must not silently lose one another's work.
+	// F-1: title and requested_outcome are exactly the fields an
+	// AcceptancePresentation carries, and an approval's presentation_digest is
+	// recomputed from its OWN embedded copy — so editing them after acceptance
+	// leaves the approval validating against a change it no longer describes.
+	// The record would then state an outcome nobody approved.
+	if (TERMINAL_CHANGE_STATES.has(record.state)) {
+		throw new McpError(
+			ErrorCode.InvalidRequest,
+			`change ${changeId} is ${record.state} and cannot be edited: an approval records agreement to a specific title and outcome, ` +
+				`so changing them would leave the approval describing bytes nobody approved. Open a new change instead.`,
+		);
+	}
+
+	// F-2: the CAS is no longer opt-in. Omitting `revision` used to mean the
+	// adapter compared the record against itself, which is not a
+	// compare-and-swap at all — it is last-write-wins with extra steps, and a
+	// second writer's work vanished with no error reported to anyone.
 	const revision = args.revision;
-	if (revision !== undefined && revision !== record.revision) {
+	if (revision === undefined) {
+		throw new McpError(
+			ErrorCode.InvalidParams,
+			`update requires the revision you last read (change ${changeId} is at revision ${record.revision}), ` +
+				`so a concurrent writer's work cannot be overwritten silently`,
+		);
+	}
+	if (typeof revision !== "number" || !Number.isInteger(revision)) {
+		throw new McpError(ErrorCode.InvalidParams, `revision must be an integer, got ${JSON.stringify(revision)}`);
+	}
+	if (revision !== record.revision) {
 		throw new McpError(
 			ErrorCode.InvalidParams,
 			`stale revision ${String(revision)}: change ${changeId} is at revision ${record.revision}; re-read it and retry`,
@@ -276,7 +372,12 @@ async function updateChange(store: EngineeringStore, args: ChangeArgs, textResul
 		...(typeof args.outcome === "string" ? { requested_outcome: args.outcome } : {}),
 		updated_at: new Date().toISOString(),
 	};
-	const put = await store.put(next as never, { ifRevision: record.revision });
+	let put;
+	try {
+		put = await store.put(next as never, { ifRevision: record.revision });
+	} catch (error) {
+		throw asCallerError(error);
+	}
 	return textResult(`Updated change ${changeId} to revision ${put.revision}.`, { change_id: changeId, revision: put.revision });
 }
 
@@ -284,7 +385,7 @@ async function showChange(store: EngineeringStore, args: ChangeArgs, textResult:
 	const changeId = requireString(args, "change_id");
 	const found = await store.get("change", changeId);
 	const record = found.record as ChangeRecord;
-	return textResult(`${record.title} (${record.state}, revision ${record.revision})\n\n${record.requested_outcome}`, {
+	return textResult(`${displayText(record.title)} (${record.state}, revision ${record.revision})\n\n${displayText(record.requested_outcome)}`, {
 		change_id: record.id,
 		title: record.title,
 		state: record.state,
@@ -342,7 +443,7 @@ async function recordProof(store: EngineeringStore, args: ChangeArgs, textResult
 	// Refusing instead would teach callers to delete the fields and change
 	// nothing about what is trusted; the claim must be inert, not forbidden.
 
-	const ingested = await ingestProof(store, {
+	const ingested = await ingestProofSafely(store, {
 		...(proof as Record<string, unknown>),
 		change_id: changeId,
 		// Stated once, here: this transport is caller-reported, so the

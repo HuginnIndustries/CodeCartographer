@@ -442,3 +442,267 @@ test("a proof that is not an object is refused", async () => {
 		}
 	});
 });
+
+// --- Review regressions (PR #434) -----------------------------------------
+
+test("an accepted change cannot be rewritten through update", async () => {
+	// F-1. `title` and `requested_outcome` are exactly the fields an
+	// AcceptancePresentation carries, and an approval's presentation_digest is
+	// recomputed from its own embedded copy — so editing them after acceptance
+	// left the approval validating against a change it no longer described.
+	// The record stated an outcome nobody approved.
+	await withWorkspace(async (cwd) => {
+		const store = await openStore(join(cwd, ".codecarto"));
+		const change = await readFixture("change.json");
+		for (const state of ["accepted", "abandoned"]) {
+			const id = change.id;
+			// Replacing an existing record needs the CAS token and a higher
+			// revision — the store refuses a blind overwrite, which is the
+			// property E02 exists to provide.
+			const current = await store.get("change", id).catch(() => null);
+			const nextRevision = current ? current.record.revision + 1 : 1;
+			await store.put({ ...change, state, revision: nextRevision }, current ? { ifRevision: current.record.revision } : undefined);
+			await assert.rejects(
+				() => handleChange({ cwd, action: "update", change_id: id, revision: nextRevision, title: "MUTATED AFTER ACCEPTANCE" }),
+				(error) => error instanceof McpError && new RegExp(state).test(error.message),
+				`a ${state} change was editable`,
+			);
+			const after = (await store.get("change", id)).record;
+			assert.equal(after.title, change.title, `a ${state} change was rewritten`);
+		}
+	});
+});
+
+test("an update without the revision it read is refused, not applied blindly", async () => {
+	// F-2. `ifRevision` was populated from the record the adapter had just
+	// read, so the compare-and-swap only ever compared the adapter against
+	// itself: last-write-wins with extra steps. A second writer's work
+	// disappeared with no error reported to anyone.
+	await withWorkspace(async (cwd) => {
+		const created = await handleChange({ cwd, action: "create", title: "Original", outcome: "o" });
+		const id = created.structuredContent.change_id;
+		await assert.rejects(
+			() => handleChange({ cwd, action: "update", change_id: id, title: "BLIND OVERWRITE" }),
+			(error) => error instanceof McpError && /requires the revision you last read/.test(error.message),
+			"a blind update was applied",
+		);
+		const shown = await handleChange({ cwd, action: "show", change_id: id });
+		assert.equal(shown.structuredContent.title, "Original", "the record changed despite the refusal");
+
+		// A non-integer revision is a caller error, not a silent coercion. The
+		// message must name the TYPE problem: asserting only "some McpError"
+		// let the integer check be deleted, because the undefined check above
+		// already rejects "1" and null for a different reason.
+		for (const bad of ["1", 1.5, null, {}, Number.NaN]) {
+			await assert.rejects(
+				() => handleChange({ cwd, action: "update", change_id: id, revision: bad, title: "x" }),
+				(error) => {
+					assert.ok(error instanceof McpError, `a revision of ${JSON.stringify(bad)} did not raise an McpError`);
+					assert.match(
+						error.message,
+						/revision must be an integer|requires the revision you last read/,
+						`a revision of ${JSON.stringify(bad)} was refused for the wrong reason: ${error.message}`,
+					);
+					return true;
+				},
+				`a revision of ${JSON.stringify(bad)} was accepted`,
+			);
+		}
+		// 1.5 and NaN are defined, so they reach the integer check specifically.
+		await assert.rejects(
+			() => handleChange({ cwd, action: "update", change_id: id, revision: 1.5, title: "x" }),
+			(error) => error instanceof McpError && /revision must be an integer/.test(error.message),
+			"a fractional revision was not refused as a type error",
+		);
+	});
+});
+
+test("two successive updates each advance the revision by exactly one", async () => {
+	// F-2's corroborating mutations: `ifRevision: 1` and `revision + 2` both
+	// survived because no test ever performed two SUCCESSFUL updates, so
+	// nothing observed the numbers the adapter passed or wrote.
+	await withWorkspace(async (cwd) => {
+		const created = await handleChange({ cwd, action: "create", title: "R0", outcome: "o" });
+		const id = created.structuredContent.change_id;
+		let revision = created.structuredContent.revision;
+		for (const title of ["R1", "R2", "R3"]) {
+			const updated = await handleChange({ cwd, action: "update", change_id: id, revision, title });
+			assert.equal(updated.structuredContent.revision, revision + 1, `revision jumped from ${revision}`);
+			revision = updated.structuredContent.revision;
+			const shown = await handleChange({ cwd, action: "show", change_id: id });
+			assert.equal(shown.structuredContent.title, title);
+			assert.equal(shown.structuredContent.revision, revision, "the reported revision is not the stored one");
+		}
+	});
+});
+
+test("a creation timestamp is a real time, and a retry reuses the first one", async () => {
+	// F-3. The timestamp used to be a digest of the request: a fixed 2020 epoch
+	// plus a bounded offset, giving at most 1000 distinct created_at values per
+	// workspace. Anything ordering by creation time got arbitrary order.
+	await withWorkspace(async (cwd) => {
+		const store = await openStore(join(cwd, ".codecarto"));
+		const before = Date.now();
+		const args = { cwd, action: "create", title: "Timed", outcome: "o", request_id: "req-time-1" };
+		const first = await handleChange({ ...args });
+		const after = Date.now();
+
+		const record = (await store.get("change", first.structuredContent.change_id)).record;
+		const createdAt = Date.parse(record.created_at);
+		assert.ok(createdAt >= before - 1000 && createdAt <= after + 1000, `created_at ${record.created_at} is not a real time`);
+		assert.ok(!record.created_at.startsWith("2020-01-01"), "the synthetic 2020 timestamp is back");
+
+		// The retry must not merely succeed — it must carry the SAME time, or
+		// the bytes differ and the store reports a conflict.
+		const second = await handleChange({ ...args });
+		assert.equal(second.structuredContent.retried, true);
+		const again = (await store.get("change", second.structuredContent.change_id)).record;
+		assert.equal(again.created_at, record.created_at, "a retry rewrote the creation time");
+	});
+});
+
+test("a bad argument is a caller error, not an internal one", async () => {
+	// F-4. These fell through into StoreError, which the server maps to
+	// InternalError (-32603) — a code hosts treat as a server bug and retry.
+	// Retrying an invalid enum forever is not a recovery strategy.
+	await withWorkspace(async (cwd) => {
+		const cases = [
+			{ args: { mode: "self-approved" }, why: "an unknown mode" },
+			{ args: { baseline_commit: "HEAD" }, why: "a non-hash baseline" },
+			{ args: { request_id: "../../../pwn" }, why: "a traversal request id" },
+			{ args: { request_id: "a".repeat(200) }, why: "an oversized request id" },
+		];
+		for (const { args, why } of cases) {
+			await assert.rejects(
+				() => handleChange({ cwd, action: "create", title: "t", outcome: "o", ...args }),
+				(error) => {
+					assert.ok(error instanceof McpError, `${why} did not raise an McpError`);
+					assert.equal(error.code, ErrorCode.InvalidParams, `${why} was reported as an internal error (${error.code})`);
+					return true;
+				},
+				`${why} was accepted`,
+			);
+		}
+
+		// An idempotency conflict is also the caller's problem, and says what to do.
+		const args = { cwd, action: "create", title: "Alpha", outcome: "o", request_id: "req-conflict" };
+		await handleChange({ ...args });
+		await assert.rejects(
+			() => handleChange({ ...args, title: "Beta" }),
+			(error) => error instanceof McpError && error.code === ErrorCode.InvalidParams && /new request_id/.test(error.message),
+			"a conflicting retry was reported as an internal error",
+		);
+	});
+});
+
+test("an inherited property name is not treated as a refused action", async () => {
+	// F-5. REFUSED_ACTIONS was a plain object literal, so `action:
+	// "constructor"` looked up Object's constructor and printed native function
+	// source as the refusal reason.
+	await withWorkspace(async (cwd) => {
+		for (const action of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
+			await assert.rejects(
+				() => handleChange({ cwd, action }),
+				(error) => {
+					assert.ok(error instanceof McpError);
+					assert.ok(!/native code|\[object Object\]/.test(error.message), `${action} leaked engine internals: ${error.message}`);
+					assert.match(error.message, /unknown action/);
+					return true;
+				},
+				`${action} was not refused`,
+			);
+		}
+	});
+});
+
+test("the value that would actually launder a proof is neutralized", async () => {
+	// F-6. The existing test sent attested_by: "adapter", which E01 refuses on
+	// shape for a host-observed collector — so with the provenance overwrite
+	// removed it failed with a validation error and the authority assertions
+	// were never reached. It could not distinguish a working overwrite from an
+	// unrelated refusal. This sends the value that DOES launder.
+	await withWorkspace(async (cwd) => {
+		const store = await openStore(join(cwd, ".codecarto"));
+		const [change, slice, attempt, snapshot, proof] = await Promise.all(
+			["change.json", "slice.json", "attempt.json", "snapshot-candidate.json", "proof.json"].map(readFixture),
+		);
+		for (const record of [change, slice, attempt, snapshot]) await store.put(record);
+
+		const result = await handleChange({
+			cwd,
+			action: "record_proof",
+			change_id: change.id,
+			proof: {
+				...proof,
+				provenance: { source: "claude-code:post-tool-use-hook", attested_by: "host-tool-result", tool_call_id: "call_evil" },
+			},
+		});
+		assert.equal(result.structuredContent.authority, "claimed", "a host-tool-result attestation was believed");
+		assert.equal(result.structuredContent.discharges, false);
+
+		// The STORED bytes must carry the adapter's provenance, not the
+		// caller's: a later reader has only the record to go on.
+		const stored = (await store.get("proof", result.structuredContent.proof_id, { changeId: change.id, attemptId: attempt.id })).record;
+		assert.equal(stored.provenance.attested_by, "caller", "the caller's attestation was stored");
+		assert.equal(stored.provenance.source, "mcp:tool-call", "the caller's source was stored");
+		assert.equal(stored.provenance.tool_call_id, undefined, "a forged tool_call_id survived into the record");
+	});
+});
+
+test("a proof is filed against the change named in the request, not in the payload", async () => {
+	// A surviving mutation: dropping the `change_id` overwrite let the payload's
+	// own change_id win, filing a proof against a different change.
+	await withWorkspace(async (cwd) => {
+		const store = await openStore(join(cwd, ".codecarto"));
+		const [change, slice, attempt, snapshot, proof] = await Promise.all(
+			["change.json", "slice.json", "attempt.json", "snapshot-candidate.json", "proof.json"].map(readFixture),
+		);
+		for (const record of [change, slice, attempt, snapshot]) await store.put(record);
+
+		const result = await handleChange({
+			cwd,
+			action: "record_proof",
+			change_id: change.id,
+			proof: { ...proof, change_id: "chg_ffffffffffffffffffffffff" },
+		});
+		const stored = (await store.get("proof", result.structuredContent.proof_id, { changeId: change.id, attemptId: attempt.id })).record;
+		assert.equal(stored.change_id, change.id, "the payload's change_id overrode the request's");
+	});
+});
+
+test("the gate discloses the storage boundary, not only the correctness limit", async () => {
+	// F-7's most serious survivor: flipping the reported storage boundary to
+	// "host-enforced" deleted the disclosure that these records are not
+	// protected from the agent whose work they describe — and the test only
+	// checked that SOME limitation matched /semantic correctness/.
+	await withWorkspace(async (cwd) => {
+		const store = await openStore(join(cwd, ".codecarto"));
+		const change = await readFixture("change.json");
+		await store.put(change);
+		const gate = await handleChange({ cwd, action: "gate", change_id: change.id, attempt_id: "att_000000000000000000000001" });
+		const limitations = gate.structuredContent.limitations;
+		assert.ok(
+			limitations.some((l) => /could have been rewritten by the agent/.test(l)),
+			`the storage-boundary disclosure is missing from ${JSON.stringify(limitations)}`,
+		);
+		assert.ok(limitations.some((l) => /semantic correctness/.test(l)));
+	});
+});
+
+test("the mode and baseline a caller supplies are the ones recorded", async () => {
+	// Two surviving mutations: ignoring `mode` (always "feature") and ignoring
+	// `baseline_commit` (always vcs "none").
+	await withWorkspace(async (cwd) => {
+		const store = await openStore(join(cwd, ".codecarto"));
+		const commit = "a".repeat(40);
+		const created = await handleChange({ cwd, action: "create", title: "Modes", outcome: "o", mode: "migration", baseline_commit: commit });
+		const record = (await store.get("change", created.structuredContent.change_id)).record;
+		assert.equal(record.mode, "migration", "the supplied mode was ignored");
+		assert.equal(record.baseline.vcs, "git", "a supplied commit did not produce a git baseline");
+		assert.equal(record.baseline.head, commit, "the supplied commit was not recorded");
+
+		const without = await handleChange({ cwd, action: "create", title: "No baseline", outcome: "o" });
+		const bare = (await store.get("change", without.structuredContent.change_id)).record;
+		assert.equal(bare.baseline.vcs, "none", "a change with no commit claimed a git baseline");
+	});
+});

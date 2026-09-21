@@ -53,6 +53,24 @@ import type { EngineeringStore } from "./store.ts";
 const ALWAYS_STATED_LIMITATION =
 	"gates establish that recorded checks passed and recorded objections were closed against these bytes; semantic correctness remains a review and test claim";
 
+/**
+ * Disclosures about where the records live, which hold on every path.
+ *
+ * Neither depends on reading a record, so both are stated even when the
+ * evaluation stops early.
+ */
+function pushStorageLimitations(limitations: string[], request: GateRequest): void {
+	if (request.host.storage.boundary !== "host-enforced") {
+		limitations.push(
+			"the engineering namespace is not protected from agent tools, so these records could have been rewritten by the agent whose work they describe",
+		);
+	} else if (request.host.storage.protection !== undefined && request.host.storage.protection !== "continuous-since-initialization") {
+		limitations.push(
+			`the namespace's protection history is ${safeText(request.host.storage.protection)}: it held records while unprotected, and no timestamp inside a record can show it was not written then`,
+		);
+	}
+}
+
 /** Why acceptance cannot be offered, and what would clear it. */
 export interface GateBlocker {
 	/** Stable identifier for the rule that fired, so callers can branch without parsing prose. */
@@ -179,6 +197,10 @@ export async function evaluateAcceptanceGate(store: EngineeringStore, request: G
 		// module promises to make unconditionally was missing from exactly the
 		// outcomes a confused caller is most likely to be reading.
 		limitations.push(ALWAYS_STATED_LIMITATION);
+		// The storage boundary does not depend on any record, so it belongs here
+		// too. Hiding it when a record is missing disclosed least precisely when
+		// the caller understands the situation least.
+		pushStorageLimitations(limitations, request);
 		return {
 			state: "refused",
 			blockers: [
@@ -473,15 +495,7 @@ export async function evaluateAcceptanceGate(store: EngineeringStore, request: G
 	}
 
 	// ---- disclosures that narrow the meaning without forbidding acceptance ----
-	if (request.host.storage.boundary !== "host-enforced") {
-		limitations.push(
-			"the engineering namespace is not protected from agent tools, so these records could have been rewritten by the agent whose work they describe",
-		);
-	} else if (request.host.storage.protection !== undefined && request.host.storage.protection !== "continuous-since-initialization") {
-		limitations.push(
-			`the namespace's protection history is ${safeText(request.host.storage.protection)}: it held records while unprotected, and no timestamp inside a record can show it was not written then`,
-		);
-	}
+	pushStorageLimitations(limitations, request);
 	if (policy === "cooperative") {
 		limitations.push("this evaluation ran under the cooperative policy, in which caller-reported claims may discharge obligations");
 	}
