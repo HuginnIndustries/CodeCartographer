@@ -132,18 +132,26 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	}
 	const dir = join(REPO_ROOT, "core", "engineering");
 	const files = (await readdir(dir)).filter((n) => n.endsWith(".ts")).sort();
-	assert.deepEqual(files, ["digest.ts", "ids.ts", "index.ts", "planning.ts", "snapshots.ts", "store.ts", "types.ts", "validation.ts"]);
+	assert.deepEqual(files, ["digest.ts", "ids.ts", "index.ts", "planning.ts", "proofs.ts", "snapshots.ts", "store.ts", "types.ts", "validation.ts"]);
 	// snapshots (E03) sits beside validation: both consume types/ids/digest and
 	// neither imports the other. store (E02) sits above both: it is the one
 	// file here that is ALLOWED to touch the filesystem, because persisting
 	// records is its entire job, and it consumes the pure layers below it.
 	// planning (E04) sits with validation and snapshots: it consumes types and
 	// produces markdown, reads no filesystem, and imports neither sibling.
-	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, store: 3, index: 4 };
+	// proofs (E05) sits ABOVE the store, because ingestion is defined in terms
+	// of persisted state: it reads the attempt, slice, and snapshot a proof
+	// binds to before accepting it.
+	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, store: 3, proofs: 4, index: 5 };
 	// Everything except the store must stay pure. Splitting the rule rather
 	// than dropping it: a validator that gained a `node:fs` import would
 	// still fail, which is the property this test was written for.
-	const PURE = files.filter((f) => !["index.ts", "store.ts"].includes(f));
+	// Two files may touch the filesystem, for different reasons: the store
+	// persists records, and proofs resolves an artifact's storage slot to
+	// check a `retained` claim. Everything else stays pure, and the rule still
+	// bites — a validator that gained a `node:fs` import would still fail.
+	const IMPURE = ["index.ts", "store.ts", "proofs.ts"];
+	const PURE = files.filter((f) => !IMPURE.includes(f));
 	for (const file of files) {
 		const source = await readFile(join(dir, file), "utf8");
 		const name = file.slice(0, -3);
@@ -153,13 +161,13 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 				const dep = target.slice(2, -3);
 				assert.ok(layer[dep] < layer[name], `${file} imports ${target}, which is not below it`);
 				assert.notEqual(dep, "index", `${file} imports the barrel`);
-			} else if (name === "store") {
+			} else if (name === "store" || name === "proofs") {
 				// The store may reach the filesystem and the shared primitives it
 				// would otherwise reimplement: atomic write, transient-error
 				// retry, and the workspace lock.
 				assert.ok(
 					["node:fs/promises", "node:path", "../utils.ts", "../status.ts"].includes(target),
-					`${file} imports ${target}; the store may only use fs, path, and the shared write/lock primitives`,
+					`${file} imports ${target}; the store and proofs may only use fs, path, and the shared write/lock primitives`,
 				);
 			} else if (name !== "index") {
 				// The only Node modules the contract may touch: hashing and
