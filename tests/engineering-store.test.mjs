@@ -268,3 +268,81 @@ test("a success projection cannot name an observation that was not published", a
 		);
 	});
 });
+
+// --- Found in adversarial review of the first implementation ------------
+// Each case below passed on the version that shipped for review. They are
+// regressions, not hypotheticals.
+
+test("a revision may only move forward", async () => {
+	// The blocking finding. The check rejected an EQUAL revision but let a
+	// LOWER one through, which turns compare-and-swap into an ABA race:
+	// roll the record back to 1, and every writer still holding
+	// `ifRevision: 1` — including one stalled since before the intervening
+	// updates — passes its check and overwrites work it never saw. No error
+	// is reported to anyone.
+	await withStore(async (store) => {
+		const created = await store.put(changeRecord(CHANGE_A, "v1"));
+		await store.put(changeRecord(CHANGE_A, "v2", { revision: 2 }), { ifRevision: created.revision });
+		await store.put(changeRecord(CHANGE_A, "v3", { revision: 3 }), { ifRevision: 2 });
+
+		await assert.rejects(
+			() => store.put(changeRecord(CHANGE_A, "rolled back", { revision: 1 }), { ifRevision: 3 }),
+			(error) => error.code === "invalid-value",
+			"a lower revision must be refused",
+		);
+		await assert.rejects(
+			() => store.put(changeRecord(CHANGE_A, "same revision", { revision: 3 }), { ifRevision: 3 }),
+			(error) => error.code === "invalid-value",
+			"an equal revision must be refused too",
+		);
+
+		// The record still stands at 3, so the stale writer stays stale.
+		const current = await store.get("change", CHANGE_A);
+		assert.equal(current.record.title, "v3");
+		await assert.rejects(
+			() => store.put(changeRecord(CHANGE_A, "stale writer", { revision: 2 }), { ifRevision: 1 }),
+			(error) => error.code === "stale-revision",
+		);
+	});
+});
+
+test("a symlinked record is refused on read, not followed out of the namespace", async () => {
+	// Writes survived this (rename replaces a link rather than following
+	// it), which is exactly why checking only the write path missed it:
+	// reads were escaping while writes were contained. `get` returned the
+	// outside file's contents and `listChanges` called the change healthy.
+	await withStore(async (store, root) => {
+		const outside = join(root, "outside.json");
+		await writeFile(outside, JSON.stringify(changeRecord(CHANGE_A, "content from outside", { revision: 9 })), "utf8");
+		const dir = join(root, ".codecarto", ENGINEERING_NAMESPACE, "changes", CHANGE_A);
+		await mkdir(dir, { recursive: true });
+		await symlink(outside, join(dir, "change.json"));
+
+		await assert.rejects(
+			() => store.get("change", CHANGE_A),
+			(error) => error.code === "invalid-path",
+			"a record that is itself a symlink out of the namespace must not be read",
+		);
+		const listed = await store.listChanges();
+		assert.equal(listed.length, 1);
+		assert.equal(listed[0].corrupt, true, "and it is reported corrupt rather than healthy");
+	});
+});
+
+test("one idempotency key cannot serve two changes, even concurrently", async () => {
+	// The key is GLOBAL but the change lock is not, so two puts to different
+	// changes sharing a key never serialized: both wrote, no conflict was
+	// reported, and the surviving receipt named only one of them — so a
+	// retry of the other re-executed it.
+	await withStore(async (store) => {
+		const outcomes = await Promise.allSettled([
+			store.put(changeRecord(CHANGE_A, "change A"), { idempotencyKey: "shared" }),
+			store.put(changeRecord(CHANGE_B, "change B"), { idempotencyKey: "shared" }),
+		]);
+		const wrote = outcomes.filter((o) => o.status === "fulfilled");
+		const conflicts = outcomes.filter((o) => o.status === "rejected" && o.reason.code === "idempotency-conflict");
+		assert.equal(wrote.length, 1, "exactly one write happens");
+		assert.equal(conflicts.length, 1, "and the other is told the key is taken");
+		assert.equal((await store.listChanges()).length, 1, "only one change exists");
+	});
+});

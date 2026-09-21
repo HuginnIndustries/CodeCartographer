@@ -178,10 +178,17 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 		if (rel.startsWith("..") || rel.startsWith(`${sep}..`) || resolve(realRoot, rel) !== absolute) {
 			throw new StoreError("invalid-path", `path escapes the engineering namespace: ${relativePath}`, relativePath);
 		}
-		// A symlink anywhere along an EXISTING prefix redirects the write even
-		// though the textual path looks fine, so the deepest existing ancestor
-		// is resolved and re-checked.
-		let probe = dirname(absolute);
+		// A symlink anywhere along an EXISTING prefix redirects the access
+		// even though the textual path looks fine, so the deepest existing
+		// ancestor is resolved and re-checked.
+		//
+		// The LEAF is included, not just its parent: a `change.json` that is
+		// itself a symlink to a file outside the namespace was read straight
+		// through by `get`, and `listChanges` reported the change healthy.
+		// Writes happened to survive it (rename replaces the link rather than
+		// following it), which is exactly why checking only the write path
+		// missed this — reads were escaping while writes were contained.
+		let probe = absolute;
 		for (;;) {
 			try {
 				const real = await realpath(probe);
@@ -249,6 +256,27 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 			const mutable = MUTABLE_PROJECTIONS.has(record.kind);
 			const revisionOf = (value: unknown): number | undefined => (value as { revision?: number } | null)?.revision;
 
+			const absolute = await resolveInside(recordPath(record.kind, record.id, contextOf(stored)));
+			// The compare and the write must not be separable: two writers
+			// reading revision 1 concurrently would both find their
+			// ifRevision satisfied and both write, and the store would report
+			// two winners for one revision.
+			const owningChange = contextOf(stored).changeId ?? record.id;
+			await mkdir(await resolveInside(engineeringPaths.changesRoot()), { recursive: true });
+			// An idempotency key is GLOBAL while the change lock is not, so two
+			// puts to DIFFERENT changes sharing one key never serialized and
+			// both wrote: the conflict went unreported and the surviving
+			// receipt named only one of them, so retrying the other re-ran it.
+			// The key is locked first and always in that order, so the two
+			// locks cannot deadlock against each other.
+			let keyLock: Awaited<ReturnType<typeof acquireLock>> | null = null;
+			if (options.idempotencyKey !== undefined) {
+				// Validates the key before it is used as a file name.
+				const keyPath = await idempotencyPath(options.idempotencyKey);
+				await mkdir(dirname(keyPath), { recursive: true });
+				keyLock = await acquireLock(`${keyPath.slice(0, -5)}.lock`, { timeoutMs: 10_000 });
+			}
+			try {
 			if (options.idempotencyKey !== undefined) {
 				const keyPath = await idempotencyPath(options.idempotencyKey);
 				const existing = await readFile(keyPath, "utf8").catch(() => null);
@@ -266,14 +294,6 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 					return { id: remembered.id, revision: remembered.revision, replayed: true };
 				}
 			}
-
-			const absolute = await resolveInside(recordPath(record.kind, record.id, contextOf(stored)));
-			// The compare and the write must not be separable: two writers
-			// reading revision 1 concurrently would both find their
-			// ifRevision satisfied and both write, and the store would report
-			// two winners for one revision.
-			const owningChange = contextOf(stored).changeId ?? record.id;
-			await mkdir(await resolveInside(engineeringPaths.changesRoot()), { recursive: true });
 			const lock = await acquireLock(await resolveInside(join(engineeringPaths.changesRoot(), `${owningChange}.lock`)));
 			try {
 			const current = await readFile(absolute, "utf8").catch(() => null);
@@ -294,8 +314,15 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 				if (options.ifRevision !== currentRevision) {
 					throw new StoreError("stale-revision", `expected revision ${options.ifRevision} but the stored record is at ${currentRevision}`, absolute);
 				}
-				if (revisionOf(stored) === currentRevision) {
-					throw new StoreError("invalid-value", `a replacement must advance revision past ${currentRevision}`, absolute);
+				// Strictly greater, not merely different. Accepting a LOWER
+				// revision turns compare-and-swap into an ABA race: roll the
+				// stored record back to 1 and every writer still holding
+				// `ifRevision: 1` — including one stalled since before the
+				// intervening updates — passes its check and overwrites work
+				// it never saw, with no error reported to anyone.
+				const proposed = revisionOf(stored);
+				if (typeof proposed !== "number" || proposed <= (currentRevision ?? 0)) {
+					throw new StoreError("invalid-value", `a replacement must advance revision past ${currentRevision}, got ${proposed}`, absolute);
 				}
 			} else if (options.ifRevision !== undefined) {
 				throw new StoreError("not-found", `cannot replace ${record.kind} ${record.id}: it does not exist`, absolute);
@@ -317,6 +344,9 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 			return { id: record.id, revision, replayed: false };
 			} finally {
 				await lock.release();
+			}
+			} finally {
+				await keyLock?.release();
 			}
 		},
 
