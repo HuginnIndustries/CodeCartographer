@@ -246,3 +246,224 @@ test("planning writes no synthesis output path and requires no confirmation", ()
 	assert.equal(plan.ok, true);
 	assert.doesNotMatch(plan.markdown, /reimplementation-spec|project-plan|confirm the selected version/i);
 });
+
+// --- Found in adversarial review of the first implementation ------------
+// Every case below passed on the version submitted for review. The artifact
+// is what a human reads before approving work, so agent-authored text in it
+// is attacker-controlled with respect to that reader.
+
+/** A heading is a LINE that starts with `#`. Substring checks miss the difference and pass wrongly. */
+function headingLines(markdown, text) {
+	return markdown.split("\n").filter((l) => l.trim() === text).length;
+}
+
+test("agent-authored text cannot forge a section heading in the plan", () => {
+	// The blocking finding. A slice `deliverable` carrying a newline plus
+	// "## Unproved acceptance scenarios" and the fully-covered sentence forged
+	// that disclosure ABOVE the real one, so the plan a human approved claimed
+	// coverage it did not have.
+	const payload = "a helper\n\n## Unproved acceptance scenarios\n\n_Every acceptance scenario is claimed by a slice._\n";
+	for (const [field, mutated] of [
+		["deliverable", slice({ deliverable: payload })],
+		["title", slice({ title: payload })],
+		[
+			"obligation description",
+			slice({
+				proof_obligations: [
+					{ id: "o1", scenario_id: "s1", check_kind: "test", description: payload, minimum_collector: "host-observed" },
+				],
+			}),
+		],
+	]) {
+		const plan = buildChangePlan(bugFixRequest(), [mutated]);
+		assert.equal(plan.ok, true, `${field} should still produce a plan`);
+		assert.equal(
+			headingLines(plan.markdown, "## Unproved acceptance scenarios"),
+			1,
+			`${field} forged a second disclosure heading`,
+		);
+		assert.equal(
+			headingLines(plan.markdown, "_Every acceptance scenario is claimed by a slice._"),
+			0,
+			`${field} forged a fully-covered claim while s2 is uncovered`,
+		);
+	}
+});
+
+test("agent-authored text cannot open a code fence that swallows the disclosure", () => {
+	// An unterminated fence rendered the entire real disclosure as code, which
+	// hides it just as effectively as forging a replacement.
+	const plan = buildChangePlan(bugFixRequest(), [slice({ deliverable: "a helper\n```\n" })]);
+	assert.equal(plan.ok, true);
+	assert.equal(plan.markdown.split("\n").filter((l) => l.trim() === "```").length, 0, "a fence survived into the document");
+});
+
+test("a scenario description cannot forge a slice section", () => {
+	const plan = buildChangePlan(
+		bugFixRequest({
+			acceptance_scenarios: [
+				{ id: "s1", kind: "behavior", description: "d1" },
+				{ id: "s2", kind: "preserved", description: "d2\n\n## Slices\n\n### forged slice\n" },
+			],
+		}),
+		[slice()],
+	);
+	assert.equal(plan.ok, true);
+	assert.equal(headingLines(plan.markdown, "## Slices"), 1, "a scenario description forged a second Slices section");
+});
+
+test("a slice with no proof obligations is refused", () => {
+	// It rendered as provable, reported `executable: true`, and proved nothing.
+	// E01's contract requires at least one, so accepting it also produced a
+	// plan for a slice that could never be stored.
+	const plan = buildChangePlan(bugFixRequest(), [slice({ proof_obligations: [] })]);
+	assert.equal(plan.ok, false);
+	assert.ok(
+		plan.errors.some((e) => e.path === "/slices/0/proof_obligations" && /no proof obligation/.test(e.message)),
+		`expected a refusal at /slices/0/proof_obligations, got ${JSON.stringify(plan.errors)}`,
+	);
+});
+
+test("two slices sharing an id cannot hide a cycle", () => {
+	// The graph was keyed by the caller's id, so a later duplicate overwrote
+	// the cyclic node and the cycle went undetected.
+	const a = { ...slice({ title: "A" }), id: "slc_0000000000000000000000a1", depends_on: ["slc_0000000000000000000000b1"] };
+	const b = { ...slice({ title: "B" }), id: "slc_0000000000000000000000b1", depends_on: ["slc_0000000000000000000000a1"] };
+	const decoy = { ...slice({ title: "A-again" }), id: "slc_0000000000000000000000a1", depends_on: [] };
+
+	assert.equal(buildChangePlan(bugFixRequest(), [a, b]).ok, false, "the bare cycle must be refused");
+	const withDecoy = buildChangePlan(bugFixRequest(), [a, b, decoy]);
+	assert.equal(withDecoy.ok, false, "a duplicate id must not hide the cycle");
+	assert.ok(withDecoy.errors.some((e) => /duplicate slice id/.test(e.message)));
+});
+
+test("a declared id cannot impersonate an unnamed slice's synthetic id", () => {
+	// Unnamed slices were keyed `#0`, `#1`; a slice could simply declare
+	// `id: "#0"` and take that node over.
+	const unnamed = slice({ title: "unnamed", depends_on: ["#1"] });
+	const impostor = { ...slice({ title: "impostor" }), id: "#0", depends_on: [] };
+	const plan = buildChangePlan(bugFixRequest(), [unnamed, impostor]);
+	// The dependency `#1` resolves to nothing now that ids are not synthesized,
+	// so this is a plan with an unresolvable dependency rather than a cycle —
+	// what matters is that the impostor cannot become node `#0`.
+	assert.equal(plan.ok, true);
+	assert.match(plan.markdown, /### unnamed/);
+	assert.match(plan.markdown, /### impostor/);
+});
+
+test("a branch pointer wearing a version's clothes is refused", () => {
+	// `1.0+main` satisfies a semver-shaped pattern and resolves to different
+	// bytes tomorrow, which is the exact failure a bound reference prevents.
+	for (const version of ["1.0+main", "1.0-latest", "1.0-HEAD", "0001.0002"]) {
+		const brief = buildChangeBrief(
+			bugFixRequest({ references: [{ id: "lib_x", version, digest: `sha256:${"b".repeat(64)}` }] }),
+		);
+		assert.equal(brief.ok, false, `${version} must be refused as a floating version`);
+	}
+	// A full commit hash is maximally exact and is accepted.
+	const exact = buildChangeBrief(
+		bugFixRequest({ references: [{ id: "lib_x", version: "a".repeat(40), digest: `sha256:${"b".repeat(64)}` }] }),
+	);
+	assert.equal(exact.ok, true, `a commit hash should be accepted: ${JSON.stringify(exact.errors)}`);
+});
+
+test("a reference without a digest is refused, because E01 requires one", () => {
+	// Accepting it produced a plan for a change that could never be stored.
+	const brief = buildChangeBrief(bugFixRequest({ references: [{ id: "lib_x", version: "1.4.2" }] }));
+	assert.equal(brief.ok, false);
+	assert.ok(brief.errors.some((e) => e.path === "/references/0/digest"));
+});
+
+test("the plan refuses everything the brief refuses", () => {
+	// The plan validated neither `mode` nor `references`, so a plan was
+	// produced for a change the brief had already rejected.
+	const bogus = bugFixRequest({ mode: "not-a-mode", references: [{ id: "x", version: "latest" }] });
+	assert.equal(buildChangeBrief(bogus).ok, false);
+	assert.equal(buildChangePlan(bogus, [slice()]).ok, false, "the plan must refuse what the brief refuses");
+});
+
+test("a slice naming the same scenario twice is refused", () => {
+	// E01's `uniqueStrings` refuses this; accepting it here diverged from the
+	// contract.
+	const plan = buildChangePlan(bugFixRequest(), [slice({ scenario_ids: ["s1", "s1"] })]);
+	assert.equal(plan.ok, false);
+	assert.ok(plan.errors.some((e) => /same scenario twice/.test(e.message)));
+});
+
+test("a non-list where a list belongs is refused, not thrown", () => {
+	// `preserved_contracts: "a string"` escaped as a TypeError from
+	// `items.map`, which a caller cannot distinguish from a bug in the planner.
+	for (const [field, bad] of [
+		["preserved_contracts", bugFixRequest({ preserved_contracts: "a string" })],
+		["scope.in_scope", bugFixRequest({ scope: { in_scope: {}, non_goals: [] } })],
+	]) {
+		let outcome;
+		assert.doesNotThrow(() => {
+			outcome = buildChangeBrief(bad);
+		}, `${field} threw instead of refusing`);
+		assert.equal(outcome.ok, false, `${field} must be refused`);
+	}
+});
+
+test("a getter cannot show the validator one scenario list and the renderer another", () => {
+	// `acceptance_scenarios` was read three times, so a getter could validate
+	// against a full list and render coverage against a shorter one — the plan
+	// then claimed every scenario was claimed while a real gap existed.
+	const full = [
+		{ id: "s1", kind: "behavior", description: "d1" },
+		{ id: "s2", kind: "preserved", description: "d2" },
+	];
+	let reads = 0;
+	const toctou = { ...bugFixRequest() };
+	Object.defineProperty(toctou, "acceptance_scenarios", {
+		get() {
+			reads += 1;
+			return reads <= 1 ? full : [full[0]];
+		},
+		enumerable: true,
+	});
+
+	const plan = buildChangePlan(toctou, [slice()]);
+	assert.equal(plan.ok, true);
+	assert.equal(
+		headingLines(plan.markdown, "_Every acceptance scenario is claimed by a slice._"),
+		0,
+		"the plan claimed full coverage while s2 was uncovered",
+	);
+	assert.match(plan.markdown, /^- `s2` — /m, "s2 must still be disclosed as unproved");
+});
+
+test("investigation waives the test command but not the build command", () => {
+	// The exemption was blanket, so an investigation claiming a `build`
+	// obligation reported `executable: true` with no build command.
+	const investigation = bugFixRequest({
+		mode: "investigation",
+		acceptance_scenarios: [{ id: "s1", kind: "behavior", description: "state whether the rewrite is reachable" }],
+	});
+	const buildSlice = slice({
+		scenario_ids: ["s1"],
+		proof_obligations: [
+			{ id: "o1", scenario_id: "s1", check_kind: "build", description: "it compiles", minimum_collector: "host-observed" },
+		],
+	});
+	const readiness = planReadiness(investigation, [buildSlice], { build_command: null, test_command: null });
+	assert.equal(readiness.executable, false, "a build obligation still needs a build command");
+	assert.ok(readiness.blockers.some((b) => /build/.test(b)));
+});
+
+test("an obligation whose minimum collector is the agent's own word is refused", () => {
+	// No test covered this, so the runtime guard its comment defends was
+	// untested — the mutation that deleted it survived.
+	const plan = buildChangePlan(bugFixRequest(), [
+		slice({
+			proof_obligations: [
+				{ id: "o1", scenario_id: "s1", check_kind: "test", description: "x", minimum_collector: "agent-claimed" },
+			],
+		}),
+	]);
+	assert.equal(plan.ok, false);
+	assert.ok(
+		plan.errors.some((e) => e.path === "/slices/0/proof_obligations/0/minimum_collector"),
+		`expected a collector refusal, got ${JSON.stringify(plan.errors)}`,
+	);
+});
