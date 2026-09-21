@@ -112,6 +112,7 @@ import {
 	writeLibraryConfig,
 	writeDashboard,
 } from "../core/index.ts";
+import { createChangeHandler, ENGINEERING_TOOLS } from "./engineering.ts";
 import { applyAmendment } from "../core/amendment.ts";
 import { appendUsageRun } from "../core/usage.ts";
 import { initLibrary } from "../core/library.ts";
@@ -1927,7 +1928,22 @@ const TOOLS = [
 	},
 ] as const;
 
+const handleChange = createChangeHandler({
+	validateCwd,
+	requireWorkspaceDir: async (cwd: string) => {
+		// Reuses the server's own refusal so an uninitialized workspace gives
+		// the same message here as everywhere else.
+		await requireWorkspace(cwd);
+		return join(cwd, ".codecarto");
+	},
+	textResult,
+});
+
+/** The registered handler, exported so tests drive the instance a client reaches. */
+export const handleChangeForTest = handleChange;
+
 const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
+	codecarto_change: handleChange,
 	codecarto_amend: handleAmend,
 	codecarto_init: handleInit,
 	codecarto_refresh_scaffold: handleRefreshScaffold,
@@ -1972,7 +1988,12 @@ export function buildServer() {
 		{ capabilities: { tools: {} } },
 	);
 
-	server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS as unknown as typeof TOOLS[number][] }));
+	// The engineering surface is appended rather than interleaved: it is
+	// experimental, and a host diffing the inventory should see exactly one
+	// addition at the end rather than a reshuffle of the analysis tools.
+	server.setRequestHandler(ListToolsRequestSchema, async () => ({
+		tools: [...TOOLS, ...ENGINEERING_TOOLS] as unknown as typeof TOOLS[number][],
+	}));
 
 	server.setRequestHandler(CallToolRequestSchema, async (request) => {
 		const handler = HANDLERS[request.params.name];
