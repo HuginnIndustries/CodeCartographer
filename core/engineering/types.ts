@@ -173,6 +173,9 @@ export type ObjectionSeverity = (typeof OBJECTION_SEVERITIES)[number];
 
 /** `deferred` keeps a blocking objection blocking; only `resolved` (with evidence) or `withdrawn` clears it. */
 export const OBJECTION_DISPOSITIONS = ["open", "resolved", "withdrawn", "deferred"] as const;
+/** How one instance of a swept defect class was handled (R11). */
+export const SWEEP_DISPOSITIONS = ["closed", "out-of-scope"] as const;
+export type SweepDisposition = (typeof SWEEP_DISPOSITIONS)[number];
 export type ObjectionDisposition = (typeof OBJECTION_DISPOSITIONS)[number];
 
 export const APPROVAL_DECISIONS = ["accepted", "rejected"] as const;
@@ -532,11 +535,12 @@ export interface ReviewObjection {
 export interface ClassSweep {
 	/** The kind of defect, not the instance. "Inputs reaching the digest unvalidated", not "repository was unvalidated". */
 	class_statement: string;
+	/** Each locus appears once: listing one place repeatedly is not enumeration. */
 	instances: Array<{
 		/** Where this instance lives — a field path, identifier, or file path. */
 		locus: string;
 		/** `closed` in this change, or `out-of-scope` with a recorded reason. Nothing else is a complete answer. */
-		disposition: "closed" | "out-of-scope";
+		disposition: SweepDisposition;
 		/** Required when `out-of-scope`: why not now, and where it is tracked. */
 		note?: string;
 	}>;

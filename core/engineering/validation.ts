@@ -46,6 +46,7 @@ import {
 	JSONRPC_REQUEST_TIMEOUT_CODE,
 	MUTATING_CHANGE_ACTIONS,
 	OBJECTION_DISPOSITIONS,
+	SWEEP_DISPOSITIONS,
 	OBJECTION_SEVERITIES,
 	OBSERVED_COLLECTORS,
 	OBSERVING_ATTESTATIONS,
@@ -651,47 +652,40 @@ const REVIEWER_SHAPE: Shape = {
 	note: opt(nonEmptyString),
 };
 
-/**
- * R11's class sweep. Fails closed on the shapes that would let it be
- * satisfied without doing the work: an empty instance list (a sweep that
- * enumerated nothing), or an `out-of-scope` instance with no reason (which
- * is an assertion, not an answer).
- */
-const classSweep: Check = (value, path, errors) => {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) {
-		errors.fail(path, "invalid-type", "expected an object");
-		return;
-	}
-	const sweep = value as Record<string, unknown>;
-	nonEmptyString(sweep.class_statement, at(path, "class_statement"), errors);
-	const instances = sweep.instances;
-	if (!Array.isArray(instances)) {
-		errors.fail(at(path, "instances"), "invalid-type", "expected an array");
-		return;
-	}
-	if (instances.length === 0) {
-		errors.fail(at(path, "instances"), "invalid-value", "a sweep that enumerated no instances is not a sweep");
-		return;
-	}
-	for (const [i, raw] of instances.entries()) {
-		const where = at(at(path, "instances"), i);
-		if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-			errors.fail(where, "invalid-type", "expected an object");
-			continue;
-		}
-		const instance = raw as Record<string, unknown>;
-		nonEmptyString(instance.locus, at(where, "locus"), errors);
-		if (instance.disposition !== "closed" && instance.disposition !== "out-of-scope") {
-			errors.fail(at(where, "disposition"), "invalid-value", "expected `closed` or `out-of-scope`");
-			continue;
-		}
-		// Declaring something out of scope without saying why is the failure
-		// mode this whole check exists to prevent.
-		if (instance.disposition === "out-of-scope") {
-			nonEmptyString(instance.note, at(where, "note"), errors);
-		}
-	}
+const SWEPT_INSTANCE_SHAPE: Shape = {
+	locus: req(nonEmptyString),
+	disposition: req(oneOf(SWEEP_DISPOSITIONS)),
+	note: opt(nonEmptyString),
 };
+
+const sweptInstance: Check = objectOf(SWEPT_INSTANCE_SHAPE, (instance, path, errors) => {
+	// Declaring something out of scope without saying why is an assertion,
+	// not an answer — the exact evasion this check exists to refuse.
+	requiredWhen(instance, path, "note", instance.disposition === "out-of-scope", "when disposition is out-of-scope", errors);
+});
+
+const CLASS_SWEEP_SHAPE: Shape = {
+	class_statement: req(nonEmptyString),
+	// A sweep that enumerated nothing is not a sweep.
+	instances: req(arrayOf(sweptInstance, { nonEmpty: true })),
+};
+
+/**
+ * R11's class sweep. Routed through `objectOf` rather than hand-rolled, so it
+ * inherits the same guarantees every other object in this schema has: plain
+ * objects only, and no keys beyond the shape.
+ *
+ * That matters more here than it looks. A prototype-backed object passed a
+ * hand-rolled `typeof value === "object"` test, validated `ok: true`, and
+ * then serialized to `{}` — a record that validated and was stored with the
+ * sweep silently gone. A validator whose verdict does not survive the write
+ * is not validating the thing that gets persisted.
+ */
+const classSweep: Check = objectOf(CLASS_SWEEP_SHAPE, (sweep, path, errors) => {
+	// Listing one place five times is "enumerating the surface" in exactly
+	// the way the gate is meant to refuse.
+	uniqueBy(sweep.instances, at(path, "instances"), "locus", errors);
+});
 
 const OBJECTION_SHAPE: Shape = {
 	id: req(localId),
