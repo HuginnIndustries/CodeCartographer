@@ -346,3 +346,99 @@ test("the surface introduces no execution, no target-code write, and no network 
 		);
 	}
 });
+
+// --- Added after a second mutation round -----------------------------------
+// Six mutations survived: update's writes, show's reported state, the
+// whitespace check, the retried flag, and the proof type guard. The update
+// tests asserted only the REFUSAL path, so a version of update that stored
+// nothing at all would have passed.
+
+test("an update actually writes the fields it reports", async () => {
+	await withWorkspace(async (cwd) => {
+		const created = await handleChange({ cwd, action: "create", title: "Before", outcome: "old outcome" });
+		const changeId = created.structuredContent.change_id;
+
+		const updated = await handleChange({
+			cwd,
+			action: "update",
+			change_id: changeId,
+			revision: created.structuredContent.revision,
+			title: "After",
+			outcome: "new outcome",
+		});
+		assert.equal(updated.structuredContent.revision, created.structuredContent.revision + 1, "the revision did not advance");
+
+		// Read it back through a separate call: the write must be durable, not
+		// merely reported.
+		const shown = await handleChange({ cwd, action: "show", change_id: changeId });
+		assert.equal(shown.structuredContent.title, "After", "the title was reported as updated but not stored");
+		assert.equal(shown.structuredContent.requested_outcome, "new outcome", "the outcome was reported as updated but not stored");
+		assert.equal(shown.structuredContent.revision, created.structuredContent.revision + 1);
+	});
+});
+
+test("an update omitting a field leaves it alone rather than clearing it", async () => {
+	await withWorkspace(async (cwd) => {
+		const created = await handleChange({ cwd, action: "create", title: "Keep me", outcome: "keep this too" });
+		const changeId = created.structuredContent.change_id;
+		await handleChange({ cwd, action: "update", change_id: changeId, revision: created.structuredContent.revision, title: "Changed" });
+		const shown = await handleChange({ cwd, action: "show", change_id: changeId });
+		assert.equal(shown.structuredContent.title, "Changed");
+		assert.equal(shown.structuredContent.requested_outcome, "keep this too", "an omitted field was overwritten");
+	});
+});
+
+test("show reports the record's real state, not a fixed label", async () => {
+	// A `show` that hardcoded "draft" would be indistinguishable from a working
+	// one on a freshly created change, so this seeds a record whose state is
+	// something else.
+	await withWorkspace(async (cwd) => {
+		const store = await openStore(join(cwd, ".codecarto"));
+		const change = await readFixture("change.json");
+		assert.notEqual(change.state, "draft", "the fixture must not be in the state a stub would report");
+		await store.put(change);
+		const shown = await handleChange({ cwd, action: "show", change_id: change.id });
+		assert.equal(shown.structuredContent.state, change.state, "show reported a state the record does not have");
+		assert.ok(shown.content[0].text.includes(change.state));
+	});
+});
+
+test("a blank or whitespace-only required field is refused", async () => {
+	// "   " is not a title. Accepting it would store a record that satisfies
+	// every downstream shape check while carrying no information.
+	await withWorkspace(async (cwd) => {
+		for (const blank of ["", "   ", "\t", "\n"]) {
+			await assert.rejects(
+				() => handleChange({ cwd, action: "create", title: blank, outcome: "something" }),
+				(error) => error instanceof McpError && /title/.test(error.message),
+				`a title of ${JSON.stringify(blank)} was accepted`,
+			);
+		}
+	});
+});
+
+test("a retry reports that it was a replay, not a fresh write", async () => {
+	// The `retried` flag is how a caller distinguishes "I created this" from
+	// "this already existed". Hardcoding it to false survived before.
+	await withWorkspace(async (cwd) => {
+		const args = { cwd, action: "create", title: "Idempotent", outcome: "one change only", request_id: "req-retry-1" };
+		const first = await handleChange({ ...args });
+		const second = await handleChange({ ...args });
+		assert.equal(first.structuredContent.change_id, second.structuredContent.change_id, "a retry minted a second change");
+		assert.equal(first.structuredContent.retried, false, "a first write claimed to be a replay");
+		assert.equal(second.structuredContent.retried, true, "a replay was reported as a fresh write");
+	});
+});
+
+test("a proof that is not an object is refused", async () => {
+	await withWorkspace(async (cwd) => {
+		const created = await handleChange({ cwd, action: "create", title: "Proof shape", outcome: "o" });
+		for (const bad of ["a string", 42, true, ["an", "array"], null]) {
+			await assert.rejects(
+				() => handleChange({ cwd, action: "record_proof", change_id: created.structuredContent.change_id, proof: bad }),
+				(error) => error instanceof McpError && /proof/.test(error.message),
+				`a proof of ${JSON.stringify(bad)} was accepted`,
+			);
+		}
+	});
+});
