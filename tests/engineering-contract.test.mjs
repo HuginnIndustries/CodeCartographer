@@ -132,12 +132,14 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	}
 	const dir = join(REPO_ROOT, "core", "engineering");
 	const files = (await readdir(dir)).filter((n) => n.endsWith(".ts")).sort();
-	assert.deepEqual(files, ["digest.ts", "ids.ts", "index.ts", "snapshots.ts", "store.ts", "types.ts", "validation.ts"]);
+	assert.deepEqual(files, ["digest.ts", "ids.ts", "index.ts", "planning.ts", "snapshots.ts", "store.ts", "types.ts", "validation.ts"]);
 	// snapshots (E03) sits beside validation: both consume types/ids/digest and
 	// neither imports the other. store (E02) sits above both: it is the one
 	// file here that is ALLOWED to touch the filesystem, because persisting
 	// records is its entire job, and it consumes the pure layers below it.
-	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, store: 3, index: 4 };
+	// planning (E04) sits with validation and snapshots: it consumes types and
+	// produces markdown, reads no filesystem, and imports neither sibling.
+	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, store: 3, index: 4 };
 	// Everything except the store must stay pure. Splitting the rule rather
 	// than dropping it: a validator that gained a `node:fs` import would
 	// still fail, which is the property this test was written for.
