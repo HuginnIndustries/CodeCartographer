@@ -787,3 +787,123 @@ test("the fixture generator is independent of core/engineering/ and reproduces t
 		await rm(scratch, { recursive: true, force: true });
 	}
 });
+
+// --- R11: the class sweep on a review objection --------------------------
+// Three consecutive review rounds closed the reported instance and left a
+// sibling of the same kind one identifier away. The record now carries the
+// sweep, and the validator refuses the shapes that would let it be claimed
+// without being done.
+
+test("a class sweep is refused when it would be satisfiable without doing the work", () => {
+	const review = valid.review;
+	const sweep = (value) => {
+		const candidate = structuredClone(review);
+		candidate.objections[0].class_sweep = value;
+		return validateRecord(candidate);
+	};
+
+	// The honest shape passes.
+	assert.equal(
+		sweep({
+			class_statement: "environment-reachable git configuration sources",
+			instances: [
+				{ locus: "GIT_CONFIG_GLOBAL", disposition: "closed" },
+				{ locus: "GIT_CONFIG_SYSTEM", disposition: "closed" },
+				{ locus: "GIT_CONFIG_COUNT", disposition: "closed" },
+				{ locus: "GIT_CONFIG_PARAMETERS", disposition: "closed" },
+				{ locus: "GIT_TEMPLATE_DIR", disposition: "out-of-scope", note: "not configuration; tracked separately" },
+			],
+		}).ok,
+		true,
+	);
+
+	// A sweep that enumerated nothing is not a sweep.
+	const empty = sweep({ class_statement: "inputs reaching the digest unvalidated", instances: [] });
+	assert.equal(empty.ok, false);
+	// Message comes from the shared `arrayOf({ nonEmpty: true })` combinator
+	// now that this is not hand-rolled; assert the path so the test pins
+	// WHICH field was refused rather than one validator's prose.
+	assert.match(empty.errors[0].message, /at least one entry/);
+	assert.match(empty.errors[0].path, /class_sweep\/instances$/);
+
+	// Declaring an instance out of scope without saying why is an assertion,
+	// not an answer — this is the exact evasion R11 exists to prevent.
+	const unexplained = sweep({
+		class_statement: "inputs reaching the digest unvalidated",
+		instances: [{ locus: "entry.executable", disposition: "out-of-scope" }],
+	});
+	assert.equal(unexplained.ok, false, "out-of-scope without a note must be refused");
+
+	// A closed instance needs no note; only out-of-scope does.
+	assert.equal(
+		sweep({ class_statement: "coerced identity fields", instances: [{ locus: "entry.executable", disposition: "closed" }] }).ok,
+		true,
+	);
+
+	for (const bad of [null, [], "swept", 3]) {
+		assert.equal(sweep(bad).ok, false, `${JSON.stringify(bad)} is not a sweep`);
+	}
+	assert.equal(sweep({ class_statement: "", instances: [{ locus: "x", disposition: "closed" }] }).ok, false, "an unnamed class is not a class");
+	assert.equal(
+		sweep({ class_statement: "c", instances: [{ locus: "x", disposition: "fixed-later" }] }).ok,
+		false,
+		"only closed or out-of-scope are complete answers",
+	);
+
+	// It stays optional: the field's absence is a rubric finding, not a
+	// schema error, so existing records remain valid.
+	assert.equal(validateRecord(review).ok, true, "a review without a sweep is still a valid record");
+});
+
+test("a class sweep is held to the same object rules as every other record field", () => {
+	// Found reviewing the first version of this validator, which was
+	// hand-rolled and skipped the shared object gate. Each case below passed
+	// there.
+	const review = valid.review;
+	const sweep = (value) => {
+		const candidate = structuredClone(review);
+		candidate.objections[0].class_sweep = value;
+		return validateRecord(candidate);
+	};
+	const good = { class_statement: "c", instances: [{ locus: "x", disposition: "closed" }] };
+
+	// The worst of them: a prototype-backed object validated ok:true and then
+	// serialized to `{}`. The record was valid; the bytes written to disk
+	// were not. A verdict that does not survive the write is not a verdict
+	// about the stored record.
+	const prototypeBacked = Object.create(good);
+	assert.equal(sweep(prototypeBacked).ok, false, "a non-plain object must be refused");
+	assert.equal(JSON.stringify(prototypeBacked), "{}", "...because this is what would have been stored");
+
+	// Unknown keys are refused everywhere else in the schema; a typo'd
+	// `dispostion` must not silently mean "nothing was checked".
+	assert.equal(sweep({ ...good, swept: false }).ok, false, "unknown key on the sweep");
+	assert.equal(
+		sweep({ class_statement: "c", instances: [{ locus: "x", disposition: "closed", dispostion: "typo" }] }).ok,
+		false,
+		"unknown key on an instance",
+	);
+	assert.equal(
+		sweep({ class_statement: "c", instances: [Object.create({ locus: "x", disposition: "closed" })] }).ok,
+		false,
+		"an instance whose fields are inherited is not an instance",
+	);
+
+	// Listing one place five times is "enumerating the surface" in exactly
+	// the way R11 exists to refuse.
+	assert.equal(
+		sweep({ class_statement: "c", instances: Array(5).fill({ locus: "same", disposition: "closed" }) }).ok,
+		false,
+		"duplicate loci must be refused",
+	);
+	// Two genuinely different loci remain fine.
+	assert.equal(
+		sweep({ class_statement: "c", instances: [{ locus: "a", disposition: "closed" }, { locus: "b", disposition: "closed" }] }).ok,
+		true,
+	);
+
+	// A note on a `closed` instance is a contradiction: the field means
+	// "why this was NOT done", so carrying it on something that was done
+	// reads as an excuse attached to completed work.
+	assert.equal(sweep({ class_statement: "c", instances: [{ locus: "x", disposition: "closed", note: "actually not done" }] }).ok, false);
+});

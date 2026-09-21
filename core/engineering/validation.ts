@@ -46,6 +46,7 @@ import {
 	JSONRPC_REQUEST_TIMEOUT_CODE,
 	MUTATING_CHANGE_ACTIONS,
 	OBJECTION_DISPOSITIONS,
+	SWEEP_DISPOSITIONS,
 	OBJECTION_SEVERITIES,
 	OBSERVED_COLLECTORS,
 	OBSERVING_ATTESTATIONS,
@@ -651,6 +652,41 @@ const REVIEWER_SHAPE: Shape = {
 	note: opt(nonEmptyString),
 };
 
+const SWEPT_INSTANCE_SHAPE: Shape = {
+	locus: req(nonEmptyString),
+	disposition: req(oneOf(SWEEP_DISPOSITIONS)),
+	note: opt(nonEmptyString),
+};
+
+const sweptInstance: Check = objectOf(SWEPT_INSTANCE_SHAPE, (instance, path, errors) => {
+	// Declaring something out of scope without saying why is an assertion,
+	// not an answer — the exact evasion this check exists to refuse.
+	requiredWhen(instance, path, "note", instance.disposition === "out-of-scope", "when disposition is out-of-scope", errors);
+});
+
+const CLASS_SWEEP_SHAPE: Shape = {
+	class_statement: req(nonEmptyString),
+	// A sweep that enumerated nothing is not a sweep.
+	instances: req(arrayOf(sweptInstance, { nonEmpty: true })),
+};
+
+/**
+ * R11's class sweep. Routed through `objectOf` rather than hand-rolled, so it
+ * inherits the same guarantees every other object in this schema has: plain
+ * objects only, and no keys beyond the shape.
+ *
+ * That matters more here than it looks. A prototype-backed object passed a
+ * hand-rolled `typeof value === "object"` test, validated `ok: true`, and
+ * then serialized to `{}` — a record that validated and was stored with the
+ * sweep silently gone. A validator whose verdict does not survive the write
+ * is not validating the thing that gets persisted.
+ */
+const classSweep: Check = objectOf(CLASS_SWEEP_SHAPE, (sweep, path, errors) => {
+	// Listing one place five times is "enumerating the surface" in exactly
+	// the way the gate is meant to refuse.
+	uniqueBy(sweep.instances, at(path, "instances"), "locus", errors);
+});
+
 const OBJECTION_SHAPE: Shape = {
 	id: req(localId),
 	severity: req(oneOf(OBJECTION_SEVERITIES)),
@@ -659,6 +695,7 @@ const OBJECTION_SHAPE: Shape = {
 	disposition: req(oneOf(OBJECTION_DISPOSITIONS)),
 	resolution_evidence: opt(nonEmptyString),
 	disposition_note: opt(nonEmptyString),
+	class_sweep: opt(classSweep),
 };
 
 const RECEIPT_SHAPE: Shape = {
