@@ -40,6 +40,7 @@
     "!.codecarto/CONVENTIONS.md",
     "!.codecarto/DECISIONS.md",
     "!.codecarto/closeouts/**",
+    "!.codecarto/engineering/**",
     "!.codecarto/broadside/**",
     ".codecarto/broadside/SKILL.md",
     ".codecarto/broadside/config.yaml",
