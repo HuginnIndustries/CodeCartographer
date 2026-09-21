@@ -140,9 +140,22 @@ test("the published tarball carries no engineering records", async () => {
 	const prefix = `.codecarto/${ENGINEERING_NAMESPACE}/`;
 	const offenders = packed.files.map((entry) => entry.path.replace(/\\/g, "/")).filter((path) => path.startsWith(prefix));
 	assert.deepEqual(offenders, [], `no engineering record may reach the tarball:\n${offenders.join("\n")}`);
-	// The control: this only proves anything while the packer really is
-	// walking that tree, so a populated namespace must exist on disk.
-	await assert.doesNotReject(() => stat(join(REPO_ROOT, ".codecarto", ENGINEERING_NAMESPACE)), "the namespace must exist for this test to mean anything");
+	// The control. An empty result is worthless if the packer had nothing to
+	// exclude, so a record is PLANTED and the pack re-run. A checkout has no
+	// namespace at all — it is gitignored — which is why requiring one to
+	// pre-exist passed locally and failed on every CI runner.
+	const planted = join(REPO_ROOT, ".codecarto", ENGINEERING_NAMESPACE, "changes", "chg_00000000000000000000e999");
+	await mkdir(planted, { recursive: true });
+	try {
+		await writeFile(join(planted, "change.json"), '{"synthetic":"pack control, never a real record"}\n', "utf8");
+		const rerun = await execFileAsync("npm", ["pack", "--dry-run", "--json"], { cwd: REPO_ROOT, maxBuffer: 32 * 1024 * 1024 });
+		const reparsed = JSON.parse(rerun.stdout);
+		const repacked = Array.isArray(reparsed) ? reparsed[0] : Object.values(reparsed)[0];
+		const stillClean = repacked.files.map((entry) => entry.path.replace(/\\/g, "/")).filter((path) => path.startsWith(prefix));
+		assert.deepEqual(stillClean, [], "a planted record must still not reach the tarball");
+	} finally {
+		await rm(join(REPO_ROOT, ".codecarto", ENGINEERING_NAMESPACE, "changes"), { recursive: true, force: true });
+	}
 });
 
 test("each packing mechanism excludes the namespace on its own", async () => {
