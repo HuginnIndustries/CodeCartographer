@@ -30,17 +30,21 @@ jobs:
       - name: Run framework invariant tests
         run: npm test
 
-  # The suite on Windows, reporting rather than gating (#372): four of the
-  # 2026-09-15 self-audit's findings are claims about Windows filesystem
-  # semantics — rename-over-existing in atomicWriteFile, the lock's O_EXCL
-  # and mtime staleness, path containment's case-fold and realpath walk,
-  # bare-git output parsing — that reading cannot settle. This job answers
-  # them. It does not block a PR; a failure here becomes an issue with a
-  # reproduction, and once the suite is green on Windows the job graduates
-  # to a gate.
+  # The suite on Windows, gating (#372, #395). Added as reporting-only to
+  # settle four claims from the 2026-09-15 self-audit that reading could not
+  # — rename-over-existing in atomicWriteFile, the lock's O_EXCL and mtime
+  # staleness, path containment's case-fold and realpath walk, bare-git
+  # output parsing. It answered all four, the product defects (#393, #394)
+  # and the POSIX-shaped expectations (#395) were fixed, and the suite has
+  # been green here since.
+  #
+  # It gates now because reporting-only stopped working: a job that cannot
+  # fail the run is a job whose failures get merged. Every Windows failure
+  # this job has ever reported was a real defect — none was flaky, and no
+  # commit has ever produced both outcomes — but the run conclusion stayed
+  # "success" each time, so nothing stopped the merge.
   test-windows:
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
