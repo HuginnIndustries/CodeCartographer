@@ -19,7 +19,7 @@ Create a coherent build plan:
 - preserve open conflicts and unknowns with owners or dispositions,
 - state deliberate non-goals.
 
-Scenarios in the acceptance plan carry a stable `Scenario ID` and a `Tier`, because slices cite them and a row number stops being a handle the moment a row is inserted. Every slice's `Proves scenarios` must name at least one existing Scenario ID: **an empty proof list is not a plan**, since a slice that proves nothing cannot be reviewed. Every `minimum-viable` scenario must be owned by some slice, or the plan can be called complete without it.
+Scenarios in the acceptance plan carry a stable `Scenario ID` and a `Tier`, because slices cite them and a row number stops being a handle the moment a row is inserted. Every slice's `Proves scenarios` must name at least one existing Scenario ID: **an empty proof list is not a plan**, since a slice that proves nothing cannot be reviewed. Every `minimum-viable` scenario must be owned by some slice, or the plan can be called complete without it. Replace the template's parenthesised placeholders and keep the tables plain GFM (one row per line, no prose between rows); a row the reader cannot place is reported, never dropped.
 
 The provenance ledger is mandatory. Map every load-bearing architecture, scope, behavior, and sequencing decision to one of:
 

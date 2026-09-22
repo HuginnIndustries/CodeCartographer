@@ -95,7 +95,7 @@
 
 | Scenario ID | Tier | Scenario | Input | Expected Output / Side Effect |
 |-------------|------|----------|-------|-------------------------------|
-| S-01 | minimum-viable | | | |
+| S-01 | minimum-viable | (what is checked) | (concrete input) | (observable output) |
 
 ## Slices
 
@@ -122,7 +122,7 @@
 
 | Slice ID | Deliverable | Modules | Proves scenarios | Depends on | Tier |
 |----------|-------------|---------|------------------|------------|------|
-| SL-01 | | | S-01 | | minimum-viable |
+| SL-01 | (what this slice delivers) | (modules) | S-01 | | minimum-viable |
 
 ## Deliberate Non-Goals
 

@@ -38,7 +38,7 @@
 
 | Scenario ID | Tier | Scenario | Input or starting state | Observable result | Source |
 |---|---|---|---|---|---|
-| S-01 | minimum-viable | | | | |
+| S-01 | minimum-viable | (what is checked) | (starting state) | (observable result) | |
 
 ## Slices
 
@@ -60,7 +60,7 @@
 
 | Slice ID | Deliverable | Modules | Proves scenarios | Depends on | Tier |
 |---|---|---|---|---|---|
-| SL-01 | WP-01 | | S-01 | | minimum-viable |
+| SL-01 | WP-01 | (modules) | S-01 | | minimum-viable |
 
 ## Provenance ledger
 

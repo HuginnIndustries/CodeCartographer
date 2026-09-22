@@ -431,3 +431,36 @@ test("E09: completion criteria for slice-bearing phases name the slice-to-scenar
 		}
 	}
 });
+
+test("E09: the new validation rows and the pipeline completion criteria are the same sentences, word for word", async () => {
+	// "Changed together" is a property of the files, not of the commit
+	// message. The two earlier E09 tests checked each half loosely and
+	// independently, so either could be reworded without the other noticing
+	// (review E09-10). Pin the exact sentences on both sides.
+	const SLICE_ROWS = {
+		"reimplementation-spec": [
+			"Every slice names at least one scenario it proves, and every Scenario ID it lists exists in the Acceptance Scenarios table.",
+			"Every minimum-viable scenario is owned by at least one slice.",
+		],
+		"goal-synthesis-finalize": [
+			"Every slice names at least one scenario it proves, and every Scenario ID it lists exists in the Acceptance plan.",
+			"Every minimum-viable scenario is owned by at least one slice.",
+		],
+	};
+	for (const [pipelineFile, pipeline] of Object.entries(pipelines)) {
+		for (const phase of pipeline.phases) {
+			const rows = SLICE_ROWS[phase.id];
+			if (!rows) continue;
+			for (const row of rows) {
+				assert.ok(phase.completion_criteria.includes(row), `${pipelineFile}:${phase.id} completion_criteria lacks the exact sentence: ${row}`);
+			}
+		}
+	}
+	for (const { template, phase } of SLICE_BEARING) {
+		const text = await readFile(join(CODECARTO, template), "utf8");
+		const validation = text.split(/^## Validation\s*$/im)[1] ?? "";
+		for (const row of SLICE_ROWS[phase]) {
+			assert.ok(validation.includes(`| ${row} |`), `${template} Validation table lacks the exact row: ${row}`);
+		}
+	}
+});

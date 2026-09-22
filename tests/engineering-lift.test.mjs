@@ -183,13 +183,19 @@ function planFromLift(out) {
 		baseline: { vcs: "git", head: "a".repeat(40), description: "main" },
 		scope: { in_scope: ["src/**"], non_goals: [] },
 		preserved_contracts: [],
-		acceptance_scenarios: out.scenarios.map((s) => ({ id: s.id, kind: "behavior", description: s.description || "(from artifact)" })),
+		acceptance_scenarios: out.scenarios.map((s) => ({ id: s.id, kind: "behavior", description: s.description })), // verbatim, same reason as below
 	};
+	// Carry the lifted text and dependencies through VERBATIM. The first
+	// version of this helper substituted `s.deliverable || s.id` and blanked
+	// depends_on, which silently repaired an empty deliverable and made a
+	// dependency cycle invisible to E04 -- so the agreement tests could not
+	// see two real disagreements (review E09-01, E09-03).
 	const slices = out.slices.map((s) => ({
-		title: s.deliverable || s.id,
-		deliverable: s.deliverable || s.id,
+		id: s.id,
+		title: s.deliverable,
+		deliverable: s.deliverable,
 		scenario_ids: s.scenario_ids,
-		depends_on: [], // record-level dependencies bind by RecordId, assigned at store time
+		depends_on: s.depends_on,
 		proof_obligations: s.scenario_ids.map((sid, i) => ({
 			id: `${s.id}-o${i + 1}`,
 			scenario_id: sid,
@@ -288,4 +294,134 @@ test("an id the record store would refuse is refused HERE, where the author can 
 		const idErrors = (record.errors ?? []).filter((e) => e.code === "invalid-local-id");
 		assert.deepEqual(idErrors, [], `store refused an id the lifter accepted: ${JSON.stringify(idErrors)}`);
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Review regressions (deleg_1ebf14c6). Each was a live reproduction against
+// the previous reader; each is now a refusal with a reason the author can act
+// on. The reader's rules are GFM's, not a regex approximation.
+// ---------------------------------------------------------------------------
+
+test("E09-01: a dependency cycle is refused by BOTH halves, in the same words", () => {
+	const cyc = ARTIFACT.replace("| S-01 | | minimum-viable |", "| S-01 | SL-02 | minimum-viable |"); // SL-01 -> SL-02 -> SL-01
+	const out = liftSlices(cyc);
+	const hit = out.errors.filter((e) => e.code === "dependency-cycle");
+	assert.equal(hit.length, 1, JSON.stringify(out.errors));
+	assert.match(hit[0].message, /SL-01 -> SL-02 -> SL-01/);
+	const { request, slices } = planFromLift(out);
+	const plan = buildChangePlan(request, slices);
+	assert.equal(plan.ok, false);
+	assert.match(JSON.stringify(plan.errors), /dependency cycle/);
+	// Indirect cycle too: SL-01 -> SL-03 -> SL-02 -> SL-01.
+	const indirect = ARTIFACT.replace("| S-01 | | minimum-viable |", "| S-01 | SL-03 | minimum-viable |");
+	assert.ok(liftSlices(indirect).errors.some((e) => e.code === "dependency-cycle"));
+	// And the clean fixture, with its real dependencies carried, still plans.
+	const clean = planFromLift(liftSlices(ARTIFACT));
+	assert.equal(buildChangePlan(clean.request, clean.slices).ok, true);
+});
+
+test("E09-02: a GFM row without a leading pipe is read, not dropped with every row after it", () => {
+	const text = ARTIFACT.replace("| SL-02 | config loading | config | S-02 | SL-01 | minimum-viable |", "SL-02 | config loading | config | S-02 | SL-01 | minimum-viable |");
+	const out = liftSlices(text);
+	assert.deepEqual(out.slices.map((s) => s.id), ["SL-01", "SL-02", "SL-03"]);
+	assert.deepEqual(out.errors, []);
+});
+
+test("E09-02: a blank line between rows does not end the table; prose between rows is refused", () => {
+	const blank = ARTIFACT.replace("| SL-02 |", "\n| SL-02 |");
+	assert.deepEqual(liftSlices(blank).slices.map((s) => s.id), ["SL-01", "SL-02", "SL-03"]);
+	const prose = ARTIFACT.replace("| SL-02 |", "(the following are stretch goals)\n| SL-02 |");
+	const out = liftSlices(prose);
+	const hit = out.errors.filter((e) => e.code === "interrupted-table");
+	assert.equal(hit.length, 1, JSON.stringify(out.errors));
+	assert.match(hit[0].message, /stretch goals/);
+	// Prose AFTER the last row is ordinary and not an interruption.
+	const trailing = ARTIFACT.replace("\n## Validation", "\nSee also the non-goals.\n\n## Validation");
+	assert.deepEqual(liftSlices(trailing).errors, []);
+});
+
+test("E09-03/04: an empty deliverable or scenario description is refused here, as E04 refuses it", () => {
+	const noDeliverable = liftSlices(ARTIFACT.replace("| SL-03 | pdf export |", "| SL-03 |  |"));
+	assert.ok(noDeliverable.errors.some((e) => e.code === "empty-deliverable" && e.at === "SL-03"), JSON.stringify(noDeliverable.errors));
+	const p1 = planFromLift(noDeliverable);
+	assert.equal(buildChangePlan(p1.request, p1.slices).ok, false);
+	const noDesc = liftSlices(ARTIFACT.replace("| S-03 | major-workflow | exports |", "| S-03 | major-workflow |  |"));
+	assert.ok(noDesc.errors.some((e) => e.code === "empty-description" && e.at === "S-03"), JSON.stringify(noDesc.errors));
+	const p2 = planFromLift(noDesc);
+	assert.equal(buildChangeBrief(p2.request).ok, false);
+});
+
+test("E09-05: the delimiter row is the line after the header and nothing else; a '-' placeholder row is content", () => {
+	// A row of dashes as "not applicable" markers is a data row. The old
+	// separator regex swallowed it. Now it is read, and refused for what it
+	// is: a row with content but no valid id.
+	const placeholder = ARTIFACT.replace("| SL-03 | pdf export | export | S-03 | SL-01, SL-02 | major-workflow |", "| - | - | - | - | - | - |");
+	const out = liftSlices(placeholder);
+	assert.ok(out.errors.some((e) => e.code === "invalid-id" && e.at === "-"), JSON.stringify(out.errors));
+	// A header NOT followed by a delimiter row is not a table.
+	const noDelim = ARTIFACT.replace("|----------|-------------|---------|------------------|------------|------|\n", "");
+	assert.ok(liftSlices(noDelim).errors.some((e) => e.code === "malformed-table" && e.at === "Slices"));
+});
+
+test("E09-06: a misspelled column does not suppress the row-level defects in columns that exist", () => {
+	const text = ARTIFACT.replace("| Modules |", "| Module |")
+		.replace("| SL-03 | pdf export | export | S-03 |", "| SL-03 | pdf export | export |  |") // empty proof
+		.replace("| SL-02 | config loading", "| SL-01 | config loading"); // duplicate id
+	const codes = liftSlices(text).errors.map((e) => e.code);
+	for (const expected of ["missing-column", "empty-proof-list", "duplicate-id"]) {
+		assert.ok(codes.includes(expected), `${expected} hidden behind the column error: ${codes}`);
+	}
+});
+
+test("E09-07: an indented table (legal GFM) is read; no phantom '---' slice", () => {
+	const indented = ARTIFACT.replace(/^\| (SL|Slice|-)/gm, "   | $1").replace(/^\|--/gm, "   |--");
+	const out = liftSlices(indented);
+	assert.deepEqual(out.slices.map((s) => s.id), ["SL-01", "SL-02", "SL-03"]);
+	assert.deepEqual(out.errors, []);
+});
+
+test("E09-08: a table inside a fenced code block is invisible; a duplicated heading is refused, not picked", () => {
+	const fenced = ARTIFACT.replace("## Slices", "Example of the shape:\n\n```markdown\n## Slices\n\n| Slice ID | Deliverable | Modules | Proves scenarios | Depends on | Tier |\n|--|--|--|--|--|--|\n| SL-EXAMPLE | x | m | S-01 | | minimum-viable |\n```\n\n## Slices");
+	const out = liftSlices(fenced);
+	assert.deepEqual(out.slices.map((s) => s.id), ["SL-01", "SL-02", "SL-03"], JSON.stringify(out.errors));
+	assert.deepEqual(out.errors, []);
+	const twice = ARTIFACT.replace("## Validation", "## Slices\n\n_TBD_\n\n## Validation");
+	const dup = liftSlices(twice);
+	assert.ok(dup.errors.some((e) => e.code === "duplicate-section" && e.at === "Slices"), JSON.stringify(dup.errors));
+	assert.equal(dup.slices.length, 0);
+});
+
+test("E09-09: an escaped pipe is one cell; a genuinely ragged row is refused by cell count", () => {
+	const escaped = ARTIFACT.replace("| SL-01 | a runnable binary |", "| SL-01 | a runnable \\| static binary |");
+	const out = liftSlices(escaped);
+	assert.deepEqual(out.errors, [], JSON.stringify(out.errors));
+	assert.equal(out.slices[0].deliverable, "a runnable | static binary");
+	const ragged = ARTIFACT.replace("| SL-01 | a runnable binary |", "| SL-01 | a runnable | binary |");
+	const hit = liftSlices(ragged).errors.filter((e) => e.code === "ragged-row");
+	assert.equal(hit.length, 1);
+	assert.match(hit[0].at, /Slices row 1/);
+});
+
+test("CRLF artifacts lift identically to LF", () => {
+	const lf = liftSlices(ARTIFACT);
+	const crlf = liftSlices(ARTIFACT.replace(/\n/g, "\r\n"));
+	assert.deepEqual(crlf, lf);
+});
+
+test("an indented fence (1-3 spaces, legal GFM) is still a fence", () => {
+	// Survived mutation until this test: dropping the \s{0,3} from the fence
+	// regex made an indented example block visible, and its example heading
+	// turned into a duplicate-section refusal of the real table.
+	const text = ARTIFACT.replace("## Slices", "  ```markdown\n## Slices\n\n| Slice ID | Deliverable | Modules | Proves scenarios | Depends on | Tier |\n|--|--|--|--|--|--|\n| SL-EX | x | m | S-01 | | minimum-viable |\n  ```\n\n## Slices");
+	const out = liftSlices(text);
+	assert.deepEqual(out.errors, [], JSON.stringify(out.errors));
+	assert.deepEqual(out.slices.map((s) => s.id), ["SL-01", "SL-02", "SL-03"]);
+});
+
+test("a self-dependency is reported once, not also as a one-node cycle", () => {
+	// The cycle walk skips self-edges because self-dependency already names
+	// them. Without the skip the author sees the same defect twice with two
+	// different codes and fixes it once, then wonders about the other.
+	const out = liftSlices(ARTIFACT.replace("| S-02 | SL-01 |", "| S-02 | SL-02 |"));
+	assert.deepEqual(out.errors.map((e) => e.code), ["self-dependency"], JSON.stringify(out.errors));
 });
