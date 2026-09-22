@@ -334,7 +334,9 @@ test("N03: after the plan input changes, a superseding attempt carries none of t
 		const revised = { ...r.attempt.inputs, plan_digest: sha("revised plan") };
 		const nextAttemptId = "att_00000000000000000000a002";
 		const newSnapshotId = "snp_00000000000000000000d002";
-		const next = { ...r.attempt, id: nextAttemptId, created_at: "2026-09-17T12:00:00Z", started_at: "2026-09-17T12:00:00Z", ended_at: "2026-09-17T12:30:00Z", candidate_snapshot_id: newSnapshotId, inputs: { ...revised, digest: computeInputDigest(revised) } };
+		const next = { ...r.attempt, id: nextAttemptId, created_at: "2026-09-17T12:00:00Z", started_at: "2026-09-17T12:00:00Z", ended_at: "2026-09-17T12:30:00Z", candidate_snapshot_id: newSnapshotId, parent_attempt_id: r.attempt.id, inputs: { ...revised, digest: computeInputDigest(revised) } };
+		// The digest changing is the RECORD of a changed input; the refusal below
+		// is driven by candidate binding (no gate compares input digests today).
 		assert.notEqual(next.inputs.digest, r.attempt.inputs.digest);
 		await store.put(next);
 		await store.put({ ...r.snapshot, id: newSnapshotId, attempt_id: nextAttemptId, manifest: recollected.value.manifest, digest: recollected.value.digest, repository: recollected.value.repository, created_at: "2026-09-17T12:10:00Z", captured_at: "2026-09-17T12:10:00Z" });
