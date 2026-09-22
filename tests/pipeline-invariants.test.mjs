@@ -315,3 +315,119 @@ test("no framework instruction file tells a session to write framework-owned sta
 		`Framework instruction files must route state through the phase handoff, never instruct writing framework-owned files:\n${violations.join("\n")}`,
 	);
 });
+
+// ---------------------------------------------------------------------------
+// E09: slice-to-scenario traceability in the planning artifacts.
+//
+// The engineering record (E01) requires every slice to name the scenarios
+// that prove it, and refuses a slice with an empty proof list. The analysis
+// artifacts that FEED planning -- the reimplementation specs and the project
+// plan -- had no such structure: scenarios were a flat table with no owner,
+// and scope tiers were prose. So a plan derived from them could not say
+// which scenario proved which promise, and E04 left that seam open.
+//
+// These invariants pin the structure: a Slices section whose rows carry
+// stable ids, the scenarios they prove, dependencies and a tier; a validation
+// row that checks every minimum-viable scenario is owned; and the SKILL that
+// produces each artifact instructing the session to fill it. They are
+// structural checks on TEMPLATES, so they prove the instruction exists, not
+// that a session obeyed it. The record contract enforces that part.
+// ---------------------------------------------------------------------------
+
+/** Templates that must carry the slice structure, and the SKILL that produces each. */
+const SLICE_BEARING = [
+	{ template: "templates/reimplementation-spec.md", skill: "findings/reimplementation-spec/SKILL.md", phase: "reimplementation-spec" },
+	{ template: "templates/reimplementation-spec-opinionated.md", skill: "findings/reimplementation-spec/SKILL.md", phase: "reimplementation-spec" },
+	{ template: "templates/project-plan.md", skill: "findings/goal-synthesis-finalize/SKILL.md", phase: "goal-synthesis-finalize" },
+];
+
+test("E09: every pipeline carrying a slice-bearing phase is enumerated, not assumed", () => {
+	// The issue asks for the ACTUAL current pipelines. Pin them so a new
+	// pipeline that adds one of these phases fails here and gets the same
+	// slice criteria, instead of silently shipping the old prose-only shape.
+	const carriers = {};
+	for (const [pipelineFile, pipeline] of Object.entries(pipelines)) {
+		for (const phase of pipeline.phases) {
+			// Two spec templates share one phase; count the phase once.
+			if (SLICE_BEARING.some((bearing) => bearing.phase === phase.id)) (carriers[phase.id] ??= []).push(pipelineFile);
+		}
+	}
+	assert.deepEqual(
+		Object.fromEntries(Object.entries(carriers).map(([k, v]) => [k, v.sort()])),
+		{
+			"reimplementation-spec": ["pipeline-full-with-audit.yaml", "pipeline-full-with-deep-audit.yaml", "pipeline-scout-first.yaml", "pipeline.yaml"],
+			"goal-synthesis-finalize": ["pipeline-synthesis.yaml"],
+		},
+	);
+});
+
+test("E09: slice-bearing templates carry a Slices section with stable ids, proved scenarios, dependencies and tier", async () => {
+	for (const { template } of SLICE_BEARING) {
+		const text = await readFile(join(CODECARTO, template), "utf8");
+		assert.match(text, /^## Slices\s*$/im, `${template} lacks a Slices section`);
+		const slices = text.split(/^## Slices\s*$/im)[1]?.split(/^## /m)[0] ?? "";
+		// The table header is the contract a session fills. Column names are
+		// the record vocabulary, so a plan can be lifted into a SliceInput
+		// without translation.
+		for (const column of ["Slice ID", "Deliverable", "Modules", "Proves scenarios", "Depends on", "Tier"]) {
+			assert.ok(slices.includes(column), `${template}: Slices table lacks the ${column} column`);
+		}
+		// Every scenario a slice claims to prove must exist, and an empty proof
+		// list is not a plan. Say so in the template, where a session reads it.
+		assert.match(slices, /empty .*proof|no proof|at least one scenario/i, `${template}: Slices section does not forbid an empty proof list`);
+	}
+});
+
+test("E09: acceptance scenarios carry stable ids and a tier, so a slice can name them", async () => {
+	for (const { template } of SLICE_BEARING) {
+		const text = await readFile(join(CODECARTO, template), "utf8");
+		const heading = /project-plan/.test(template) ? /^## Acceptance plan\s*$/im : /^## Acceptance Scenarios\s*$/im;
+		assert.match(text, heading, `${template} lacks its acceptance section`);
+		const section = text.split(heading)[1]?.split(/^## /m)[0] ?? "";
+		// A scenario numbered "1" in a table cannot be referenced stably once
+		// rows are inserted. It needs an id, and it needs to say which tier it
+		// belongs to, because "every minimum-viable scenario is owned" is only
+		// checkable when scenarios say which ones are minimum-viable.
+		assert.ok(section.includes("Scenario ID"), `${template}: acceptance table has no Scenario ID column`);
+		assert.ok(section.includes("Tier"), `${template}: acceptance table has no Tier column`);
+	}
+});
+
+test("E09: the validation table checks that every minimum-viable scenario is owned by a slice", async () => {
+	for (const { template } of SLICE_BEARING) {
+		const text = await readFile(join(CODECARTO, template), "utf8");
+		const validation = text.split(/^## Validation\s*$/im)[1] ?? "";
+		assert.match(validation, /minimum[- ]viable scenario.*(owned|proved) by/i, `${template}: validation table has no minimum-viable ownership row`);
+		assert.match(validation, /proves scenarios.*(exist|resolve|listed)|scenario id.*(exist|resolve)/i, `${template}: validation table does not check that proved scenarios exist`);
+	}
+});
+
+test("E09: the producing SKILL instructs the session to fill slices and reject empty proof lists", async () => {
+	for (const skill of new Set(SLICE_BEARING.map((b) => b.skill))) {
+		const text = await readFile(join(CODECARTO, skill), "utf8");
+		assert.match(text, /## Slices|Slices section|slice/i, `${skill} never mentions slices`);
+		assert.match(text, /proves scenarios|proved scenario/i, `${skill} does not tell the session to name proved scenarios`);
+		assert.match(text, /empty .*proof|no proof|at least one scenario/i, `${skill} does not forbid an empty proof list`);
+	}
+});
+
+test("E09: the language-agnostic spec stays language-agnostic in its slice instructions", async () => {
+	// The issue's explicit constraint. Executable proof commands belong only
+	// where the target stack is known (the opinionated variant); the
+	// language-neutral spec must not start listing shell commands as proof.
+	const text = await readFile(join(CODECARTO, "templates/reimplementation-spec.md"), "utf8");
+	const slices = text.split(/^## Slices\s*$/im)[1]?.split(/^## /m)[0] ?? "";
+	assert.ok(!/```(sh|bash|shell)|\bnpm (test|run)\b|\bpytest\b|\bcargo test\b/.test(slices), "the language-agnostic spec's Slices section names an executable proof command");
+});
+
+test("E09: completion criteria for slice-bearing phases name the slice-to-scenario requirement", () => {
+	for (const [pipelineFile, pipeline] of Object.entries(pipelines)) {
+		for (const phase of pipeline.phases) {
+			if (!SLICE_BEARING.some((b) => b.phase === phase.id)) continue;
+			assert.ok(
+				(phase.completion_criteria ?? []).some((c) => /slice/i.test(c) && /scenario/i.test(c)),
+				`${pipelineFile}:${phase.id} has no completion criterion tying slices to scenarios`,
+			);
+		}
+	}
+});

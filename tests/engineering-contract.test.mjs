@@ -132,7 +132,7 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	}
 	const dir = join(REPO_ROOT, "core", "engineering");
 	const files = (await readdir(dir)).filter((n) => n.endsWith(".ts")).sort();
-	assert.deepEqual(files, ["digest.ts", "gates.ts", "ids.ts", "index.ts", "planning.ts", "proofs.ts", "snapshots.ts", "store.ts", "traverse.ts", "types.ts", "validation.ts"]);
+	assert.deepEqual(files, ["digest.ts", "gates.ts", "ids.ts", "index.ts", "lift.ts", "planning.ts", "proofs.ts", "snapshots.ts", "store.ts", "traverse.ts", "types.ts", "validation.ts"]);
 	// snapshots (E03) sits beside validation: both consume types/ids/digest and
 	// neither imports the other. store (E02) sits above both: it is the one
 	// file here that is ALLOWED to touch the filesystem, because persisting
@@ -149,7 +149,9 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	// for a pure layer. It still executes nothing -- deciding and doing stay
 	// apart, which is why it may read the store but imports no child process,
 	// no network, and nothing that writes outside the namespace.
-	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, store: 3, proofs: 4, gates: 4, traverse: 5, index: 6 };
+	// lift (E09) reads a planning artifact into the record vocabulary. It
+	// imports nothing at all and sits with the other pure readers.
+	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, lift: 2, store: 3, proofs: 4, gates: 4, traverse: 5, index: 6 };
 	// Everything except the store must stay pure. Splitting the rule rather
 	// than dropping it: a validator that gained a `node:fs` import would
 	// still fail, which is the property this test was written for.

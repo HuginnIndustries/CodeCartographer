@@ -86,11 +86,43 @@
 <!--
   Black-box checks with concrete inputs and observable outputs.
   No references to source-language internals.
+
+  Scenario IDs are stable handles (S-01, S-02, ...): slices below cite them,
+  and a row number is not a handle once rows are inserted. Tier says which
+  scope tier the scenario belongs to, so "every minimum-viable scenario is
+  owned by a slice" is checkable rather than a hope.
 -->
 
-| # | Scenario | Input | Expected Output / Side Effect |
-|---|----------|-------|-------------------------------|
-| 1 | | | |
+| Scenario ID | Tier | Scenario | Input | Expected Output / Side Effect |
+|-------------|------|----------|-------|-------------------------------|
+| S-01 | minimum-viable | | | |
+
+## Slices
+
+<!--
+  The unit of reviewable work. A slice is a promise plus the scenarios that
+  prove the promise was kept. This is what an engineering change is planned
+  from, so the columns are the record's own vocabulary and lift directly into
+  a slice record without translation.
+
+  Rules a session must follow:
+  - Slice IDs are stable (SL-01, SL-02, ...) and never renumbered.
+  - "Proves scenarios" lists Scenario IDs from the table above. Every ID must
+    exist there. An empty proof list is not a plan: a slice that proves
+    nothing cannot be reviewed, and no proof is worse than a weak one because
+    it hides that the question was never asked.
+  - Every scenario tiered minimum-viable must appear in some slice's "Proves
+    scenarios". An unowned minimum-viable scenario means the port can be
+    "done" without it, which contradicts the tier.
+  - "Depends on" lists Slice IDs that must be accepted first.
+  - Obligations stay language-neutral here: name WHAT must be observed, not
+    the command that observes it. Executable proof commands belong in the
+    opinionated variant, where the target stack is known.
+-->
+
+| Slice ID | Deliverable | Modules | Proves scenarios | Depends on | Tier |
+|----------|-------------|---------|------------------|------------|------|
+| SL-01 | | | S-01 | | minimum-viable |
 
 ## Deliberate Non-Goals
 
@@ -155,6 +187,8 @@
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
 | 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
 | 7 | Lower-level findings are deep-read only when the porting bundle identifies a gap, conflict, missing acceptance detail, or defect rationale. | PASS / PARTIAL / FAIL | |
+| 8 | Every slice names at least one scenario it proves, and every Scenario ID it lists exists in the Acceptance Scenarios table. | PASS / PARTIAL / FAIL | |
+| 9 | Every minimum-viable scenario is owned by at least one slice. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

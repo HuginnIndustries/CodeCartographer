@@ -100,6 +100,8 @@ phases:
       - Conflicts and unknowns remain visible with explicit dispositions.
       - The implementation sequence identifies an executable first slice.
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+      - Every slice names at least one scenario it proves, and every Scenario ID it lists exists in the Acceptance plan.
+      - Every minimum-viable scenario is owned by at least one slice.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Write the canonical phase handoff; do not edit workflow state directly.
