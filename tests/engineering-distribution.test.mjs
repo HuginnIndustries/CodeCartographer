@@ -18,10 +18,10 @@
 // Nothing here uses a real record as a fixture. Every file written below is
 // synthetic and obviously so.
 
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -35,13 +35,13 @@ const execFileAsync = promisify(execFile);
  * that is already running instead — no shell, no `shell: true` quoting
  * hazard, and identical behaviour on every platform.
  */
-async function npmPack() {
+async function npmPack(packRoot) {
 	const npmCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
 	const viaCli = await stat(npmCli).then(() => true).catch(() => false);
 	const { stdout } = viaCli
-		? await execFileAsync(process.execPath, [npmCli, "pack", "--dry-run", "--json"], { cwd: REPO_ROOT, maxBuffer: 32 * 1024 * 1024 })
+		? await execFileAsync(process.execPath, [npmCli, "pack", "--dry-run", "--json"], { cwd: packRoot, maxBuffer: 32 * 1024 * 1024 })
 		: await execFileAsync(process.platform === "win32" ? "npm.cmd" : "npm", ["pack", "--dry-run", "--json"], {
-				cwd: REPO_ROOT,
+				cwd: packRoot,
 				maxBuffer: 32 * 1024 * 1024,
 			});
 	// npm has shipped both shapes for this payload: an array of packages, and
@@ -54,8 +54,48 @@ async function npmPack() {
 }
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+/**
+ * A disposable package root that `npm pack` sees exactly as it sees this
+ * repository: the same `package.json` (so `files[]` applies) and the same
+ * `.codecarto/` tree (so `.codecarto/.gitignore` applies). `npm pack` reads
+ * the directory it is run in, so a pack CONTROL that plants a record has to
+ * plant it somewhere — and that somewhere must never be the live checkout.
+ *
+ * Why (#437): `node --test` runs files concurrently and sixteen of them
+ * `cp -r` the live `.codecarto/`. A record planted and removed in the live
+ * tree lands between another file's directory walk and its `lstat`, and an
+ * unrelated test fails with ENOENT. Planting in a copy removes the only
+ * writer, which removes the race for every reader, present and future.
+ */
+async function withPackRoot(fn) {
+	return withTempDir(async (dir) => {
+		const packRoot = join(dir, "pack-root");
+		await mkdir(packRoot, { recursive: true });
+		await cp(join(REPO_ROOT, "package.json"), join(packRoot, "package.json"));
+		await cp(join(REPO_ROOT, ".codecarto"), join(packRoot, ".codecarto"), { recursive: true });
+		return fn(packRoot);
+	});
+}
+
+
 const { copyPackagedWorkspace } = await import(pathToFileURL(`${REPO_ROOT}/core/workspace.ts`).href);
 const { ENGINEERING_NAMESPACE } = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/index.ts`).href);
+
+/** Entries under the live `changes/` directory, `[]` when it does not exist. */
+async function liveChangeRecords() {
+	return readdir(join(REPO_ROOT, ".codecarto", ENGINEERING_NAMESPACE, "changes")).catch(() => []);
+}
+
+/** Ids every synthetic fixture in this suite uses; a real record never has a run of zeros this long. */
+const SYNTHETIC_ID = /^chg_0{15,}/;
+
+// Loud guard (#437). No test in this suite — or any other — may write into
+// the live `REPO_ROOT/.codecarto/`. This runs at file start: the presence of
+// a synthetic-shaped record means some test planted one in the live tree,
+// which is exactly the class of writer that races every `cp -r` reader.
+// There is no legitimate planter left for this assertion to race with, so
+// a hit here is a regression, not a flake.
+const recordsAtStart = await liveChangeRecords();
 
 /** Synthetic private history, placed where a real run would put it. */
 const SYNTHETIC_RECORDS = {
@@ -86,6 +126,29 @@ async function withTempDir(fn) {
 		await rm(dir, { recursive: true, force: true });
 	}
 }
+
+test("no test writes into the live .codecarto/engineering/changes/ (#437 guard, start)", () => {
+	const synthetic = recordsAtStart.filter((entry) => SYNTHETIC_ID.test(entry));
+	assert.deepEqual(
+		synthetic,
+		[],
+		`synthetic records found in the live checkout's .codecarto/${ENGINEERING_NAMESPACE}/changes/ — a test wrote into the ` +
+			`repository's own workspace. Plant fixtures in a tmp copy instead; the live tree is read-only to the suite (#437):\n${synthetic.join("\n")}`,
+	);
+});
+
+after(async () => {
+	// Same guard at file end: the set of live records must be exactly what it
+	// was at start. A test that plants and cleans up before this hook runs is
+	// invisible here — after #437 there is no such test, and the START guard
+	// in every parallel run of this file makes a leftover record loud.
+	const recordsAtEnd = await liveChangeRecords();
+	assert.deepEqual(
+		recordsAtEnd,
+		recordsAtStart,
+		`the live .codecarto/${ENGINEERING_NAMESPACE}/changes/ changed while the suite ran — a test wrote into the repository's own workspace (#437)`,
+	);
+});
 
 test("the engineering namespace is a private runtime path, not a distributable one", () => {
 	// Everything below depends on this name. If it ever moves, these tests
@@ -155,32 +218,25 @@ test("the published tarball carries no engineering records", async () => {
 	// bundle.md` is a legitimate template whose NAME contains the word, and a
 	// substring match would call it a leak forever.
 	const prefix = `.codecarto/${ENGINEERING_NAMESPACE}/`;
-	const offenders = (await npmPack()).filter((path) => path.startsWith(prefix));
-	assert.deepEqual(offenders, [], `no engineering record may reach the tarball:\n${offenders.join("\n")}`);
-	// The control. An empty result is worthless if the packer had nothing to
-	// exclude, so a record is PLANTED and the pack re-run. A checkout has no
-	// namespace at all — it is gitignored — which is why requiring one to
-	// pre-exist passed locally and failed on every CI runner.
-	const planted = join(REPO_ROOT, ".codecarto", ENGINEERING_NAMESPACE, "changes", "chg_00000000000000000000e999");
-	await mkdir(planted, { recursive: true });
-	try {
-		await writeFile(join(planted, "change.json"), '{"synthetic":"pack control, never a real record"}\n', "utf8");
-		const stillClean = (await npmPack()).filter((path) => path.startsWith(prefix));
-		assert.deepEqual(stillClean, [], "a planted record must still not reach the tarball");
-	} finally {
-		// Remove ONLY what was planted. Deleting the whole `changes/` directory
-		// destroys a developer's real engineering records: this suite runs in a
-		// live checkout, and `npm test` must never be able to eat working state.
+	await withPackRoot(async (packRoot) => {
+		const offenders = (await npmPack(packRoot)).filter((path) => path.startsWith(prefix));
+		assert.deepEqual(offenders, [], `no engineering record may reach the tarball:\n${offenders.join("\n")}`);
+		// The control. An empty result is worthless if the packer had nothing to
+		// exclude, so a record is PLANTED and the pack re-run. A checkout has no
+		// namespace at all — it is gitignored — which is why requiring one to
+		// pre-exist passed locally and failed on every CI runner.
 		//
-		// The empty parent directories are deliberately LEFT BEHIND. Removing
-		// them looks tidier and breaks the suite: `node --test` runs test files
-		// concurrently, several of them copy `.codecarto/` with `cp -r`, and a
-		// directory that disappears between `cp`'s directory walk and its lstat
-		// makes the copy fail with ENOENT. An empty `engineering/` directory is
-		// inert — it is gitignored, carries no records, and is what a checkout
-		// that has ever run this suite looks like.
-		await rm(planted, { recursive: true, force: true });
-	}
+		// Planted in the disposable pack root, never in the live checkout: the
+		// live `.codecarto/` is copied by sixteen concurrently-running test files
+		// and a record appearing and vanishing under them is #437. The control
+		// still discriminates — with the `.gitignore` rule and the `files[]`
+		// carve-out both removed from the copy, the planted record leaks.
+		const planted = join(packRoot, ".codecarto", ENGINEERING_NAMESPACE, "changes", "chg_00000000000000000000e999");
+		await mkdir(planted, { recursive: true });
+		await writeFile(join(planted, "change.json"), '{"synthetic":"pack control, never a real record"}\n', "utf8");
+		const stillClean = (await npmPack(packRoot)).filter((path) => path.startsWith(prefix));
+		assert.deepEqual(stillClean, [], "a planted record must still not reach the tarball");
+	});
 });
 
 test("each packing mechanism excludes the namespace on its own", async () => {
@@ -197,6 +253,29 @@ test("each packing mechanism excludes the namespace on its own", async () => {
 	);
 	// The gitignore half is pinned by "the shipped gitignore templates…" above.
 	// Both being present is the belt-and-braces the acceptance criteria ask for.
+});
+
+test("the pack control is not vacuous: with both mechanisms removed, a planted record leaks", async () => {
+	// Proves the disposable pack root really is what `npm pack` sees. If the
+	// copy silently dropped `.codecarto/` or `files[]`, the control above
+	// would pass for the wrong reason; here the same copy, with the ignore
+	// rule and the carve-out both stripped, must show the planted record.
+	const prefix = `.codecarto/${ENGINEERING_NAMESPACE}/`;
+	await withPackRoot(async (packRoot) => {
+		const manifestPath = join(packRoot, "package.json");
+		const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+		manifest.files = manifest.files.filter((entry) => entry !== `!.codecarto/${ENGINEERING_NAMESPACE}/**`);
+		await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+		const ignorePath = join(packRoot, ".codecarto", ".gitignore");
+		const ignore = await readFile(ignorePath, "utf8");
+		await writeFile(ignorePath, ignore.replace(new RegExp(`^${ENGINEERING_NAMESPACE}/$`, "m"), ""), "utf8");
+
+		const planted = join(packRoot, ".codecarto", ENGINEERING_NAMESPACE, "changes", "chg_00000000000000000000e999");
+		await mkdir(planted, { recursive: true });
+		await writeFile(join(planted, "change.json"), '{"synthetic":"pack control, never a real record"}\n', "utf8");
+		const leaked = (await npmPack(packRoot)).filter((path) => path.startsWith(prefix));
+		assert.deepEqual(leaked, [`${prefix}changes/chg_00000000000000000000e999/change.json`], "with no exclusion left, the planted record must reach the tarball");
+	});
 });
 
 test("distributable guidance still reaches a fresh workspace", async () => {
