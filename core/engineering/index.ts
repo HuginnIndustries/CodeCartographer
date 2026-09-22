@@ -21,3 +21,4 @@ export * from "./planning.ts";
 export * from "./store.ts";
 export * from "./proofs.ts";
 export * from "./gates.ts";
+export * from "./traverse.ts";

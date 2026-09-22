@@ -32,6 +32,7 @@ import {
 	broadsideDirFor,
 	BROADSIDE_LENS_IDS,
 	BROADSIDE_SKILL_NAME,
+	ENGINEERING_SKILL_NAME,
 	type BroadsideConfig,
 	BroadsideConfigError,
 	defaultBroadsideConfig,
@@ -547,6 +548,25 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
 		return textResult(skill.content, { skill: BROADSIDE_SKILL_NAME, path: skill.path, postPipeline: false });
+	}
+
+	// Traverse is the engineering change loop, not an analysis skill. A change
+	// -- a one-line fix especially -- is not a post-pipeline activity, and
+	// requiring a full analysis run before the record system can be used would
+	// make it unusable for the changes it is most useful for.
+	//
+	// The exemption is deliberately ONE exact name, checked the same way
+	// Broad-Side is. A prefix or substring test here would let
+	// `traverse-anything` inherit it, which is a bypass rather than an
+	// eligibility path: everything else stays gated.
+	if (args.name.trim() === ENGINEERING_SKILL_NAME) {
+		const state = await requireWorkspace(cwd);
+		const skillName = await resolveSkillName(state.workspaceDir, ENGINEERING_SKILL_NAME);
+		if (!skillName) {
+			throw new McpError(ErrorCode.InvalidRequest, `Unknown skill: ${ENGINEERING_SKILL_NAME}.`);
+		}
+		const prompt = await buildSkillPrompt(state, skillName, { postPipeline: false });
+		return textResult(prompt, { skill: skillName, postPipeline: false });
 	}
 
 	const state = await requireWorkspace(cwd);

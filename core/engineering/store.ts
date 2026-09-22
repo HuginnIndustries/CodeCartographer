@@ -44,7 +44,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { acquireLock } from "../status.ts";
 import { atomicWriteFile } from "../utils.ts";
 import { digestOf } from "./digest.ts";
-import { ENGINEERING_NAMESPACE, engineeringPaths } from "./ids.ts";
+import { ENGINEERING_NAMESPACE, engineeringPaths, isRecordId } from "./ids.ts";
 import type { EngineeringRecord, EngineeringErrorCode, RecordKind } from "./types.ts";
 import { validateRecordOfKind } from "./validation.ts";
 
@@ -149,6 +149,16 @@ export interface EngineeringStore {
 	put(record: EngineeringRecord, options?: PutOptions): Promise<PutOutcome>;
 	get<K extends RecordKind>(kind: K, id: string, context?: { changeId?: string; attemptId?: string }): Promise<GetOutcome>;
 	listChanges(): Promise<ListedChange[]>;
+	/**
+	 * Ids of the `slice` or `attempt` records belonging to one change.
+	 *
+	 * Enumeration belongs here rather than in a caller: every read has to pass
+	 * the same containment checks as a `get`, and a caller walking the
+	 * directory itself would bypass them. Unparseable entries are skipped
+	 * rather than thrown, so one corrupt record cannot make a whole change
+	 * unreadable — `listChanges` already reports corruption that way.
+	 */
+	listIds(kind: "slice" | "attempt", context: { changeId: string }): Promise<string[]>;
 	/** Absolute path of the namespace root, for callers that must show it. */
 	readonly root: string;
 }
@@ -359,6 +369,27 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 		async get(kind, id, context = {}) {
 			const absolute = await resolveInside(recordPath(kind, id, context));
 			return await readRecordFile(absolute, kind);
+		},
+
+		async listIds(kind: "slice" | "attempt", context: { changeId: string }) {
+			// Both kinds are one directory-per-record under the change, so the
+			// id IS the directory name. Validate each one through the same id
+			// grammar a write would use: a directory planted by hand with a
+			// traversing name must not come back as an id.
+			const relative =
+				kind === "slice"
+					? `${engineeringPaths.changeDir(context.changeId)}/slices`
+					: `${engineeringPaths.changeDir(context.changeId)}/attempts`;
+			const dir = await resolveInside(relative);
+			const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+			const ids: string[] = [];
+			for (const entry of entries) {
+				if (!entry.isDirectory()) continue;
+				// Not an id this contract could have written: ignore it rather
+				// than letting a hand-planted directory break enumeration.
+				if (isRecordId(entry.name, kind)) ids.push(entry.name);
+			}
+			return ids.sort();
 		},
 
 		async listChanges() {
