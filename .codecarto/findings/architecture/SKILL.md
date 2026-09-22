@@ -72,7 +72,7 @@ Document the concurrency model:
 - Rate limiting or backpressure mechanisms.
 - Mark concurrency-related portability hazards explicitly — these rarely translate 1:1 across languages.
 
-Write the output in seven sections:
+Write the output in eight sections:
 1. `System intent`
 2. `Layer map`
 3. `Public surfaces`
@@ -80,6 +80,14 @@ Write the output in seven sections:
 5. `Concurrency model`
 6. `Build and packaging`
 7. `Porting priorities`
+8. `Agent addressability`
+
+Then assess **agent addressability** — one row per public surface or runtime concern, in the `Agent Addressability` table. Answer three questions, and tag each row with an evidence level exactly as you tag every other conclusion:
+- Does the core behavior run headlessly (no display, device, or human)?
+- Can an agent inspect or set the state that matters (files, database, env, API) instead of inferring it from a screen?
+- Is there a programmatic seam — a test entry point, CLI, RPC, or library call — that reaches the behavior directly?
+
+A missing seam is a portability hazard to record, not evidence of correctness: a system that cannot be observed headlessly is not thereby known to work. This assessment is a description of what exists. It is not a request to add seams, and it does not require or propose an architectural rewrite to satisfy the checklist — record the gap and what it blocks, and let the planning phase decide what to do about it.
 
 Mark every conclusion with one of these evidence levels:
 - `observed fact`: direct statement from docs, tests, schemas, types, or code.

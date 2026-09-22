@@ -104,6 +104,30 @@
   logs, caches, databases, generated artifacts.
 -->
 
+## Agent Addressability
+
+<!--
+  Before anyone plans a change, answer: can an agent OBSERVE this system's
+  behavior without a person at a screen? One row per public surface or
+  runtime concern from the sections above. Tag every row with the evidence
+  level this phase already uses; "runs headlessly" is a claim like any other.
+
+  - Headless: can the core behavior run with no display, device, or human?
+  - Inspectable state: can an agent read or set the state that matters
+    (files, database, env, API) rather than infer it from a screen?
+  - Programmatic seam: is there a test entry point, CLI, RPC, or library
+    call that reaches the behavior directly?
+
+  A missing seam is a PORTABILITY HAZARD to record, not evidence of
+  correctness: a system that cannot be observed headlessly is not thereby
+  known to work. Do not propose an architectural rewrite to create seams;
+  record what exists, what does not, and what that blocks.
+-->
+
+| Surface / concern | Headless | Inspectable state | Programmatic seam | Evidence | Notes (what an agent can and cannot do) |
+|---|---|---|---|---|---|
+| | yes / partial / no | yes / partial / no | test / cli / rpc / library / none | observed fact / strong inference / open question | |
+
 ## Coverage and limits
 
 - Inspected scope:
@@ -148,6 +172,7 @@
 | 4 | Runtime lifecycle, concurrency model, and porting priorities are summarized. | PASS / PARTIAL / FAIL | |
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
 | 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
+| 7 | Agent addressability is assessed with evidence levels, and missing seams are recorded as hazards. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

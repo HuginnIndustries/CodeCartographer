@@ -30,6 +30,8 @@
 //     with content but no id, a table interrupted by prose, a row whose
 //     cell count does not match the header
 //   - a heading that appears twice, so the reader never silently picks one
+//   - (E10) a slice whose verification route is missing, `none`, or not a
+//     record check_kind; `none` is a recorded gap and lifts as a refusal
 //
 // WHAT IT DOES NOT DO
 //
@@ -60,6 +62,18 @@
 // does not hide an empty proof list two rows down.
 
 import { isLocalId } from "./ids.ts";
+import type { CheckKind } from "./types.ts";
+
+/**
+ * The check kinds a slice may name as its verification ROUTE (E10). A
+ * deliberate subset of E01's CHECK_KINDS: `build`, `lint` and `typecheck`
+ * do not observe scenario behavior, and `other` means "I cannot say how
+ * this is observed" -- which is a gap, and must be written as `none` so it
+ * is refused as one. Gating on the full CHECK_KINDS let `other` lift as a
+ * clean pass and the refusal message recommend it (review finding).
+ */
+export const ROUTE_KINDS = ["test", "run", "manual-procedure"] as const satisfies readonly CheckKind[];
+export type RouteKind = (typeof ROUTE_KINDS)[number];
 
 export interface LiftedScenario {
 	id: string;
@@ -74,6 +88,12 @@ export interface LiftedSlice {
 	scenario_ids: string[];
 	depends_on: string[];
 	tier: string;
+	/**
+	 * How an agent observes the proved scenarios (E10), in E01's own
+	 * check_kind vocabulary. Present only when the artifact's table carries
+	 * a Verification route column. `"none"` is a recorded gap, not a route.
+	 */
+	verification_route?: RouteKind | "none";
 	/** Present only when the artifact's table carries a Proof command column. */
 	proof_command?: string;
 }
@@ -95,7 +115,10 @@ export type LiftErrorCode =
 	| "unknown-dependency"
 	| "self-dependency"
 	| "dependency-cycle"
-	| "unowned-minimum-viable";
+	| "unowned-minimum-viable"
+	| "unknown-route"
+	| "no-route"
+	| "duplicate-column";
 
 export interface LiftError {
 	/** Where in the artifact the problem is, in the artifact's own ids or table rows. */
@@ -132,6 +155,7 @@ export function liftSlices(markdown: string): LiftOutcome {
 	// ---- scenarios ----
 	const scenarios: LiftedScenario[] = [];
 	if (scenarioTable) {
+		refuseDuplicateColumns(scenarioTable, ["Scenario ID", "Tier", "Scenario"], SCENARIO_SECTION, errors);
 		const idCol = requireColumn(scenarioTable, "Scenario ID", SCENARIO_SECTION, errors);
 		const tierCol = requireColumn(scenarioTable, "Tier", SCENARIO_SECTION, errors);
 		const descCol = requireColumn(scenarioTable, "Scenario", SCENARIO_SECTION, errors);
@@ -167,7 +191,9 @@ export function liftSlices(markdown: string): LiftOutcome {
 			depends: requireColumn(sliceTable, "Depends on", SLICE_SECTION, errors),
 			tier: requireColumn(sliceTable, "Tier", SLICE_SECTION, errors),
 			proof: column(sliceTable, "Proof command"),
+			route: column(sliceTable, "Verification route"),
 		};
+		refuseDuplicateColumns(sliceTable, ["Slice ID", "Deliverable", "Modules", "Proves scenarios", "Depends on", "Tier", "Verification route", "Proof command"], "Slices", errors);
 		// Only the id column gates the row loop. Every other check runs when
 		// its own column exists, so one misspelled header does not suppress
 		// the defects in columns that are present.
@@ -188,6 +214,23 @@ export function liftSlices(markdown: string): LiftOutcome {
 					errors.push({ at: id, code: "empty-deliverable", message: `slice ${id} has no deliverable; a slice needs a title and a deliverable` });
 				}
 				const proof = cols.proof >= 0 ? (row.cells[cols.proof] ?? "") : "";
+				const routeText = cols.route >= 0 ? (row.cells[cols.route] ?? "") : "";
+				let route: RouteKind | "none" | undefined;
+				if (cols.route >= 0) {
+					// The column exists, so a route is required: E10 says every
+					// slice names one. An unavailable route is written as `none`
+					// and refused as a gap on that slice -- never silently a pass.
+					if (!routeText) {
+						errors.push({ at: id, code: "no-route", message: `slice ${id} names no verification route; write \`none\` if there is none, and it is a gap, not a pass` });
+					} else if (routeText === "none") {
+						route = "none";
+						errors.push({ at: id, code: "no-route", message: `slice ${id} has no observable verification route (\`none\`); this is a gap on the slice, not a pass` });
+					} else if ((ROUTE_KINDS as readonly string[]).includes(routeText)) {
+						route = routeText as RouteKind;
+					} else {
+						errors.push({ at: id, code: "unknown-route", message: `slice ${id} names verification route ${JSON.stringify(routeText)}, which is not a verification route (${ROUTE_KINDS.join(", ")}) or \`none\`` });
+					}
+				}
 				slices.push({
 					id,
 					deliverable,
@@ -195,6 +238,7 @@ export function liftSlices(markdown: string): LiftOutcome {
 					scenario_ids: cols.proves >= 0 ? list(row.cells[cols.proves]) : [],
 					depends_on: cols.depends >= 0 ? list(row.cells[cols.depends]) : [],
 					tier: cols.tier >= 0 ? (row.cells[cols.tier] ?? "") : "",
+					...(route !== undefined ? { verification_route: route } : {}),
 					...(proof ? { proof_command: proof } : {}),
 				});
 			}
@@ -400,6 +444,20 @@ function splitCells(line: string): string[] {
 	}
 	cells.push(current.trim());
 	return cells;
+}
+
+/**
+ * A column that appears twice is refused for the same reason a heading that
+ * appears twice is: which cell is meant is ambiguous, and first-match-wins
+ * silently discarded a recorded `none` in the Slices table and a
+ * `minimum-viable` tier in the scenarios table (two review findings, one
+ * cause). Applied to every column a table reads, in both tables.
+ */
+function refuseDuplicateColumns(table: Table, names: readonly string[], section: string, errors: LiftError[]): void {
+	for (const name of names) {
+		const n = table.header.filter((h) => h.toLowerCase() === name.toLowerCase()).length;
+		if (n > 1) errors.push({ at: section, code: "duplicate-column", message: `the ${section} table has ${n} "${name}" columns; which one is meant is ambiguous` });
+	}
 }
 
 function column(table: Table, name: string): number {

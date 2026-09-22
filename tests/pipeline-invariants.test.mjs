@@ -464,3 +464,127 @@ test("E09: the new validation rows and the pipeline completion criteria are the 
 		}
 	}
 });
+
+// ---------------------------------------------------------------------------
+// E10: agent addressability and observable verification routes.
+//
+// E09 made every slice name the scenarios that prove it. E10 asks the prior
+// question: CAN an agent observe those scenarios at all? A codebase whose
+// behavior is only reachable through a GUI, a device, or a network it does
+// not have is not "unverifiable" in the abstract; it has a specific,
+// recordable gap. The architecture phase assesses this once, tagged with the
+// existing evidence levels; the spec names one route per slice in the record
+// vocabulary (a subset of E01 check_kind) so a later evolution can carry it
+// into proof obligations; today it stops at the lifter (see the E10 dogfood note). Missing
+// seams are hazards, not evidence of correctness -- a system that cannot be
+// observed headlessly is not thereby known to work.
+//
+// Structural checks on TEMPLATES and SKILLs: they prove the instruction
+// exists. For routes, the lifter enforces that a session obeyed it. For the
+// addressability table nothing programmatic reads it yet; it is
+// instructional, and only a reviewer of the phase output checks it.
+// ---------------------------------------------------------------------------
+
+const ADDRESSABILITY_BEARING = [
+	{ template: "templates/architecture-map.md", skill: "findings/architecture/SKILL.md", phase: "architecture", section: /^## Agent Addressability\s*$/im },
+	{ template: "templates/reverse-engineering-bundle.md", skill: "findings/porting/SKILL.md", phase: "porting", section: /^## Agent Addressability\s*$/im },
+];
+const ROUTE_BEARING = [
+	{ template: "templates/reimplementation-spec.md", skill: "findings/reimplementation-spec/SKILL.md", phase: "reimplementation-spec" },
+	{ template: "templates/reimplementation-spec-opinionated.md", skill: "findings/reimplementation-spec/SKILL.md", phase: "reimplementation-spec" },
+];
+
+test("E10: every pipeline carrying an addressability-bearing phase is enumerated, not assumed", () => {
+	const carriers = {};
+	for (const [pipelineFile, pipeline] of Object.entries(pipelines)) {
+		for (const phase of pipeline.phases) {
+			if ([...ADDRESSABILITY_BEARING, ...ROUTE_BEARING].some((b) => b.phase === phase.id)) (carriers[phase.id] ??= []).push(pipelineFile);
+		}
+	}
+	assert.deepEqual(
+		Object.fromEntries(Object.entries(carriers).map(([k, v]) => [k, v.sort()])),
+		{
+			architecture: ["pipeline-architecture-only.yaml", "pipeline-defect-scan.yaml", "pipeline-full-with-audit.yaml", "pipeline-full-with-deep-audit.yaml", "pipeline-lite.yaml", "pipeline-scout-first.yaml", "pipeline.yaml"],
+			porting: ["pipeline-full-with-audit.yaml", "pipeline-full-with-deep-audit.yaml", "pipeline-scout-first.yaml", "pipeline.yaml"],
+			"reimplementation-spec": ["pipeline-full-with-audit.yaml", "pipeline-full-with-deep-audit.yaml", "pipeline-scout-first.yaml", "pipeline.yaml"],
+		},
+	);
+});
+
+test("E10: architecture and porting templates carry an Agent Addressability section asking the three questions, tagged with evidence levels", async () => {
+	for (const { template, section } of ADDRESSABILITY_BEARING) {
+		const text = await readFile(join(CODECARTO, template), "utf8");
+		assert.match(text, section, `${template} lacks an Agent Addressability section`);
+		const body = text.split(section)[1]?.split(/^## /m)[0] ?? "";
+		// The three questions the issue names, as columns a session fills.
+		for (const q of ["Headless", "Inspectable state", "Programmatic seam"]) {
+			assert.ok(body.includes(q), `${template}: Agent Addressability does not ask about ${q}`);
+		}
+		// Every row is tagged with the evidence level the phase already uses,
+		// so "runs headlessly" is not accepted as a bare assertion.
+		assert.ok(body.includes("Evidence"), `${template}: Agent Addressability rows carry no evidence level`);
+		assert.match(body, /observed fact|strong inference|open question/, `${template}: Agent Addressability does not name the evidence vocabulary`);
+		// A missing seam is a hazard, in the template's own words.
+		assert.match(body, /hazard/i, `${template}: Agent Addressability does not say a missing seam is a hazard`);
+		assert.ok(!/evidence of correctness|proves it works|therefore correct/i.test(body) || /not evidence of correctness|is not evidence/i.test(body), `${template}: a missing seam must not read as evidence of correctness`);
+	}
+});
+
+test("E10: the spec templates require one observable verification route per slice, in the record vocabulary", async () => {
+	for (const { template } of ROUTE_BEARING) {
+		const text = await readFile(join(CODECARTO, template), "utf8");
+		const slices = text.split(/^## Slices\s*$/im)[1]?.split(/^## /m)[0] ?? "";
+		assert.ok(slices.includes("Verification route"), `${template}: Slices table has no Verification route column`);
+		// The route is stated in E01's own words, so a plan can lift it into
+		// a proof obligation without translation.
+		for (const kind of ["test", "run", "manual-procedure"]) {
+			assert.ok(slices.includes(`\`${kind}\``), `${template}: Slices section does not offer the ${kind} route`);
+		}
+		// Headless preferred; GUI/hardware/integration allowed when documented;
+		// unavailable is a gap, not a pass.
+		assert.match(slices, /headless/i, `${template}: does not prefer headless routes`);
+		assert.match(slices, /unavailable.*(gap|blocker)|(gap|blocker).*unavailable/i, `${template}: does not say an unavailable environment is a gap`);
+	}
+});
+
+test("E10: the validation tables and completion criteria carry the addressability and route rows, as the same sentences", async () => {
+	const ROWS = {
+		architecture: ["Agent addressability is assessed with evidence levels, and missing seams are recorded as hazards."],
+		porting: ["Agent addressability is assessed with evidence levels, and missing seams are recorded as hazards."],
+		"reimplementation-spec": ["Every slice names at least one observable verification route, and an unavailable route is recorded as a gap rather than a pass."],
+	};
+	for (const [pipelineFile, pipeline] of Object.entries(pipelines)) {
+		for (const phase of pipeline.phases) {
+			const rows = ROWS[phase.id];
+			if (!rows) continue;
+			for (const row of rows) assert.ok(phase.completion_criteria.includes(row), `${pipelineFile}:${phase.id} lacks the exact criterion: ${row}`);
+		}
+	}
+	for (const { template, phase } of [...ADDRESSABILITY_BEARING, ...ROUTE_BEARING]) {
+		const text = await readFile(join(CODECARTO, template), "utf8");
+		const validation = text.split(/^## Validation\s*$/im)[1] ?? "";
+		for (const row of ROWS[phase]) assert.ok(validation.includes(`| ${row} |`), `${template} Validation lacks the exact row: ${row}`);
+	}
+});
+
+test("E10: the producing SKILLs instruct the session, and none of them force an architectural rewrite to satisfy the checklist", async () => {
+	for (const skill of new Set([...ADDRESSABILITY_BEARING, ...ROUTE_BEARING].map((b) => b.skill))) {
+		const text = await readFile(join(CODECARTO, skill), "utf8");
+		assert.match(text, /addressab|verification route/i, `${skill} never mentions addressability or verification routes`);
+		assert.match(text, /hazard/i, `${skill} does not say a missing seam is a hazard`);
+		// The issue's acceptance: do not force rewrites. The SKILL must say so.
+		assert.match(text, /do not (require|force|propose)|not a reason to|is not a request to/i, `${skill} does not forbid forcing a rewrite to satisfy the checklist`);
+	}
+});
+
+test("E10: Broad-Side lenses and schemas are pinned out of scope; a Broad-Side PR updates the fixture deliberately", async () => {
+	// The issue keeps lens/schema changes out of this PR. Pin the file set by
+	// digest so an accidental edit here fails loudly.
+	const { createHash } = await import("node:crypto");
+	const files = ["core/broadside/lenses.ts", "core/broadside/schemas.ts"];
+	const digests = {};
+	for (const f of files) digests[f] = createHash("sha256").update(await readFile(join(REPO_ROOT, f))).digest("hex").slice(0, 16);
+	// Recorded at the E10 branch point (main a240571). Update deliberately, in a
+	// PR that is about Broad-Side.
+	assert.deepEqual(digests, JSON.parse(await readFile(join(REPO_ROOT, "tests/fixtures/broadside-pin.json"), "utf8")));
+});
