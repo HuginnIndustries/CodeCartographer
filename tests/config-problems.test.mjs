@@ -22,7 +22,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 const { CONFIG_RELATIVE_PATH, describeConfigProblems, loadCodecartoConfig, loadUserConfig, mergeConfig, writeLibraryConfig } = core;
 
@@ -256,8 +256,8 @@ test("codecarto_library_init does not switch the publish gate on, and says what 
 		await assert.rejects(
 			server.handleLibraryInit({ library_path: join(dir, "bad-library"), namespace: "Team Alpha" }),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidParams);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 				assert.match(error.message, /Invalid namespace "Team Alpha" \(lowercase ASCII, starts with a letter, max 64 chars\)/);
 				return true;
 			},
@@ -272,8 +272,8 @@ test("codecarto_library_init refuses to rewrite an unparseable user config", asy
 		await assert.rejects(
 			server.handleLibraryInit({ library_path: join(dir, "new-library") }),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidRequest);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 				assert.match(error.message, /Refusing to rewrite .*could not be parsed/);
 				return true;
 			},
@@ -295,9 +295,9 @@ test("codecarto_config lists the problems and the library tools refuse while any
 		assert.equal(shown.structuredContent.libraryPath, libraryPath, "the user-global path is what is in effect");
 
 		const refused = (tool) => (error) => {
-			assert.ok(error instanceof McpError);
-			assert.equal(error.code, ErrorCode.InvalidRequest);
-			assert.match(error.message, new RegExp(`^MCP error -32600: ${tool} refused: the configuration has problems`));
+			assert.ok(error instanceof ProtocolError);
+			assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
+			assert.match(error.message, new RegExp(`^${tool} refused: the configuration has problems`));
 			assert.match(error.message, /library\.path must be absolute/);
 			return true;
 		};

@@ -19,7 +19,7 @@ const {
 	writeMarker,
 } = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const { handleInit, handlePhase } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 let workspace;
 let library;
@@ -194,8 +194,8 @@ test("MCP maps confirmation failures to InvalidRequest", async () => {
 	await assert.rejects(
 		handlePhase({ cwd: workspace, phase: "spec-merge" }),
 		(error) => {
-			assert.ok(error instanceof McpError);
-			assert.equal(error.code, ErrorCode.InvalidRequest);
+			assert.ok(error instanceof ProtocolError);
+			assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 			assert.match(error.message, /no library entries are confirmed/);
 			return true;
 		},

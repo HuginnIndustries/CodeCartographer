@@ -13,7 +13,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 const {
 	BROADSIDE_CHAT_URL, BROADSIDE_MODEL, BROADSIDE_VERIFY_MAX_TOOL_CALLS, BROADSIDE_VERIFY_SYSTEM_PROMPT,
 	broadsideDirFor, createRepoReader, loadBroadsideState, rankVerifiableFindings, runBroadsideVerify, saveBroadsideState, syncModelFor, verifyResultText,
@@ -284,7 +284,7 @@ test("codecarto_broadside verify: parameters validated, verdicts in text and str
 			for (const [args, pattern] of [[{ top: 0 }, /top must be a positive integer/], [{ top: 1.5 }, /top must be a positive integer/], [{ model: " " }, /model must be a non-empty/]]) {
 				await assert.rejects(
 					server.handleBroadside({ cwd: dir, action: "verify", ...args }),
-					(error) => error instanceof McpError && error.code === ErrorCode.InvalidParams && pattern.test(error.message),
+					(error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidParams && pattern.test(error.message),
 				);
 			}
 			const result = await server.handleBroadside({ cwd: dir, action: "verify", top: 2, max_cost: 0 });

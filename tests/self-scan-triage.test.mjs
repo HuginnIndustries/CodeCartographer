@@ -35,7 +35,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const { phaseCompactionExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/phase-compaction.ts`).href);
 const { handleInit, handleLibraryInit } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 const PIPELINE = "workflow/pipeline-architecture-only.yaml";
 const UNTERMINATED_LOG = "# Thread Log\n\n- 2026-01-01 — init — seeded without a trailing newline";
@@ -158,7 +158,7 @@ test("lead 5: codecarto_library_init refuses a relative library_path like its si
 	try {
 		await assert.rejects(
 			() => handleLibraryInit({ library_path: "relative/library" }),
-			(error) => error instanceof McpError && error.code === ErrorCode.InvalidParams && /absolute/.test(error.message),
+			(error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidParams && /absolute/.test(error.message),
 		);
 		assert.equal(await core.pathExists(configPath), false, "a refused path must not reach the user-global config");
 

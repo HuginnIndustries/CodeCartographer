@@ -1,7 +1,7 @@
 // MCP server smoke tests. Drives the core workflow handlers directly
 // (without spawning a stdio transport) against a fresh temp workspace
 // initialized via handleInit. Confirms that each tool returns the expected
-// content shape, that error cases throw McpError with the right code, and
+// content shape, that error cases throw ProtocolError with the right code, and
 // that the phase prompt the MCP server returns is byte-identical to the
 // one core/prompts.ts produces (since both Pi and MCP must emit the same
 // text).
@@ -28,7 +28,7 @@ const {
 	handleConfig,
 } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { buildPhasePrompt, getNextEligiblePhase, getWorkspaceState } = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 let WORKSPACE;
 
@@ -87,8 +87,8 @@ test("handleComplete refuses when validation is MISSING", async () => {
 	await assert.rejects(
 		handleComplete({ cwd: WORKSPACE }),
 		(error) => {
-			assert.ok(error instanceof McpError, "expected McpError");
-			assert.equal(error.code, ErrorCode.InvalidRequest);
+			assert.ok(error instanceof ProtocolError, "expected ProtocolError");
+			assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 			assert.match(error.message, /Cannot complete .*MISSING/);
 			return true;
 		},
@@ -99,8 +99,8 @@ test("handleSkill refuses while pipeline is incomplete", async () => {
 	await assert.rejects(
 		handleSkill({ cwd: WORKSPACE, name: "spec-delta-application" }),
 		(error) => {
-			assert.ok(error instanceof McpError, "expected McpError");
-			assert.equal(error.code, ErrorCode.InvalidRequest);
+			assert.ok(error instanceof ProtocolError, "expected ProtocolError");
+			assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 			assert.match(error.message, /pipeline is not complete/);
 			return true;
 		},
@@ -131,7 +131,7 @@ test("an unknown skill name points at the Broad-Side exemption", async () => {
 	await assert.rejects(
 		handleSkill({ cwd: WORKSPACE, name: "no-such-skill" }),
 		(error) => {
-			assert.ok(error instanceof McpError, "expected McpError");
+			assert.ok(error instanceof ProtocolError, "expected ProtocolError");
 			// The completion gate fires first for a workspace mid-pipeline; either
 			// message is acceptable, but the name must never dead-end silently.
 			assert.match(error.message, /pipeline is not complete|Unknown skill/);
@@ -152,8 +152,8 @@ test("handleInit refuses to overwrite without force", async () => {
 	await assert.rejects(
 		handleInit({ cwd: WORKSPACE }),
 		(error) => {
-			assert.ok(error instanceof McpError, "expected McpError");
-			assert.equal(error.code, ErrorCode.InvalidRequest);
+			assert.ok(error instanceof ProtocolError, "expected ProtocolError");
+			assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 			assert.match(error.message, /already exists/);
 			assert.match(error.message, /force: true/);
 			return true;
@@ -171,8 +171,8 @@ test("validation rejects non-absolute cwd", async () => {
 	await assert.rejects(
 		handleStatus({ cwd: "relative/path" }),
 		(error) => {
-			assert.ok(error instanceof McpError);
-			assert.equal(error.code, ErrorCode.InvalidParams);
+			assert.ok(error instanceof ProtocolError);
+			assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 			assert.match(error.message, /absolute path/);
 			return true;
 		},
@@ -183,8 +183,8 @@ test("validation rejects missing cwd", async () => {
 	await assert.rejects(
 		handleStatus({ cwd: "" }),
 		(error) => {
-			assert.ok(error instanceof McpError);
-			assert.equal(error.code, ErrorCode.InvalidParams);
+			assert.ok(error instanceof ProtocolError);
+			assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 			return true;
 		},
 	);
@@ -196,8 +196,8 @@ test("requireWorkspace error: missing .codecarto/", async () => {
 		await assert.rejects(
 			handleStatus({ cwd: empty }),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidRequest);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 				assert.match(error.message, /codecarto_init/);
 				return true;
 			},

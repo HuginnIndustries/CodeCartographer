@@ -26,7 +26,7 @@ const {
 	handleBroadside,
 } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { getWorkspaceState } = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 async function withWorkspace(fn, { init = "lite" } = {}) {
 	const cwd = await mkdtemp(join(tmpdir(), "cc-mcp-uncovered-"));
@@ -55,7 +55,7 @@ test("open refuses a directory with no workspace", async () => {
 		await assert.rejects(
 			() => handleOpen({ cwd }),
 			(error) => {
-				assert.ok(error instanceof McpError);
+				assert.ok(error instanceof ProtocolError);
 				assert.match(error.message, /codecarto_init|No existing/i);
 				return true;
 			},
@@ -88,7 +88,7 @@ test("switch_pipeline rejects an unknown variant without touching status", async
 		await assert.rejects(
 			() => handleSwitchPipeline({ cwd, pipeline: "turbo" }),
 			(error) => {
-				assert.ok(error instanceof McpError);
+				assert.ok(error instanceof ProtocolError);
 				assert.match(error.message, /Unknown pipeline: turbo/);
 				return true;
 			},
@@ -144,8 +144,8 @@ test("broadside rejects an unknown action and names the valid ones", async () =>
 		await assert.rejects(
 			() => handleBroadside({ cwd, action: "obliterate" }),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidParams);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 				assert.match(error.message, /Unknown action: obliterate/);
 				assert.match(error.message, /submit, collect, status, models/);
 				return true;
@@ -190,8 +190,8 @@ test("broadside rejects an unknown lens before spending anything", async () => {
 		await assert.rejects(
 			() => handleBroadside({ cwd, action: "submit", api_key: "sk-not-used", lenses: ["architecture", "vibes"] }),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidParams);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 				assert.match(error.message, /Unknown lens\(es\): vibes/);
 				return true;
 			},

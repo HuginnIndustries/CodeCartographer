@@ -14,7 +14,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const { handlePublish, handleLibraryList, handleLibraryReindex } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { writeMarker, LIBRARY_MARKER_FILE, LIBRARY_INDEX_FILE, ENTRIES_DIR, METADATA_FILE, SPEC_FILE, ConfidentialityMismatchError } = await import(pathToFileURL(`${REPO_ROOT}/core/library.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 // handlePublish reads the user-global config for its publish_confirm gate.
 // Point that at a path which does not exist so the developer's real
@@ -159,8 +159,8 @@ test("handlePublish rejects missing source_repo", async () => {
 		await assert.rejects(
 			handlePublish(args),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidParams);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 				assert.match(error.message, /source_repo/);
 				return true;
 			},
@@ -178,8 +178,8 @@ test("handlePublish rejects missing headline", async () => {
 		await assert.rejects(
 			handlePublish(args),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidParams);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 				assert.match(error.message, /headline/);
 				return true;
 			},
@@ -195,8 +195,8 @@ test("handlePublish rejects when library_path is not a library", async () => {
 		await assert.rejects(
 			handlePublish(basePublishArgs(dir)),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidParams);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 				assert.match(error.message, /missing \.codecarto-library/);
 				return true;
 			},
@@ -214,8 +214,8 @@ test("handlePublish requires namespace for namespaced libraries", async () => {
 		await assert.rejects(
 			handlePublish(args),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidParams);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 				assert.match(error.message, /namespace/);
 				return true;
 			},
@@ -242,8 +242,8 @@ test("handlePublish rejects without library_path or cwd config", async () => {
 	await assert.rejects(
 		handlePublish({ source_repo: "x", headline: "y", spec: "z" }),
 		(error) => {
-			assert.ok(error instanceof McpError);
-			assert.equal(error.code, ErrorCode.InvalidParams);
+			assert.ok(error instanceof ProtocolError);
+			assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 			assert.match(error.message, /library_path is required/);
 			return true;
 		},
@@ -259,7 +259,7 @@ test("handlePublish refuses an internal entry into a public library and writes n
 			handlePublish(basePublishArgs(libraryPath, { confidentiality: "internal" })),
 			(error) => {
 				// Surfaced as the core's typed error, not rewrapped: the server's
-				// CallTool handler turns any non-McpError into an InternalError that
+				// CallTool handler turns any non-ProtocolError into an InternalError that
 				// keeps this message, and the message names the override.
 				assert.ok(error instanceof ConfidentialityMismatchError);
 				assert.equal(error.entryConfidentiality, "internal");
@@ -357,8 +357,8 @@ function assertPublishConfirmRefusal(error) {
 	// The shape codecarto_broadside's spend gate has: an InvalidRequest whose
 	// message is the whole story, so a host that reads only the error text
 	// still sees the preview and the way forward.
-	assert.ok(error instanceof McpError);
-	assert.equal(error.code, ErrorCode.InvalidRequest);
+	assert.ok(error instanceof ProtocolError);
+	assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 	assert.match(error.message, /library\.publish_confirm is set/);
 	assert.match(error.message, /Nothing was written/);
 	assert.match(error.message, /confirm: true/);
@@ -541,8 +541,8 @@ test("the gate runs after argument validation, so a refusal previews a publish t
 			const args = basePublishArgs(libraryPath);
 			delete args.headline;
 			await assert.rejects(handlePublish(args), (error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidParams, "a bad argument is reported as such, not hidden behind the gate");
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams, "a bad argument is reported as such, not hidden behind the gate");
 				assert.match(error.message, /headline/);
 				return true;
 			});
@@ -649,8 +649,8 @@ test("handleLibraryReindex rejects on missing marker", async () => {
 		await assert.rejects(
 			handleLibraryReindex({ library_path: dir }),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidParams);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams);
 				return true;
 			},
 		);

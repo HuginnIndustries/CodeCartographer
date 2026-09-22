@@ -25,7 +25,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/broadside.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 const {
 	BROADSIDE_ENDPOINTS_FILE,
 	BROADSIDE_MODEL,
@@ -272,7 +272,7 @@ test("codecarto_broadside takes model and lens_models, validates them, and passe
 			]) {
 				await assert.rejects(
 					server.handleBroadside({ cwd: dir, action: "submit", lenses: ["architecture"], max_cost: 0, ...args }),
-					(error) => error instanceof McpError && error.code === ErrorCode.InvalidParams && pattern.test(error.message),
+					(error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidParams && pattern.test(error.message),
 					`${JSON.stringify(args)} must be refused as InvalidParams`,
 				);
 			}

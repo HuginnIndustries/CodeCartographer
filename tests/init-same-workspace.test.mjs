@@ -20,7 +20,7 @@ const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { ENGINEERING_NAMESPACE } = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/ids.ts`).href);
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 async function withTemp(fn) {
 	const dir = await mkdtemp(join(tmpdir(), "cc-init-same-"));
@@ -192,8 +192,8 @@ test("codecarto_init refuses to reset the packaged template without force", asyn
 		await assert.rejects(
 			server.handleInit({ cwd }),
 			(error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidRequest);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 				assert.match(error.message, /is CodeCartographer's own packaged template \(a checkout install\)/);
 				assert.match(error.message, /Pass force: true to move that state/);
 				assert.match(error.message, /the framework files stay in place/);

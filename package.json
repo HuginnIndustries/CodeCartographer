@@ -62,7 +62,8 @@
     "demo:synthesis": "npm run build && node scripts/create-synthesis-demo.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/core": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.84.0",
@@ -74,6 +75,7 @@
     ]
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "typescript": "^5.9.3"
   },
   "overrides": {

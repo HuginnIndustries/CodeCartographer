@@ -138,11 +138,11 @@ test("readSpecArg accepts inline spec regardless of allowedRoots", async () => {
 // way the workflow tools validate a required one, first.
 
 const { handleLibraryList, handleLibraryReindex } = await import("../mcp-server/server.ts");
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 const isInvalidParams = (pattern) => (err) => {
-	assert.ok(err instanceof McpError, "expected McpError");
-	assert.equal(err.code, ErrorCode.InvalidParams);
+	assert.ok(err instanceof ProtocolError, "expected ProtocolError");
+	assert.equal(err.code, ProtocolErrorCode.InvalidParams);
 	assert.match(err.message, pattern);
 	return true;
 };
@@ -163,7 +163,7 @@ test("codecarto_publish refuses a relative cwd before spec_path is read through 
 				headline: "Test spec",
 				spec_path: secretPath,
 			}),
-			isInvalidParams(/^MCP error -32602: cwd must be an absolute path, got: target$/),
+			isInvalidParams(/^cwd must be an absolute path, got: target$/),
 		);
 	} finally {
 		await cleanup();
