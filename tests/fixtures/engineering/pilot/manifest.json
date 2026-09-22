@@ -1,0 +1,21 @@
+{
+	"repository": {
+		"vcs": "git",
+		"head": "0123456789abcdef0123456789abcdef01234567",
+		"dirty": true
+	},
+	"files": [
+		{
+			"path": "src/widgets/count.ts",
+			"body": "export function countWidgets(opts = {}) { return opts.includeArchived === false ? 2 : 3; }\n"
+		},
+		{
+			"path": "tests/widgets-count.test.mjs",
+			"body": "import { test } from 'node:test';\n"
+		},
+		{
+			"path": "README.md",
+			"body": "# widgets\n"
+		}
+	]
+}
