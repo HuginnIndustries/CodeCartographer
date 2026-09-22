@@ -428,7 +428,9 @@ test("a self-dependency is reported once, not also as a one-node cycle", () => {
 
 // ---------------------------------------------------------------------------
 // E10: the verification route. A column the lifter ignored would leave the
-// route in the document and out of the plan, which is the seam E10 opens.
+// route in the document with nothing checking it. The lifted route stops at
+// the lifter today (E04 has no field for it); carrying it into proof
+// obligations is E11.
 // ---------------------------------------------------------------------------
 
 const ROUTED = ARTIFACT.replace("| Depends on | Tier |", "| Depends on | Tier | Verification route |")
@@ -457,6 +459,7 @@ test("E10: `none` is a recorded gap that refuses the slice; a blank route is ref
 	const hit = bogus.errors.filter((e) => e.code === "unknown-route");
 	assert.equal(hit.length, 1, JSON.stringify(bogus.errors));
 	assert.match(hit[0].message, /manual-procedure/, "the refusal must name the vocabulary the author should use");
+	assert.doesNotMatch(hit[0].message, /other|build|lint|typecheck/, "the refusal must not recommend kinds that are not routes");
 });
 
 test("E10: every route the templates teach is a real E01 check_kind, and the shipped templates lift with a route", async () => {
@@ -486,4 +489,26 @@ test("E10: an artifact written before the route column existed lifts exactly as 
 	const e09 = liftSlices(ARTIFACT);
 	assert.deepEqual(e09.errors, []);
 	assert.ok(e09.slices.every((s) => !("verification_route" in s)));
+});
+
+test("E10: `other`, `build`, `lint`, `typecheck` are check kinds but not verification routes; they are refused, so a gap cannot be written as `other`", async () => {
+	const { ROUTE_KINDS, CHECK_KINDS } = await import(pathToFileURL(join(REPO_ROOT, "core/engineering/index.ts")).href);
+	assert.deepEqual([...ROUTE_KINDS], ["test", "run", "manual-procedure"]);
+	for (const kind of CHECK_KINDS.filter((k) => !ROUTE_KINDS.includes(k))) {
+		const out = liftSlices(ROUTED.replace("| major-workflow | manual-procedure |", `| major-workflow | ${kind} |`));
+		assert.ok(out.errors.some((e) => e.code === "unknown-route" && e.at === "SL-03"), `${kind} lifted as a route: ${JSON.stringify(out.errors)}`);
+		assert.ok(!("verification_route" in out.slices[2]), `${kind} was recorded as a route`);
+	}
+});
+
+test("E10: a duplicate Verification route column is refused, so a second cell saying `none` cannot be silently discarded", () => {
+	const dup = ROUTED.replace("| Tier | Verification route |", "| Tier | Verification route | Verification route |")
+		.replace("|------|--------------------|", "|------|--------------------|--------------------|")
+		.replace("| minimum-viable | test |", "| minimum-viable | test | test |")
+		.replace("| minimum-viable | run |", "| minimum-viable | run | run |")
+		.replace("| major-workflow | manual-procedure |", "| major-workflow | test | none |");
+	const out = liftSlices(dup);
+	const hit = out.errors.filter((e) => e.code === "duplicate-column");
+	assert.equal(hit.length, 1, JSON.stringify(out.errors));
+	assert.match(hit[0].message, /Verification route/);
 });

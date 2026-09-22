@@ -474,12 +474,15 @@ test("E09: the new validation rows and the pipeline completion criteria are the 
 // not have is not "unverifiable" in the abstract; it has a specific,
 // recordable gap. The architecture phase assesses this once, tagged with the
 // existing evidence levels; the spec names one route per slice in the record
-// vocabulary (E01 check_kind / collector) so the plan can carry it. Missing
+// vocabulary (a subset of E01 check_kind) so a later evolution can carry it
+// into proof obligations; today it stops at the lifter (see the E10 dogfood note). Missing
 // seams are hazards, not evidence of correctness -- a system that cannot be
 // observed headlessly is not thereby known to work.
 //
 // Structural checks on TEMPLATES and SKILLs: they prove the instruction
-// exists. The record contract enforces that a session obeyed it.
+// exists. For routes, the lifter enforces that a session obeyed it. For the
+// addressability table nothing programmatic reads it yet; it is
+// instructional, and only a reviewer of the phase output checks it.
 // ---------------------------------------------------------------------------
 
 const ADDRESSABILITY_BEARING = [
@@ -495,7 +498,7 @@ test("E10: every pipeline carrying an addressability-bearing phase is enumerated
 	const carriers = {};
 	for (const [pipelineFile, pipeline] of Object.entries(pipelines)) {
 		for (const phase of pipeline.phases) {
-			if (ADDRESSABILITY_BEARING.some((b) => b.phase === phase.id)) (carriers[phase.id] ??= []).push(pipelineFile);
+			if ([...ADDRESSABILITY_BEARING, ...ROUTE_BEARING].some((b) => b.phase === phase.id)) (carriers[phase.id] ??= []).push(pipelineFile);
 		}
 	}
 	assert.deepEqual(
@@ -503,6 +506,7 @@ test("E10: every pipeline carrying an addressability-bearing phase is enumerated
 		{
 			architecture: ["pipeline-architecture-only.yaml", "pipeline-defect-scan.yaml", "pipeline-full-with-audit.yaml", "pipeline-full-with-deep-audit.yaml", "pipeline-lite.yaml", "pipeline-scout-first.yaml", "pipeline.yaml"],
 			porting: ["pipeline-full-with-audit.yaml", "pipeline-full-with-deep-audit.yaml", "pipeline-scout-first.yaml", "pipeline.yaml"],
+			"reimplementation-spec": ["pipeline-full-with-audit.yaml", "pipeline-full-with-deep-audit.yaml", "pipeline-scout-first.yaml", "pipeline.yaml"],
 		},
 	);
 });
@@ -573,7 +577,7 @@ test("E10: the producing SKILLs instruct the session, and none of them force an 
 	}
 });
 
-test("E10: Broad-Side lenses and schemas are untouched", async () => {
+test("E10: Broad-Side lenses and schemas are pinned out of scope; a Broad-Side PR updates the fixture deliberately", async () => {
 	// The issue keeps lens/schema changes out of this PR. Pin the file set by
 	// digest so an accidental edit here fails loudly.
 	const { createHash } = await import("node:crypto");

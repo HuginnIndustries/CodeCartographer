@@ -62,7 +62,18 @@
 // does not hide an empty proof list two rows down.
 
 import { isLocalId } from "./ids.ts";
-import { CHECK_KINDS, type CheckKind } from "./types.ts";
+import type { CheckKind } from "./types.ts";
+
+/**
+ * The check kinds a slice may name as its verification ROUTE (E10). A
+ * deliberate subset of E01's CHECK_KINDS: `build`, `lint` and `typecheck`
+ * do not observe scenario behavior, and `other` means "I cannot say how
+ * this is observed" -- which is a gap, and must be written as `none` so it
+ * is refused as one. Gating on the full CHECK_KINDS let `other` lift as a
+ * clean pass and the refusal message recommend it (review finding).
+ */
+export const ROUTE_KINDS = ["test", "run", "manual-procedure"] as const satisfies readonly CheckKind[];
+export type RouteKind = (typeof ROUTE_KINDS)[number];
 
 export interface LiftedScenario {
 	id: string;
@@ -82,7 +93,7 @@ export interface LiftedSlice {
 	 * check_kind vocabulary. Present only when the artifact's table carries
 	 * a Verification route column. `"none"` is a recorded gap, not a route.
 	 */
-	verification_route?: CheckKind | "none";
+	verification_route?: RouteKind | "none";
 	/** Present only when the artifact's table carries a Proof command column. */
 	proof_command?: string;
 }
@@ -106,7 +117,8 @@ export type LiftErrorCode =
 	| "dependency-cycle"
 	| "unowned-minimum-viable"
 	| "unknown-route"
-	| "no-route";
+	| "no-route"
+	| "duplicate-column";
 
 export interface LiftError {
 	/** Where in the artifact the problem is, in the artifact's own ids or table rows. */
@@ -180,6 +192,13 @@ export function liftSlices(markdown: string): LiftOutcome {
 			proof: column(sliceTable, "Proof command"),
 			route: column(sliceTable, "Verification route"),
 		};
+		// A column that appears twice is refused for the same reason a heading
+		// that appears twice is: which cell is the route is ambiguous, and
+		// first-match-wins silently discarded a recorded `none` (review finding).
+		for (const name of ["Slice ID", "Deliverable", "Modules", "Proves scenarios", "Depends on", "Tier", "Verification route", "Proof command"]) {
+			const n = sliceTable.header.filter((h) => h.toLowerCase() === name.toLowerCase()).length;
+			if (n > 1) errors.push({ at: "Slices", code: "duplicate-column", message: `the Slices table has ${n} "${name}" columns; which one is meant is ambiguous` });
+		}
 		// Only the id column gates the row loop. Every other check runs when
 		// its own column exists, so one misspelled header does not suppress
 		// the defects in columns that are present.
@@ -201,7 +220,7 @@ export function liftSlices(markdown: string): LiftOutcome {
 				}
 				const proof = cols.proof >= 0 ? (row.cells[cols.proof] ?? "") : "";
 				const routeText = cols.route >= 0 ? (row.cells[cols.route] ?? "") : "";
-				let route: CheckKind | "none" | undefined;
+				let route: RouteKind | "none" | undefined;
 				if (cols.route >= 0) {
 					// The column exists, so a route is required: E10 says every
 					// slice names one. An unavailable route is written as `none`
@@ -211,10 +230,10 @@ export function liftSlices(markdown: string): LiftOutcome {
 					} else if (routeText === "none") {
 						route = "none";
 						errors.push({ at: id, code: "no-route", message: `slice ${id} has no observable verification route (\`none\`); this is a gap on the slice, not a pass` });
-					} else if ((CHECK_KINDS as readonly string[]).includes(routeText)) {
-						route = routeText as CheckKind;
+					} else if ((ROUTE_KINDS as readonly string[]).includes(routeText)) {
+						route = routeText as RouteKind;
 					} else {
-						errors.push({ at: id, code: "unknown-route", message: `slice ${id} names verification route ${JSON.stringify(routeText)}, which is not a record check_kind (${CHECK_KINDS.join(", ")}) or \`none\`` });
+						errors.push({ at: id, code: "unknown-route", message: `slice ${id} names verification route ${JSON.stringify(routeText)}, which is not a verification route (${ROUTE_KINDS.join(", ")}) or \`none\`` });
 					}
 				}
 				slices.push({
