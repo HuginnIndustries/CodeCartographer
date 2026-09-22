@@ -17,6 +17,9 @@
 // a session "an empty proof list is not a plan"; this is where that sentence
 // becomes a check rather than advice:
 //
+//   - a scenario or slice id that is not a valid record local id, so the
+//     artifact is refused where its author can fix it rather than at the
+//     store, three steps later, for a reason invisible in the document
 //   - a slice with no proved scenarios
 //   - a slice naming a scenario that does not exist in the artifact
 //   - a slice depending on a slice that does not exist, or on itself
@@ -34,6 +37,8 @@
 // under a known heading and nothing else; a template that changes the
 // heading or the column names fails loudly here, which is what the paired
 // pipeline-invariants test is for. It does not try to be a markdown parser.
+
+import { isLocalId } from "./ids.ts";
 
 export interface LiftedScenario {
 	id: string;
@@ -64,7 +69,8 @@ export interface LiftError {
 		| "self-dependency"
 		| "unowned-minimum-viable"
 		| "duplicate-id"
-		| "missing-id";
+		| "missing-id"
+		| "invalid-id";
 	message: string;
 }
 
@@ -122,6 +128,7 @@ export function liftSlices(markdown: string): LiftOutcome {
 					errors.push({ at: `Acceptance Scenarios row ${scenarios.length + 1}`, code: "missing-id", message: "a scenario row has content but no Scenario ID" });
 					continue;
 				}
+				if (!isLocalId(id)) errors.push({ at: id, code: "invalid-id", message: `scenario id ${JSON.stringify(id)} is not a valid local id ([A-Za-z0-9][A-Za-z0-9._-]{0,63}); the record store would refuse it` });
 				if (seen.has(id)) errors.push({ at: id, code: "duplicate-id", message: `scenario ${id} is defined more than once` });
 				seen.add(id);
 				scenarios.push({ id, tier: row[tierCol]?.trim() ?? "", description: row[descCol]?.trim() ?? "" });
@@ -159,6 +166,7 @@ export function liftSlices(markdown: string): LiftOutcome {
 					errors.push({ at: `Slices row ${slices.length + 1}`, code: "missing-id", message: "a slice row has content but no Slice ID; it would otherwise vanish from the plan" });
 					continue;
 				}
+				if (!isLocalId(id)) errors.push({ at: id, code: "invalid-id", message: `slice id ${JSON.stringify(id)} is not a valid local id ([A-Za-z0-9][A-Za-z0-9._-]{0,63}); the record store would refuse it` });
 				if (seen.has(id)) errors.push({ at: id, code: "duplicate-id", message: `slice ${id} is defined more than once` });
 				seen.add(id);
 				slices.push({

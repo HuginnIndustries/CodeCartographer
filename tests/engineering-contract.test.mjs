@@ -150,7 +150,7 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	// apart, which is why it may read the store but imports no child process,
 	// no network, and nothing that writes outside the namespace.
 	// lift (E09) reads a planning artifact into the record vocabulary. It
-	// imports nothing at all and sits with the other pure readers.
+	// imports only the id grammar and sits with the other pure readers.
 	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, lift: 2, store: 3, proofs: 4, gates: 4, traverse: 5, index: 6 };
 	// Everything except the store must stay pure. Splitting the rule rather
 	// than dropping it: a validator that gained a `node:fs` import would

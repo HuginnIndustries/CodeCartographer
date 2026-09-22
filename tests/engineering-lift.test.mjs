@@ -256,3 +256,36 @@ test("a pre-E09 self-audit spec is refused with every missing structure named at
 	assert.ok(out.errors.some((e) => /Scenario ID/.test(e.message)), "did not name the Scenario ID column");
 	assert.ok(out.errors.some((e) => /Tier/.test(e.message)), "did not name the Tier column");
 });
+
+test("an id the record store would refuse is refused HERE, where the author can fix it", async () => {
+	// E04's buildChangePlan does not check id grammar; only the store (E01)
+	// does. Without this check an artifact lifts clean, plans clean, and is
+	// refused three steps later for a reason invisible in the document.
+	// Found while trying to break the agreement claim: "S 01" lifted and
+	// planned, and validateRecordOfKind refused it with invalid-local-id.
+	const { validateRecordOfKind } = await import(pathToFileURL(join(REPO_ROOT, "core/engineering/index.ts")).href);
+	for (const [bad, where] of [["S 01", "scenario"], ["S/01", "scenario"], ["S-" + "x".repeat(70), "scenario"], ["SL 01", "slice"], [".SL-01", "slice"]]) {
+		const text = where === "scenario"
+			? ARTIFACT.replace("| S-01 | minimum-viable |", `| ${bad} | minimum-viable |`).replace("| S-01 | | minimum-viable |", `| ${bad} | | minimum-viable |`)
+			: ARTIFACT.replace("| SL-01 | a runnable binary", `| ${bad} | a runnable binary`).replace("| SL-01 |", `| ${bad} |`).replace("SL-01, SL-02", `${bad}, SL-02`);
+		const out = liftSlices(text);
+		const hit = out.errors.filter((e) => e.code === "invalid-id");
+		assert.equal(hit.length, 1, `${where} id ${JSON.stringify(bad)}: ${JSON.stringify(out.errors)}`);
+		assert.equal(hit[0].at, bad);
+	}
+	// Agreement in the other direction: what the lifter accepts, the store's
+	// grammar accepts. Every id the clean fixture uses passes E01.
+	const clean = liftSlices(ARTIFACT);
+	const now = "2026-09-22T12:00:00Z";
+	for (const s of clean.slices) {
+		const record = validateRecordOfKind("slice", {
+			schema_version: 1, kind: "slice", id: "slc_0123456789abcdef01234567", created_at: now, updated_at: now,
+			change_id: "chg_0123456789abcdef01234567", revision: 1, title: s.deliverable, deliverable: s.deliverable,
+			scenario_ids: s.scenario_ids, depends_on: [],
+			proof_obligations: s.scenario_ids.map((sid, i) => ({ id: `o${i + 1}`, scenario_id: sid, check_kind: "test", description: "d", minimum_collector: "host-observed" })),
+			permitted_scope: { paths: ["src/**"] }, state: "planned",
+		});
+		const idErrors = (record.errors ?? []).filter((e) => e.code === "invalid-local-id");
+		assert.deepEqual(idErrors, [], `store refused an id the lifter accepted: ${JSON.stringify(idErrors)}`);
+	}
+});
