@@ -3,7 +3,7 @@
 // in-memory. The real OpenRouter API is covered by a manual smoke path, not
 // this suite.
 
-import "./helpers/git-config-isolation.mjs";
+import "./helpers/git-environment-isolation.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";

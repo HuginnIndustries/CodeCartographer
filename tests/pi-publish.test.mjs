@@ -7,7 +7,7 @@
 // upgraded Pi trips it on its own, when an entry recorded under the old
 // directory shape meets a publish carrying the new remote shape.
 
-import "./helpers/git-config-isolation.mjs";
+import "./helpers/git-environment-isolation.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

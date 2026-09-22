@@ -4,7 +4,7 @@
 // asks a human about the money instead of refusing over max_cost, and it runs
 // on a repository with no CodeCartographer workspace.
 
-import "./helpers/git-config-isolation.mjs";
+import "./helpers/git-environment-isolation.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

@@ -12,7 +12,7 @@
 //       refused before pricing, and the manifests present name candidates
 //       that the source-file counts decide between.
 
-import "./helpers/git-config-isolation.mjs";
+import "./helpers/git-environment-isolation.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

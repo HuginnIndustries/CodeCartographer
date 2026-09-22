@@ -16,7 +16,7 @@
 // gate describes a publish with (#162), and the git-remote resolver the Pi
 // command records source_repo from (#147).
 
-import "./helpers/git-config-isolation.mjs";
+import "./helpers/git-environment-isolation.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
