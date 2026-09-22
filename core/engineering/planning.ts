@@ -27,11 +27,13 @@
 // neutralized on the way in, so the only structure in the document is the
 // structure this module wrote.
 //
-// Scope note (E04 minus the imported-spec seam): deriving a plan from an
-// existing analysis artifact — a reimplementation spec or project plan — is
-// deliberately NOT implemented here. That seam belongs to E09, which is on
-// maintainer hold. `local_findings` below carries such artifacts only as
-// disclosed context with a staleness flag; nothing reads their content.
+// Scope note: deriving slices from an existing analysis artifact — a
+// reimplementation spec or project plan — lives in ./lift.ts (E09). It
+// reads the artifact's Slices and scenario tables into the vocabulary this
+// module consumes, and refuses on the same grounds buildChangePlan refuses
+// (tests/engineering-lift.test.mjs proves the two agree). `local_findings`
+// below still carries such artifacts only as disclosed context with a
+// staleness flag; the CONTENT is read by the lifter, never here.
 
 import { SCENARIO_KINDS, CHANGE_MODES, COLLECTORS, CHECK_KINDS } from "./types.ts";
 import type { ChangeMode, AcceptanceScenario, ReferenceBinding, SliceInput, ProofObligation } from "./types.ts";

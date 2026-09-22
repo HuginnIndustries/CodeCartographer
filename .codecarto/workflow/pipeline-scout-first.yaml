@@ -269,6 +269,8 @@ phases:
       - Findings are marked with evidence levels.
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
       - Lower-level findings are deep-read only when the porting bundle identifies a gap, conflict, missing acceptance detail, or defect rationale.
+      - Every slice names at least one scenario it proves, and every Scenario ID it lists exists in the Acceptance Scenarios table.
+      - Every minimum-viable scenario is owned by at least one slice.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.

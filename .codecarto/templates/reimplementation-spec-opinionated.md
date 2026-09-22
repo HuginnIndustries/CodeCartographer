@@ -123,9 +123,33 @@
   observable contract.
 -->
 
-| # | Scenario | Input | Expected Output / Side Effect |
-|---|----------|-------|-------------------------------|
-| 1 | | | |
+| Scenario ID | Tier | Scenario | Input | Expected Output / Side Effect |
+|-------------|------|----------|-------|-------------------------------|
+| S-01 | minimum-viable | (what is checked) | (concrete input) | (observable output) |
+
+## Slices
+
+<!--
+  The unit of reviewable work: a promise plus the scenarios that prove it was
+  kept. Columns are the engineering record's own vocabulary and lift directly
+  into a slice record.
+
+  Rules:
+  - Slice IDs are stable (SL-01, SL-02, ...) and never renumbered.
+  - "Proves scenarios" lists Scenario IDs from the table above; each must
+    exist. An empty proof list is not a plan.
+  - Every minimum-viable scenario must be owned by some slice.
+  - "Depends on" lists Slice IDs that must be accepted first.
+  - Because the target stack is locked in this variant, a slice MAY carry an
+    executable proof command in the Proof command column. Name the exact
+    command a host would run and what its passing output looks like. A
+    command is still a claim until a host runs it and reports; writing it
+    here does not discharge anything.
+-->
+
+| Slice ID | Deliverable | Modules | Proves scenarios | Depends on | Tier | Proof command |
+|----------|-------------|---------|------------------|------------|------|---------------|
+| SL-01 | (what this slice delivers) | (modules) | S-01 | | minimum-viable | |
 
 ## Spike List
 
@@ -188,6 +212,8 @@
 | 5 | Findings are marked with evidence levels. | PASS / PARTIAL / FAIL | |
 | 6 | Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots. | PASS / PARTIAL / FAIL | |
 | 7 | Lower-level findings are deep-read only when the porting bundle identifies a gap, conflict, missing acceptance detail, or defect rationale. | PASS / PARTIAL / FAIL | |
+| 8 | Every slice names at least one scenario it proves, and every Scenario ID it lists exists in the Acceptance Scenarios table. | PASS / PARTIAL / FAIL | |
+| 9 | Every minimum-viable scenario is owned by at least one slice. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL

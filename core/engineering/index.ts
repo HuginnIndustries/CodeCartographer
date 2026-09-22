@@ -22,3 +22,4 @@ export * from "./store.ts";
 export * from "./proofs.ts";
 export * from "./gates.ts";
 export * from "./traverse.ts";
+export * from "./lift.ts";

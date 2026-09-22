@@ -47,7 +47,8 @@ Write the plan in this order:
 5. `Portability hazards`
 6. `Implementation sequence`
 7. `Acceptance scenarios`
-8. `Known unknowns`
+8. `Slices`
+9. `Known unknowns`
 
 Define scope tiers:
 - `minimum viable port`
@@ -58,6 +59,14 @@ Write acceptance scenarios as black-box checks:
 - Inputs must be concrete.
 - Outputs and side effects must be observable.
 - Avoid assertions that depend on internal file names, classes, or source-language idioms.
+- Give every scenario a stable `Scenario ID` (S-01, S-02, ...) and a `Tier`. A row number is not an id: it changes when a row is inserted, and slices cite these ids.
+
+Then write the Slices table. A slice is a promise plus the scenarios that prove it was kept, and it is what an engineering change is planned from later, so it must be lift-able into a slice record as written:
+- Every slice gets a stable `Slice ID` (SL-01, SL-02, ...), a deliverable, the modules it touches, the slice ids it depends on, and a tier. Replace the template's parenthesised placeholders; a row left with a placeholder or an empty cell is refused, not skipped.
+- Keep the tables plain GFM: one row per line, no prose between rows, `\|` for a literal pipe in a cell. A row the reader cannot place is reported, never dropped, so an interrupted table is a refusal rather than a shorter plan.
+- `Proves scenarios` names Scenario IDs from the table above, and every id it names must exist there. **An empty proof list is not a plan.** A slice that proves nothing cannot be reviewed; no proof is worse than a weak one because it hides that the question was never asked. If you cannot name a scenario that proves a slice, the slice is not yet defined — split it or write the scenario.
+- Every scenario tiered `minimum-viable` must be owned by at least one slice. An unowned minimum-viable scenario means the port could be called done without it, which contradicts the tier.
+- In the language-agnostic spec, state proof obligations as what must be observed, never as a command. Executable proof commands belong only in the opinionated variant, where the target stack is known — and even there a command written in a plan is a claim, not evidence, until a host runs it and reports.
 
 Call out deliberate non-goals:
 - features intentionally deferred
