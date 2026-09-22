@@ -39,8 +39,11 @@ Ask `codecarto_change` for the next step and it will tell you one action. Before
 you take it, check what the loop needs against what you actually have:
 
 - **Bounds.** The loop refuses to plan at all unless you declare `max_attempts`
-  and `max_wall_clock_ms`. There is no default. A loop that picks a limit for
-  you hides that you never picked one.
+  (a positive integer) and `max_wall_clock_ms` (a positive finite number).
+  There is no default. A loop that picks a limit for you hides that you never
+  picked one — and a bound that cannot bound is worse than a missing one,
+  because it reads as a limit in the step you get back. `NaN`, `Infinity`,
+  zero and negatives are refused.
 - **Execution.** If you cannot run the work, say so (`can_execute: false`) and
   the loop stops instead of asking you to attempt something you cannot do.
 - **A human.** If you have no way to reach a person for a decision, say so
@@ -112,10 +115,16 @@ The loop stops for exactly one of these reasons, and says which:
 | `host-cannot-execute` | The next action needs execution you declared you cannot do | A host that can execute |
 | `host-cannot-obtain-human-decision` | Acceptance needs a person you cannot reach | A host with a channel to one |
 | `awaiting-human-decision` | Presented; waiting | The person answers |
-| `blocked-needs-operator` | An external thing is broken | A person clears it |
+| `blocked-needs-operator` | An external thing is broken, the change itself is marked `blocked`, or a record cannot be read | A person clears it |
 
 A stop is not a failure. It is the loop declining to continue without something
 it does not have.
+
+**An unreadable record stops the loop.** A truncated file, or an attempts
+directory that has been redirected somewhere outside the workspace, is not
+read as "nothing here" — the one case where the loop cannot tell whether work
+is already in flight is the case where it must not proceed. It stops and names
+the path.
 
 **To resume**: ask for the next step again. The answer is computed from the
 records alone, so a new session reaches the same action as the one that died,

@@ -120,12 +120,38 @@ export interface TraverseStep {
  * session agree with the one it replaced.
  */
 export async function planTraverseStep(store: EngineeringStore, request: TraverseRequest): Promise<TraverseStep> {
-	if (!request.host?.bounds || typeof request.host.bounds.max_attempts !== "number") {
+	// Presence was not enough. `NaN` passed a typeof check and then defeated
+	// the budget entirely, because `failures >= NaN` is false forever: the
+	// loop retried without limit while advertising "attempts remaining NaN"
+	// as its stated bound. A bound that cannot bound is worse than a missing
+	// one, because it reads as a limit in the step it returns.
+	const bounds = request.host?.bounds;
+	const bounded = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
+	if (!bounds || !Number.isInteger(bounds.max_attempts) || !bounded(bounds.max_attempts) || !bounded(bounds.max_wall_clock_ms)) {
 		throw new Error(
-			"the host must declare bounds (max_attempts, max_wall_clock_ms): an unbounded loop is not a default, and choosing a limit here would hide that the host never chose one",
+			"the host must declare real bounds: max_attempts a positive integer and max_wall_clock_ms a positive finite number. An unbounded loop is not a default, and choosing a limit here would hide that the host never chose one",
 		);
 	}
 
+	try {
+		return await planFromRecords(store, request, bounds);
+	} catch (error) {
+		if (error instanceof TraverseUnreadableError) {
+			// Deliberately a stop rather than a throw: the caller asked what to
+			// do next, and "stop, a person must look at this" IS the answer.
+			// Throwing would push handling onto every host, and a host that
+			// catches broadly ends up back at fail-open.
+			return stop("blocked-needs-operator", `${error.message}. The loop will not proceed while a record cannot be read`, []);
+		}
+		throw error;
+	}
+}
+
+async function planFromRecords(
+	store: EngineeringStore,
+	request: TraverseRequest,
+	bounds: NonNullable<TraverseHost["bounds"]>,
+): Promise<TraverseStep> {
 	const change = await readOne<ChangeRecord>(store, "change", request.change_id, {});
 	if (!change) {
 		return stop("unknown-change", `no change ${request.change_id} is recorded; intake it before traversing`, []);
@@ -139,6 +165,17 @@ export async function planTraverseStep(store: EngineeringStore, request: Travers
 	// what the host can or cannot do.
 	if (change.state === "accepted" || change.state === "abandoned") {
 		return stop("change-concluded", `change ${change.id} is ${change.state}; open a new change rather than extending this one`, history);
+	}
+
+	// A blocked change outranks anything the attempts say: someone marked the
+	// whole change untouchable, and the attempt-level check below would never
+	// see it because a blocked change need not have a blocked attempt.
+	if (change.state === "blocked") {
+		return stop(
+			"blocked-needs-operator",
+			`change ${change.id} is blocked: ${change.block_reason ?? "no reason recorded"}. A person must clear this before any attempt`,
+			history,
+		);
 	}
 
 	if (slices.length === 0) {
@@ -159,7 +196,7 @@ export async function planTraverseStep(store: EngineeringStore, request: Travers
 		return {
 			action: "resume-attempt",
 			rationale: `attempt ${latest.id} is already running; resume it rather than starting another, which would repeat whatever it already did`,
-			bounds: { limits: [`wall clock ${request.host.bounds.max_wall_clock_ms} ms`, "no new attempt record"] },
+			bounds: { limits: [`wall clock ${bounds.max_wall_clock_ms} ms`, "no new attempt record"] },
 			resumed_from: resumedFrom(latest),
 			history,
 			idempotency_key: keyFor("resume-attempt", change.id, latest.id),
@@ -167,10 +204,10 @@ export async function planTraverseStep(store: EngineeringStore, request: Travers
 	}
 
 	const failures = attempts.filter((attempt) => attempt.outcome === "failed").length;
-	if (failures >= request.host.bounds.max_attempts) {
+	if (failures >= bounds.max_attempts) {
 		return stop(
 			"attempt-budget-exhausted",
-			`${failures} attempts have failed and the host's budget is ${request.host.bounds.max_attempts}; retrying again would spend without new information`,
+			`${failures} attempts have failed and the host's budget is ${bounds.max_attempts}; retrying again would spend without new information`,
 			history,
 		);
 	}
@@ -190,7 +227,7 @@ export async function planTraverseStep(store: EngineeringStore, request: Travers
 		return {
 			action: "retry-after-failure",
 			rationale: `attempt ${latest.id} failed: ${latest.failure_summary ?? "no summary recorded"}. A new attempt supersedes nothing; the failure stays on the record`,
-			bounds: { limits: [`attempts remaining ${request.host.bounds.max_attempts - failures}`, `wall clock ${request.host.bounds.max_wall_clock_ms} ms`] },
+			bounds: { limits: [`attempts remaining ${bounds.max_attempts - failures}`, `wall clock ${bounds.max_wall_clock_ms} ms`] },
 			resumed_from: resumedFrom(latest),
 			history,
 			idempotency_key: keyFor("retry-after-failure", change.id, latest.id),
@@ -241,10 +278,24 @@ export async function planTraverseStep(store: EngineeringStore, request: Travers
 	return {
 		action: "start-attempt",
 		rationale: `change ${change.id} has slices and no open attempt; start one against a recorded baseline so the candidate can be identified later`,
-		bounds: { limits: [`attempts remaining ${request.host.bounds.max_attempts - failures}`, `wall clock ${request.host.bounds.max_wall_clock_ms} ms`] },
+		bounds: { limits: [`attempts remaining ${bounds.max_attempts - failures}`, `wall clock ${bounds.max_wall_clock_ms} ms`] },
 		history,
-		idempotency_key: keyFor("start-attempt", change.id, String(slices.length)),
+		idempotency_key: keyFor("start-attempt", change.id, sliceIdentity(slices)),
 	};
+}
+
+/**
+ * Slice identity, not slice count.
+ *
+ * Keying on cardinality gave two materially different plans the same key, and
+ * a host that dropped one slice and added another returned to a key it had
+ * already used -- so genuinely new work could be mistaken for a retry.
+ */
+function sliceIdentity(slices: SliceRecord[]): string {
+	return slices
+		.map((slice) => `${slice.id}@${slice.revision}`)
+		.sort()
+		.join(",");
 }
 
 function resumedFrom(attempt: AttemptRecord): { attempt_id: string; outcome: string } {
@@ -283,13 +334,45 @@ function buildHistory(attempts: AttemptRecord[]): string[] {
 		);
 }
 
+/**
+ * Read one record, distinguishing "absent" from "unreadable".
+ *
+ * Swallowing every error made corruption and a containment refusal look
+ * exactly like an empty store: a truncated `running` attempt vanished and the
+ * loop cheerfully said `start-attempt`. The one case where the loop cannot
+ * know whether a side effect is in flight must not be the case where it
+ * proceeds. Only a genuine not-found reads as absent; anything else is raised
+ * and stops the loop.
+ */
 async function readOne<T>(store: EngineeringStore, kind: string, id: string, context: Record<string, string>): Promise<T | null> {
-	const found = await store.get(kind as never, id, context as never).catch(() => null);
-	return (found?.record as T) ?? null;
+	try {
+		const found = await store.get(kind as never, id, context as never);
+		return (found?.record as T) ?? null;
+	} catch (error) {
+		if (isMissing(error)) return null;
+		throw new TraverseUnreadableError(`${kind} ${id} is recorded but unreadable: ${messageOf(error)}`);
+	}
+}
+
+/** A record that exists but cannot be trusted to say what it says. */
+export class TraverseUnreadableError extends Error {
+	readonly code = "unreadable-record";
+}
+
+function isMissing(error: unknown): boolean {
+	const code = (error as { code?: string } | null)?.code;
+	return code === "not-found" || code === "ENOENT";
+}
+
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 async function listSlices(store: EngineeringStore, changeId: string): Promise<SliceRecord[]> {
-	const ids = await store.listIds("slice", { changeId }).catch(() => []);
+	const ids = await store.listIds("slice", { changeId }).catch((error) => {
+		if (isMissing(error)) return [] as string[];
+		throw new TraverseUnreadableError(`the slices of ${changeId} cannot be enumerated: ${messageOf(error)}`);
+	});
 	const records: SliceRecord[] = [];
 	for (const id of ids) {
 		const record = await readOne<SliceRecord>(store, "slice", id, { changeId });
@@ -306,12 +389,35 @@ async function listSlices(store: EngineeringStore, changeId: string): Promise<Sl
  * wrong one.
  */
 async function listAttempts(store: EngineeringStore, changeId: string, slices: SliceRecord[]): Promise<AttemptRecord[]> {
-	const ids = await store.listIds("attempt", { changeId }).catch(() => []);
+	const ids = await store.listIds("attempt", { changeId }).catch((error) => {
+		// A containment refusal here means someone redirected the attempts
+		// directory. Reading that as "no attempts" would hide a running one.
+		if (isMissing(error)) return [] as string[];
+		throw new TraverseUnreadableError(`the attempts of ${changeId} cannot be enumerated: ${messageOf(error)}`);
+	});
 	const records: AttemptRecord[] = [];
 	for (const id of ids) {
 		const record = await readOne<AttemptRecord>(store, "attempt", id, { changeId });
 		if (record) records.push(record);
 	}
 	void slices;
-	return records.sort((a, b) => (a.started_at === b.started_at ? a.id.localeCompare(b.id) : a.started_at.localeCompare(b.started_at)));
+	// Compare INSTANTS, not strings. E01 permits an optional fractional part
+	// (`...00Z` and `...00.001Z` are both valid), and "Z" (0x5A) sorts after
+	// "." (0x2E), so lexicographic order reverses the two. That is not a
+	// cosmetic ordering bug: it ranks a live `running` attempt before an older
+	// failed one, the loop stops seeing the running attempt, and the host is
+	// told to start a second attempt beside one still executing -- the exact
+	// repeated side effect this module exists to prevent.
+	return records.sort((a, b) => {
+		const delta = Date.parse(a.started_at) - Date.parse(b.started_at);
+		// The id tie-break is UNTESTED BY CONSTRUCTION and deliberately kept.
+		// `listIds` returns ids already ascending and Array#sort is stable, so
+		// equal instants already come out id-ascending and this branch cannot
+		// change the result -- a mutation deleting it survives, correctly.
+		// It stays because the guarantee it depends on lives in another file:
+		// if listIds ever stopped sorting, this is what keeps two sessions
+		// reading identical records from disagreeing about which attempt is
+		// latest.
+		return delta !== 0 ? delta : a.id.localeCompare(b.id);
+	});
 }

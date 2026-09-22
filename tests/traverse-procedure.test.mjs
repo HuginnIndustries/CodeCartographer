@@ -28,7 +28,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -421,5 +421,151 @@ test("the loop reads the newest attempt, not merely the last one written", async
 		);
 		// The older failure is still reported as history, not silently dropped.
 		assert.ok(step.history.some((entry) => /did not compile/.test(entry)), "the earlier failure vanished from history");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Review regressions (PR #436). Each of these failed before its fix.
+// ---------------------------------------------------------------------------
+
+test("a running attempt is resumed even when timestamps mix precision", async () => {
+	// E01 permits an optional fractional part, and "Z" sorts after "." so a
+	// string comparison ranks `...00.001Z` BEFORE `...00Z`. That ordering bug
+	// hid a live running attempt behind an older failed one and told the host
+	// to start a second attempt beside one still executing.
+	await withStore(async (store) => {
+		const [change, slice, attempt] = await Promise.all(["change.json", "slice.json", "attempt.json"].map(readFixture));
+		for (const record of [change, slice]) await store.put(record);
+		await store.put({
+			...attempt,
+			id: "att_111111111111111111111111",
+			outcome: "failed",
+			failure_summary: "the older attempt failed",
+			started_at: "2026-09-22T01:00:00Z",
+			ended_at: "2026-09-22T01:00:02Z",
+		});
+		await store.put({ ...attempt, ended_at: undefined, id: "att_222222222222222222222222", outcome: "running", started_at: "2026-09-22T01:00:00.001Z" });
+
+		const step = await planTraverseStep(store, { change_id: change.id, host: CAPABLE_HOST });
+		assert.equal(step.action, "resume-attempt", `a running attempt was not resumed: ${step.action}`);
+		assert.equal(step.resumed_from.attempt_id, "att_222222222222222222222222");
+	});
+});
+
+test("an unreadable record stops the loop instead of reading as absent", async () => {
+	await withStore(async (store, dir) => {
+		const [change, slice, attempt] = await Promise.all(["change.json", "slice.json", "attempt.json"].map(readFixture));
+		for (const record of [change, slice]) await store.put(record);
+		await store.put({ ...attempt, ended_at: undefined, outcome: "running" });
+		assert.equal((await planTraverseStep(store, { change_id: change.id, host: CAPABLE_HOST })).action, "resume-attempt");
+
+		// Truncate the running attempt. Before the fix this read as "no
+		// attempts" and produced start-attempt: a second side effect.
+		await writeFile(join(dir, "engineering", "changes", change.id, "attempts", attempt.id, "attempt.json"), '{"kind":"attempt","id":', "utf8");
+		const step = await planTraverseStep(store, { change_id: change.id, host: CAPABLE_HOST });
+		assert.equal(step.action, "stop", "an unreadable record did not stop the loop");
+		assert.equal(step.stop_reason, "blocked-needs-operator");
+		assert.match(step.rationale, /unreadable/i);
+	});
+});
+
+test("a containment refusal is not read as an empty directory", async () => {
+	// listIds correctly refuses a redirected attempts/ directory. The loop
+	// must not turn that refusal into "no attempts".
+	await withStore(async (store, dir) => {
+		const [change, slice, attempt] = await Promise.all(["change.json", "slice.json", "attempt.json"].map(readFixture));
+		for (const record of [change, slice]) await store.put(record);
+		await store.put({ ...attempt, ended_at: undefined, outcome: "running" });
+
+		const attemptsDir = join(dir, "engineering", "changes", change.id, "attempts");
+		const elsewhere = join(dir, "elsewhere");
+		await mkdir(elsewhere, { recursive: true });
+		await rm(attemptsDir, { recursive: true, force: true });
+		await symlink(elsewhere, attemptsDir, "dir");
+
+		const step = await planTraverseStep(store, { change_id: change.id, host: CAPABLE_HOST });
+		assert.equal(step.action, "stop", `a containment refusal produced ${step.action}`);
+		assert.equal(step.stop_reason, "blocked-needs-operator");
+	});
+});
+
+test("a change marked blocked stops, and names why", async () => {
+	await withStore(async (store) => {
+		const [change, slice] = await Promise.all(["change.json", "slice.json"].map(readFixture));
+		await store.put({ ...change, state: "blocked", block_reason: "prod incident: do not touch" });
+		await store.put(slice);
+		const step = await planTraverseStep(store, { change_id: change.id, host: CAPABLE_HOST });
+		assert.equal(step.action, "stop", "a blocked change produced an actionable step");
+		assert.equal(step.stop_reason, "blocked-needs-operator");
+		assert.match(step.rationale, /prod incident: do not touch/);
+	});
+});
+
+test("bounds must actually bound: NaN, Infinity, zero and negatives are refused", async () => {
+	// NaN passed a typeof check and then defeated the budget forever, because
+	// `failures >= NaN` is always false -- an unbounded retry loop that
+	// advertised "attempts remaining NaN" as its limit.
+	await withStore(async (store) => {
+		const change = await readFixture("change.json");
+		await store.put(change);
+		for (const bounds of [
+			{ max_attempts: Number.NaN, max_wall_clock_ms: 1000 },
+			{ max_attempts: Number.POSITIVE_INFINITY, max_wall_clock_ms: 1000 },
+			{ max_attempts: 0, max_wall_clock_ms: 1000 },
+			{ max_attempts: -5, max_wall_clock_ms: 1000 },
+			{ max_attempts: 2.5, max_wall_clock_ms: 1000 },
+			{ max_attempts: 3 }, // max_wall_clock_ms missing entirely
+			{ max_attempts: 3, max_wall_clock_ms: Number.NaN },
+			{ max_attempts: 3, max_wall_clock_ms: 0 },
+		]) {
+			await assert.rejects(
+				() => planTraverseStep(store, { change_id: change.id, host: { ...CAPABLE_HOST, bounds } }),
+				/bounds/i,
+				`these bounds were accepted: ${JSON.stringify(bounds)}`,
+			);
+		}
+	});
+});
+
+test("the start-attempt key tracks which slices exist, not how many", async () => {
+	await withStore(async (store) => {
+		const [change, slice] = await Promise.all(["change.json", "slice.json"].map(readFixture));
+		await store.put(change);
+		await store.put(slice);
+		const one = await planTraverseStep(store, { change_id: change.id, host: CAPABLE_HOST });
+
+		// Same COUNT, different slice: the key must change, or a host would
+		// mistake genuinely new work for a retry of the old plan.
+		await withStore(async (other) => {
+			await other.put(change);
+			await other.put({ ...slice, id: "slc_999999999999999999999999" });
+			const two = await planTraverseStep(other, { change_id: change.id, host: CAPABLE_HOST });
+			assert.notEqual(one.idempotency_key, two.idempotency_key, "a different plan of equal size reused the key");
+		});
+	});
+});
+
+test("two attempts at the same instant are ordered deterministically", async () => {
+	// The store accepts identical started_at values (a fast host with a coarse
+	// clock), so the tie-break is reachable. Without it the order depends on
+	// directory enumeration, and two sessions reading the SAME records could
+	// pick different attempts -- the resumability claim broken at its root.
+	await withStore(async (store) => {
+		const [change, slice, attempt] = await Promise.all(["change.json", "slice.json", "attempt.json"].map(readFixture));
+		for (const record of [change, slice]) await store.put(record);
+		const at = "2026-02-01T00:00:00.000Z";
+		await store.put({ ...attempt, id: "att_bbbbbbbbbbbbbbbbbbbbbbbb", outcome: "blocked", block_reason: "B blocked", started_at: at, ended_at: "2026-02-01T00:00:01.000Z" });
+		await store.put({ ...attempt, id: "att_aaaaaaaaaaaaaaaaaaaaaaaa", outcome: "failed", failure_summary: "A failed", started_at: at, ended_at: "2026-02-01T00:00:01.000Z" });
+
+		const first = await planTraverseStep(store, { change_id: change.id, host: CAPABLE_HOST });
+		const second = await planTraverseStep(store, { change_id: change.id, host: CAPABLE_HOST });
+		assert.deepEqual(second, first, "two reads of identical records disagreed");
+		// Ties break by id, so the higher id is the one treated as latest.
+		assert.equal(first.stop_reason, "blocked-needs-operator", `the tie broke to the wrong attempt: ${first.rationale}`);
+		assert.deepEqual(
+			first.history.map((entry) => entry.split(" ")[1]),
+			["att_aaaaaaaaaaaaaaaaaaaaaaaa", "att_bbbbbbbbbbbbbbbbbbbbbbbb"],
+			"same-instant attempts were not ordered by id",
+		);
 	});
 });
