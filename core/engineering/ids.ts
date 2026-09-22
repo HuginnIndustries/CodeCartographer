@@ -88,6 +88,15 @@ export function isScopePattern(value: unknown): value is string {
 }
 
 /** The workspace-relative root of the engineering namespace, under `.codecarto/`. */
+/**
+ * The one skill name exempt from the post-pipeline completion gate.
+ *
+ * An engineering change is not a post-pipeline activity: a fix can be the
+ * whole reason someone opened the repository. The exemption is a single exact
+ * name so that it stays an eligibility path rather than a bypass.
+ */
+export const ENGINEERING_SKILL_NAME = "traverse";
+
 export const ENGINEERING_NAMESPACE = "engineering";
 
 function assertId(value: string, kind: IdentifiedKind): string {

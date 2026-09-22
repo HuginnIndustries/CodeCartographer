@@ -345,10 +345,18 @@ export async function resolveSkillName(workspaceDir: string, name: string): Prom
 	return installed.includes(wanted) ? wanted : null;
 }
 
-export async function buildSkillPrompt(state: WorkspaceState, skillName: string): Promise<string> {
+export async function buildSkillPrompt(state: WorkspaceState, skillName: string, options: { postPipeline?: boolean } = {}): Promise<string> {
+	// Whether this skill runs after a completed pipeline. The engineering loop
+	// does not: saying "the pipeline is complete" to an agent standing in a
+	// workspace that has run no phases is a false statement in the first line
+	// of the prompt, and an agent that catches it has no reason to trust the
+	// rest. Both variants still forbid touching phase state.
+	const postPipeline = options.postPipeline ?? true;
 	const lines = [
-		`Read .codecarto/GUIDE.md and run the post-pipeline skill \`${skillName}\`.`,
-		"This is post-pipeline work. The pipeline is `complete`. Do not change `current_phase` or `phase_order` in workflow/status.yaml.",
+		`Read .codecarto/GUIDE.md and run the ${postPipeline ? "post-pipeline " : ""}skill \`${skillName}\`.`,
+		postPipeline
+			? "This is post-pipeline work. The pipeline is `complete`. Do not change `current_phase` or `phase_order` in workflow/status.yaml."
+			: "This skill is not part of the analysis pipeline and does not require one. Do not change `current_phase` or `phase_order` in workflow/status.yaml.",
 		"",
 		"Required reads before starting:",
 		"- .codecarto/GUIDE.md",
@@ -366,7 +374,11 @@ export async function buildSkillPrompt(state: WorkspaceState, skillName: string)
 	}
 
 	lines.push("", "Rules:");
-	lines.push("- Do not modify source files outside .codecarto/.");
+	// The engineering loop exists to change a repository; forbidding writes
+	// outside .codecarto/ would forbid the work itself. What it must not do --
+	// execute on CodeCartographer's behalf, or accept its own work -- is
+	// enforced in core/engineering/, not by this line.
+	if (postPipeline) lines.push("- Do not modify source files outside .codecarto/.");
 	lines.push("- Follow the SKILL.md instructions exactly; the skill enforces its own discipline (see GUIDE.md).");
 	lines.push("- Update only the artifacts the skill calls for. Do NOT touch phase status entries.");
 	lines.push("- On completion, write the post-pipeline closeout requested by the skill. Post-pipeline lifecycle state is not yet framework-managed; do not create a phase handoff or edit phase status entries.");
