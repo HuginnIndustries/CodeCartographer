@@ -42,6 +42,35 @@ import type {
 } from "./types.ts";
 import type { EngineeringStore } from "./store.ts";
 
+/**
+ * Stated on every outcome, without exception.
+ *
+ * A gate can show that recorded checks passed and recorded objections were
+ * closed against a specific set of bytes. It cannot show the change is right,
+ * and the moment this sentence is optional is the moment someone reads a
+ * green gate as a correctness proof.
+ */
+const ALWAYS_STATED_LIMITATION =
+	"gates establish that recorded checks passed and recorded objections were closed against these bytes; semantic correctness remains a review and test claim";
+
+/**
+ * Disclosures about where the records live, which hold on every path.
+ *
+ * Neither depends on reading a record, so both are stated even when the
+ * evaluation stops early.
+ */
+function pushStorageLimitations(limitations: string[], request: GateRequest): void {
+	if (request.host.storage.boundary !== "host-enforced") {
+		limitations.push(
+			"the engineering namespace is not protected from agent tools, so these records could have been rewritten by the agent whose work they describe",
+		);
+	} else if (request.host.storage.protection !== undefined && request.host.storage.protection !== "continuous-since-initialization") {
+		limitations.push(
+			`the namespace's protection history is ${safeText(request.host.storage.protection)}: it held records while unprotected, and no timestamp inside a record can show it was not written then`,
+		);
+	}
+}
+
 /** Why acceptance cannot be offered, and what would clear it. */
 export interface GateBlocker {
 	/** Stable identifier for the rule that fired, so callers can branch without parsing prose. */
@@ -163,6 +192,15 @@ export async function evaluateAcceptanceGate(store: EngineeringStore, request: G
 	const change = await readRecord<ChangeRecord>(store, "change", request.change_id, {});
 	const attempt = await readRecord<AttemptRecord>(store, "attempt", request.attempt_id, { changeId: request.change_id });
 	if (!change || !attempt) {
+		// The always-stated limitation belongs on this path too. An earlier
+		// revision returned early before adding it, so the one disclosure the
+		// module promises to make unconditionally was missing from exactly the
+		// outcomes a confused caller is most likely to be reading.
+		limitations.push(ALWAYS_STATED_LIMITATION);
+		// The storage boundary does not depend on any record, so it belongs here
+		// too. Hiding it when a record is missing disclosed least precisely when
+		// the caller understands the situation least.
+		pushStorageLimitations(limitations, request);
 		return {
 			state: "refused",
 			blockers: [
@@ -457,22 +495,14 @@ export async function evaluateAcceptanceGate(store: EngineeringStore, request: G
 	}
 
 	// ---- disclosures that narrow the meaning without forbidding acceptance ----
-	if (request.host.storage.boundary !== "host-enforced") {
-		limitations.push(
-			"the engineering namespace is not protected from agent tools, so these records could have been rewritten by the agent whose work they describe",
-		);
-	} else if (request.host.storage.protection !== undefined && request.host.storage.protection !== "continuous-since-initialization") {
-		limitations.push(
-			`the namespace's protection history is ${safeText(request.host.storage.protection)}: it held records while unprotected, and no timestamp inside a record can show it was not written then`,
-		);
-	}
+	pushStorageLimitations(limitations, request);
 	if (policy === "cooperative") {
 		limitations.push("this evaluation ran under the cooperative policy, in which caller-reported claims may discharge obligations");
 	}
 
 	// A gate can only say that checks ran and people signed off on specific
 	// bytes. It cannot say the change is correct, and must not imply it.
-	limitations.push("gates establish that recorded checks passed and recorded objections were closed against these bytes; semantic correctness remains a review and test claim");
+	limitations.push(ALWAYS_STATED_LIMITATION);
 
 	if (blockers.length > 0) return { state: "refused", blockers, limitations };
 

@@ -166,6 +166,31 @@ codecarto_broadside {cwd: "/abs/path/to/repo", action: "collect", regenerate_pos
 
 It needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY`, or `.codecarto/broadside/config.yaml`) and works on any git repository, with or without a workspace. Submit prices the run first and refuses anything over `max_cost`. `action: "models"` lists the batch catalog — advisory, since some listed ids are refused at submit for having no batch endpoint (free, and the listing tags what this repository has tried) — and `model` / `lens_models` on submit pick one for the run or per lens. Keep `wait_seconds` under your host's tool-call timeout (Claude Code's is a few minutes): if the host gives up mid-wait, the server stops polling and submits nothing further, the batches keep running, and the next `collect` claims them — two collects on one run never pay for the synthesis, triage, or retry twice. Its findings are **unverified leads, not evidence** — see the [Broad-Side section](../README.md#broad-side-batch-reconnaissance) in the README.
 
+## Experimental: recording an engineering change
+
+`codecarto_change` records the evidence around a change — its brief, proofs of checks **your host ran**, and an acceptance gate. It is marked EXPERIMENTAL and its shape may move.
+
+```
+codecarto_change {cwd: "/abs/path", action: "create", title: "Add a flag", outcome: "the flag exists"}
+codecarto_change {cwd: "/abs/path", action: "plan",   change_id: "chg_..."}
+codecarto_change {cwd: "/abs/path", action: "record_proof", change_id: "chg_...", proof: {...}}
+codecarto_change {cwd: "/abs/path", action: "gate",   change_id: "chg_...", attempt_id: "att_..."}
+```
+
+Three limits are worth stating plainly, because they are the point of the surface rather than gaps in it:
+
+**It never runs anything.** The server gained a way to *record* what a host did, not a second way to do things. There is no `exec`, no target-code write, no GitHub call, no provider call — a test greps the module for those symbols rather than trusting the claim.
+
+**A proof recorded through a tool call is `claimed`, not `observed`.** Authority is derived from the collector and the attestation, never read from the payload, and a tool call cannot attest to its own execution. A proof carrying `authority: "observed"` is stored faithfully and still discharges nothing under the `verified` policy. This is not a limitation to work around; a channel that let a caller label its own evidence as observed would make the whole record worthless.
+
+**It cannot approve work.** `action: "approve"` and `action: "accept"` are refused with a reason, and `state` cannot be set directly. Acceptance needs a trusted channel and a receipt the core can evaluate — an agent marking its own work accepted through an ordinary tool argument is the exact forgery the record system exists to prevent. Accordingly, `action: "gate"` reports `needs-human-acceptance` rather than `may-accept`: this transport cannot obtain a human decision, and says so instead of implying otherwise.
+
+Retries are safe when you pass `request_id`: a repeated create returns the original change rather than minting a second one. Updates carry the `revision` you last read and are refused if it is stale, so two writers cannot silently lose each other's work.
+
+Which hosts support which parts is procedural, not advertised: **no claim is made that every MCP client can carry a trusted human acceptance.** Most cannot.
+
+> Maintainer note: `npm run smoke` installs the **published** package, so it reports this tool as missing until a release carries it. To smoke an unreleased change, pack first and pass the tarball: `npm run build && node scripts/smoke-mcp.mjs --tarball "$(npm pack --pack-destination /tmp | tail -1)"`.
+
 ## No agent? Use the drop-in template
 
 If your tool doesn't speak MCP, copy the template directly:
