@@ -30,6 +30,8 @@
 //     with content but no id, a table interrupted by prose, a row whose
 //     cell count does not match the header
 //   - a heading that appears twice, so the reader never silently picks one
+//   - (E10) a slice whose verification route is missing, `none`, or not a
+//     record check_kind; `none` is a recorded gap and lifts as a refusal
 //
 // WHAT IT DOES NOT DO
 //
@@ -60,6 +62,7 @@
 // does not hide an empty proof list two rows down.
 
 import { isLocalId } from "./ids.ts";
+import { CHECK_KINDS, type CheckKind } from "./types.ts";
 
 export interface LiftedScenario {
 	id: string;
@@ -74,6 +77,12 @@ export interface LiftedSlice {
 	scenario_ids: string[];
 	depends_on: string[];
 	tier: string;
+	/**
+	 * How an agent observes the proved scenarios (E10), in E01's own
+	 * check_kind vocabulary. Present only when the artifact's table carries
+	 * a Verification route column. `"none"` is a recorded gap, not a route.
+	 */
+	verification_route?: CheckKind | "none";
 	/** Present only when the artifact's table carries a Proof command column. */
 	proof_command?: string;
 }
@@ -95,7 +104,9 @@ export type LiftErrorCode =
 	| "unknown-dependency"
 	| "self-dependency"
 	| "dependency-cycle"
-	| "unowned-minimum-viable";
+	| "unowned-minimum-viable"
+	| "unknown-route"
+	| "no-route";
 
 export interface LiftError {
 	/** Where in the artifact the problem is, in the artifact's own ids or table rows. */
@@ -167,6 +178,7 @@ export function liftSlices(markdown: string): LiftOutcome {
 			depends: requireColumn(sliceTable, "Depends on", SLICE_SECTION, errors),
 			tier: requireColumn(sliceTable, "Tier", SLICE_SECTION, errors),
 			proof: column(sliceTable, "Proof command"),
+			route: column(sliceTable, "Verification route"),
 		};
 		// Only the id column gates the row loop. Every other check runs when
 		// its own column exists, so one misspelled header does not suppress
@@ -188,6 +200,23 @@ export function liftSlices(markdown: string): LiftOutcome {
 					errors.push({ at: id, code: "empty-deliverable", message: `slice ${id} has no deliverable; a slice needs a title and a deliverable` });
 				}
 				const proof = cols.proof >= 0 ? (row.cells[cols.proof] ?? "") : "";
+				const routeText = cols.route >= 0 ? (row.cells[cols.route] ?? "") : "";
+				let route: CheckKind | "none" | undefined;
+				if (cols.route >= 0) {
+					// The column exists, so a route is required: E10 says every
+					// slice names one. An unavailable route is written as `none`
+					// and refused as a gap on that slice -- never silently a pass.
+					if (!routeText) {
+						errors.push({ at: id, code: "no-route", message: `slice ${id} names no verification route; write \`none\` if there is none, and it is a gap, not a pass` });
+					} else if (routeText === "none") {
+						route = "none";
+						errors.push({ at: id, code: "no-route", message: `slice ${id} has no observable verification route (\`none\`); this is a gap on the slice, not a pass` });
+					} else if ((CHECK_KINDS as readonly string[]).includes(routeText)) {
+						route = routeText as CheckKind;
+					} else {
+						errors.push({ at: id, code: "unknown-route", message: `slice ${id} names verification route ${JSON.stringify(routeText)}, which is not a record check_kind (${CHECK_KINDS.join(", ")}) or \`none\`` });
+					}
+				}
 				slices.push({
 					id,
 					deliverable,
@@ -195,6 +224,7 @@ export function liftSlices(markdown: string): LiftOutcome {
 					scenario_ids: cols.proves >= 0 ? list(row.cells[cols.proves]) : [],
 					depends_on: cols.depends >= 0 ? list(row.cells[cols.depends]) : [],
 					tier: cols.tier >= 0 ? (row.cells[cols.tier] ?? "") : "",
+					...(route !== undefined ? { verification_route: route } : {}),
 					...(proof ? { proof_command: proof } : {}),
 				});
 			}

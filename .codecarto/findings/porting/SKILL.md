@@ -54,6 +54,7 @@ Use the output template at `templates/reverse-engineering-bundle.md`. Produce:
 - A protocol and state note set.
 - Portability hazards consolidated from all prior phases.
 - Observed facts separated from inferred structure.
+- An `Agent Addressability` table that carries forward and sharpens the architecture phase's assessment, one row per feature-contract row or surface an agent would need to reach: headless, inspectable state, programmatic seam, each tagged with an evidence level. A missing seam is a portability hazard, not evidence of correctness. Do not propose an architectural rewrite to create seams; record what exists and what its absence blocks.
 - A compact Source Index and explicit coverage gaps that let downstream synthesis deep-read selectively.
 
 Bias toward evidence over cleverness:

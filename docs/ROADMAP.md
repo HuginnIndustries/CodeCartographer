@@ -24,7 +24,7 @@ Preserve existing synthesis confirmation gates. An ordinary feature/bug request 
 
 | Stage | User-visible outcome | Evidence required to claim it | Status |
 |---|---|---|---|
-| Foundation | Existing specs/plans expose useful slice/scenario links and verification seams | Real phase output plus invariant/compatibility tests, not only template edits | E09 delivered (slice tables, ids, lifter, compatibility test against shipped self-audit specs); E10 next |
+| Foundation | Existing specs/plans expose useful slice/scenario links and verification seams | Real phase output plus invariant/compatibility tests, not only template edits | E09 delivered (slice tables, ids, lifter, compatibility test against shipped self-audit specs); E10 delivered (Agent Addressability table with evidence levels in architecture and porting, Verification route per slice lifted in E01 `check_kind` vocabulary, `none` refused as a gap; hand-filled dogfood against this repo); E11 next |
 | Engineering contracts | Changes, attempts, snapshots, proof, review, and human authority have one usable contract | Executable schemas and reviewed authority design; no generic agent approval flag | Planned: E01 |
 | First local loop | A host can plan, implement, verify, review, and present a bounded change without a library | Real fix and feature; failed attempt/resume, stale-proof refusal, actual acceptance, second-change history | Planned: E02–E08, E11 |
 | Reuse and refreshed knowledge | A proven capability transfers to a second repository without confusing design with current facts | Explicit source/version, applicability, conflict disposition, safe publication, and new project proof | Later design gate |

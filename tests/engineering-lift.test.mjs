@@ -425,3 +425,65 @@ test("a self-dependency is reported once, not also as a one-node cycle", () => {
 	const out = liftSlices(ARTIFACT.replace("| S-02 | SL-01 |", "| S-02 | SL-02 |"));
 	assert.deepEqual(out.errors.map((e) => e.code), ["self-dependency"], JSON.stringify(out.errors));
 });
+
+// ---------------------------------------------------------------------------
+// E10: the verification route. A column the lifter ignored would leave the
+// route in the document and out of the plan, which is the seam E10 opens.
+// ---------------------------------------------------------------------------
+
+const ROUTED = ARTIFACT.replace("| Depends on | Tier |", "| Depends on | Tier | Verification route |")
+	.replace("|------------|------|", "|------------|------|--------------------|")
+	.replace("| S-01 | | minimum-viable |", "| S-01 | | minimum-viable | test |")
+	.replace("| S-02 | SL-01 | minimum-viable |", "| S-02 | SL-01 | minimum-viable | run |")
+	.replace("| S-03 | SL-01, SL-02 | major-workflow |", "| S-03 | SL-01, SL-02 | major-workflow | manual-procedure |");
+
+test("E10: a verification route lifts in E01's check_kind vocabulary, and is absent when the column is", () => {
+	const out = liftSlices(ROUTED);
+	assert.deepEqual(out.errors, [], JSON.stringify(out.errors));
+	assert.deepEqual(out.slices.map((s) => s.verification_route), ["test", "run", "manual-procedure"]);
+	assert.equal("verification_route" in liftSlices(ARTIFACT).slices[0], false, "a route appeared with no column");
+});
+
+test("E10: `none` is a recorded gap that refuses the slice; a blank route is refused; a made-up route is refused", () => {
+	const none = liftSlices(ROUTED.replace("| major-workflow | manual-procedure |", "| major-workflow | none |"));
+	const gap = none.errors.filter((e) => e.code === "no-route");
+	assert.equal(gap.length, 1, JSON.stringify(none.errors));
+	assert.equal(gap[0].at, "SL-03");
+	assert.match(gap[0].message, /gap.*not a pass/);
+	assert.equal(none.slices[2].verification_route, "none", "the gap is still recorded on the slice");
+	const blank = liftSlices(ROUTED.replace("| major-workflow | manual-procedure |", "| major-workflow |  |"));
+	assert.ok(blank.errors.some((e) => e.code === "no-route" && e.at === "SL-03"), JSON.stringify(blank.errors));
+	const bogus = liftSlices(ROUTED.replace("| major-workflow | manual-procedure |", "| major-workflow | click through the UI |"));
+	const hit = bogus.errors.filter((e) => e.code === "unknown-route");
+	assert.equal(hit.length, 1, JSON.stringify(bogus.errors));
+	assert.match(hit[0].message, /manual-procedure/, "the refusal must name the vocabulary the author should use");
+});
+
+test("E10: every route the templates teach is a real E01 check_kind, and the shipped templates lift with a route", async () => {
+	const { CHECK_KINDS } = await import(pathToFileURL(join(REPO_ROOT, "core/engineering/index.ts")).href);
+	for (const template of ["reimplementation-spec.md", "reimplementation-spec-opinionated.md"]) {
+		const text = await readFile(join(REPO_ROOT, ".codecarto/templates", template), "utf8");
+		const out = liftSlices(text);
+		assert.deepEqual(out.errors, [], `${template}: ${JSON.stringify(out.errors)}`);
+		assert.ok(CHECK_KINDS.includes(out.slices[0].verification_route), `${template} example route ${out.slices[0].verification_route} is not a check_kind`);
+		// The template's instructions name only real kinds (plus none).
+		const slices = text.split(/^## Slices\s*$/im)[1].split(/^## /m)[0];
+		for (const named of slices.match(/`([a-z-]+)`/g).map((m) => m.slice(1, -1))) {
+			assert.ok(CHECK_KINDS.includes(named) || named === "none", `${template} teaches route \`${named}\`, which E01 does not know`);
+		}
+	}
+});
+
+test("E10: an artifact written before the route column existed lifts exactly as it did, with no route and no route errors", async () => {
+	// Old workspaces stay compatible: the column is the opt-in. The shipped
+	// v0.25.0 self-audit spec predates E09 and E10 both; its E09-era errors
+	// are pinned elsewhere, and E10 must add none.
+	const old = await readFile(join(REPO_ROOT, "self-audit/2026-09-15-v0.25.0-full-with-deep-audit/findings/reimplementation-spec/reimplementation-spec.md"), "utf8");
+	const out = liftSlices(old);
+	assert.equal(out.errors.filter((e) => e.code === "no-route" || e.code === "unknown-route").length, 0, JSON.stringify(out.errors));
+	assert.ok(out.slices.every((s) => !("verification_route" in s)));
+	// And the E09-era artifact used in the agreement tests, likewise.
+	const e09 = liftSlices(ARTIFACT);
+	assert.deepEqual(e09.errors, []);
+	assert.ok(e09.slices.every((s) => !("verification_route" in s)));
+});

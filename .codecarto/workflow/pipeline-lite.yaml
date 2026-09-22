@@ -35,6 +35,7 @@ phases:
       - Runtime lifecycle, concurrency model, and porting priorities are summarized.
       - Findings are marked with evidence levels.
       - Coverage and limits name inspected scope, skipped scope, evidence basis, and blind spots.
+      - Agent addressability is assessed with evidence levels, and missing seams are recorded as hazards.
     handoff_requirements:
       - Run validation per workflow/VALIDATE.md. Append validation block to primary output.
       - Write the phase handoff to scratch/handoffs/<phase>.yaml with owner notes, open questions, and carry-forward routings; completion applies it to workflow/status.yaml.

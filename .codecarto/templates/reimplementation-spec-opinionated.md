@@ -145,11 +145,20 @@
     command a host would run and what its passing output looks like. A
     command is still a claim until a host runs it and reports; writing it
     here does not discharge anything.
+  - "Verification route" is HOW an agent observes the proved scenarios,
+    in the record's own words: `test` (a runnable suite), `run` (execute
+    the system headlessly and observe), `manual-procedure` (a documented
+    GUI, hardware, or integration step a person performs), or `none`.
+    Prefer headless routes. A `manual-procedure` route is acceptable when
+    the Agent Addressability assessment documents why nothing headless
+    exists. `none`, or a route whose environment is unavailable, is a gap
+    or blocker on that slice -- record it as such, never as a pass, and do
+    not propose an architectural rewrite just to manufacture a route.
 -->
 
-| Slice ID | Deliverable | Modules | Proves scenarios | Depends on | Tier | Proof command |
-|----------|-------------|---------|------------------|------------|------|---------------|
-| SL-01 | (what this slice delivers) | (modules) | S-01 | | minimum-viable | |
+| Slice ID | Deliverable | Modules | Proves scenarios | Depends on | Tier | Verification route | Proof command |
+|----------|-------------|---------|------------------|------------|------|--------------------|---------------|
+| SL-01 | (what this slice delivers) | (modules) | S-01 | | minimum-viable | test | |
 
 ## Spike List
 
@@ -214,6 +223,7 @@
 | 7 | Lower-level findings are deep-read only when the porting bundle identifies a gap, conflict, missing acceptance detail, or defect rationale. | PASS / PARTIAL / FAIL | |
 | 8 | Every slice names at least one scenario it proves, and every Scenario ID it lists exists in the Acceptance Scenarios table. | PASS / PARTIAL / FAIL | |
 | 9 | Every minimum-viable scenario is owned by at least one slice. | PASS / PARTIAL / FAIL | |
+| 10 | Every slice names at least one observable verification route, and an unavailable route is recorded as a gap rather than a pass. | PASS / PARTIAL / FAIL | |
 
 **Validated by:** [session identifier or date]
 **Overall:** PASS / PASS WITH GAPS / FAIL
