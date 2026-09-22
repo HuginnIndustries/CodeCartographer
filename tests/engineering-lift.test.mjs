@@ -512,3 +512,12 @@ test("E10: a duplicate Verification route column is refused, so a second cell sa
 	assert.equal(hit.length, 1, JSON.stringify(out.errors));
 	assert.match(hit[0].message, /Verification route/);
 });
+
+test("a duplicate column in the Acceptance Scenarios table is refused too, so a second Tier cell cannot hide an unowned minimum-viable scenario", () => {
+	const dup = ARTIFACT.replace("| Scenario ID | Tier |", "| Scenario ID | Tier | Tier |")
+		.replace(/(\| S-0[123] \| [a-z-]+ \|)/g, "$1 minimum-viable |");
+	const out = liftSlices(dup);
+	const hit = out.errors.filter((e) => e.code === "duplicate-column");
+	assert.equal(hit.length, 1, JSON.stringify(out.errors));
+	assert.match(hit[0].message, /Acceptance Scenarios.*"Tier"/);
+});

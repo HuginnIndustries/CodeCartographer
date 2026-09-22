@@ -155,6 +155,7 @@ export function liftSlices(markdown: string): LiftOutcome {
 	// ---- scenarios ----
 	const scenarios: LiftedScenario[] = [];
 	if (scenarioTable) {
+		refuseDuplicateColumns(scenarioTable, ["Scenario ID", "Tier", "Scenario"], SCENARIO_SECTION, errors);
 		const idCol = requireColumn(scenarioTable, "Scenario ID", SCENARIO_SECTION, errors);
 		const tierCol = requireColumn(scenarioTable, "Tier", SCENARIO_SECTION, errors);
 		const descCol = requireColumn(scenarioTable, "Scenario", SCENARIO_SECTION, errors);
@@ -192,13 +193,7 @@ export function liftSlices(markdown: string): LiftOutcome {
 			proof: column(sliceTable, "Proof command"),
 			route: column(sliceTable, "Verification route"),
 		};
-		// A column that appears twice is refused for the same reason a heading
-		// that appears twice is: which cell is the route is ambiguous, and
-		// first-match-wins silently discarded a recorded `none` (review finding).
-		for (const name of ["Slice ID", "Deliverable", "Modules", "Proves scenarios", "Depends on", "Tier", "Verification route", "Proof command"]) {
-			const n = sliceTable.header.filter((h) => h.toLowerCase() === name.toLowerCase()).length;
-			if (n > 1) errors.push({ at: "Slices", code: "duplicate-column", message: `the Slices table has ${n} "${name}" columns; which one is meant is ambiguous` });
-		}
+		refuseDuplicateColumns(sliceTable, ["Slice ID", "Deliverable", "Modules", "Proves scenarios", "Depends on", "Tier", "Verification route", "Proof command"], "Slices", errors);
 		// Only the id column gates the row loop. Every other check runs when
 		// its own column exists, so one misspelled header does not suppress
 		// the defects in columns that are present.
@@ -449,6 +444,20 @@ function splitCells(line: string): string[] {
 	}
 	cells.push(current.trim());
 	return cells;
+}
+
+/**
+ * A column that appears twice is refused for the same reason a heading that
+ * appears twice is: which cell is meant is ambiguous, and first-match-wins
+ * silently discarded a recorded `none` in the Slices table and a
+ * `minimum-viable` tier in the scenarios table (two review findings, one
+ * cause). Applied to every column a table reads, in both tables.
+ */
+function refuseDuplicateColumns(table: Table, names: readonly string[], section: string, errors: LiftError[]): void {
+	for (const name of names) {
+		const n = table.header.filter((h) => h.toLowerCase() === name.toLowerCase()).length;
+		if (n > 1) errors.push({ at: section, code: "duplicate-column", message: `the ${section} table has ${n} "${name}" columns; which one is meant is ambiguous` });
+	}
 }
 
 function column(table: Table, name: string): number {
