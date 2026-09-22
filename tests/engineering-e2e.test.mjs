@@ -57,6 +57,7 @@ const SNAPSHOT = await readJson(join(FIXTURES, "snapshot-candidate.json"));
 const PROOF = await readJson(join(FIXTURES, "proof.json"));
 const PROOF2 = await readJson(join(FIXTURES, "proof-second-obligation.json"));
 const REVIEW = await readJson(join(FIXTURES, "review.json"));
+const BASELINE = await readJson(join(FIXTURES, "snapshot-baseline.json"));
 
 const PLAN_MD = await readFile(join(PILOT, "plan-widgets.md"), "utf8");
 const PLAN_MD_NO_ROUTE = await readFile(join(PILOT, "plan-widgets-no-route.md"), "utf8");
@@ -343,10 +344,22 @@ test("N03: after the plan input changes, a superseding attempt carries none of t
 		assert.equal(carried.ok, false, "a proof of the superseded candidate bound to the new attempt");
 		assert.ok(carried.errors.some((e) => e.path === "/snapshot_id" && e.message.includes(r.snapshot.id) && e.message.includes(nextAttemptId)), JSON.stringify(carried.errors));
 
+		// A proof against the new attempt's BASELINE (a snapshot that exists, but
+		// is not the offered candidate) is retained as a truthful record and
+		// discharges nothing.
+		await store.put({ ...BASELINE, id: next.baseline_snapshot_id, change_id: r.change.id, attempt_id: nextAttemptId });
+		const onBaseline = await ingestProof(store, { ...r.proofInputs[1], id: "prf_00000000000000000000f0ab", attempt_id: nextAttemptId, snapshot_id: next.baseline_snapshot_id });
+		assert.equal(onBaseline.ok, true, JSON.stringify(onBaseline));
+		assert.equal(onBaseline.discharges, false, "a proof against the baseline discharged an obligation about the candidate");
+
 		const gate = await evaluateAcceptanceGate(store, { change_id: r.change.id, attempt_id: nextAttemptId, host: CAPABLE_HOST });
 		assert.equal(gate.state, "refused");
 		const unproved = gate.blockers.filter((b) => b.code === "obligation-unproved");
-		assert.deepEqual(unproved.map((b) => b.detail.match(/\bO[12]\b/)?.[0]).sort(), ["O1", "O2"], JSON.stringify(gate.blockers));
+		assert.deepEqual(unproved.map((b) => b.detail.match(/\bO[12]\b/)?.[0]), ["O1"], JSON.stringify(gate.blockers));
+		const staleO2 = gate.blockers.filter((b) => b.code === "proof-stale");
+		assert.equal(staleO2.length, 1, JSON.stringify(gate.blockers));
+		assert.match(staleO2[0].detail, /\bO2\b/);
+		assert.ok(staleO2[0].remedy.includes(newSnapshotId), staleO2[0].remedy);
 		assert.ok(gate.blockers.some((b) => b.code === "review-missing"), "the earlier review carried over to a candidate it never saw");
 		// The loop follows the latest attempt, not the one that had evidence.
 		const step = await planTraverseStep(store, { change_id: r.change.id, host: TRAVERSE_HOST });
