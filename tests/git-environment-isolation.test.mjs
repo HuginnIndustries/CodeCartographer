@@ -351,6 +351,7 @@ test("GIT_EDITOR is set to a no-op: an interactive-capable fixture command canno
 		assert.ok(!(failure instanceof Error), "--no-edit never consults the editor; the control stays green");
 		const editing = await execFileAsync("git", ["-C", dir, "commit", "--quiet", "--allow-empty", "--amend"], { env }).catch((error) => error);
 		assert.ok(editing instanceof Error, "the vector is real: an interactive-capable command ran the developer's editor and failed with it");
+		assert.match(String(editing.stderr ?? editing.message), /problem with the editor/, "the failure must be the editor, not some other reason the amend could fail");
 	});
 
 	const out = await runChild(
@@ -424,10 +425,13 @@ test("isolation does not touch the user's Git configuration", async () => {
 	// from configuration to everything git reads from the environment, so
 	// the allow-list is now the GIT_ prefix: the helper must never touch
 	// HOME, PATH, EDITOR, or anything else another tool owns.
+	// Scanned over CODE, like the command check above. Scanning the prose
+	// let a helper that neutralized nothing pass, as long as the names
+	// survived in a comment (review finding on #442).
 	const touched = [
-		...[...source.matchAll(/(?:delete\s+)?env\.([A-Z_]+)/g)].map((m) => m[1]),
-		...[...source.matchAll(/^\s*"([A-Z_]+)",?$/gm)].map((m) => m[1]),
-		...[...source.matchAll(/Object\.freeze\(\[([^\]]+)\]\)/g)].flatMap((m) => [...m[1].matchAll(/"([A-Z_]+)"/g)].map((n) => n[1])),
+		...[...code.matchAll(/(?:delete\s+)?env\.([A-Z_]+)/g)].map((m) => m[1]),
+		...[...code.matchAll(/^\s*"([A-Z_]+)",?$/gm)].map((m) => m[1]),
+		...[...code.matchAll(/Object\.freeze\(\[([^\]]+)\]\)/g)].flatMap((m) => [...m[1].matchAll(/"([A-Z_]+)"/g)].map((n) => n[1])),
 	];
 	assert.ok(touched.length > 0, "the helper must touch something");
 	for (const name of touched) {
