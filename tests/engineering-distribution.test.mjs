@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -67,12 +67,22 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  * unrelated test fails with ENOENT. Planting in a copy removes the only
  * writer, which removes the race for every reader, present and future.
  */
-async function withPackRoot(fn) {
+async function withPackRoot(fn, sourceRoot = REPO_ROOT) {
 	return withTempDir(async (dir) => {
 		const packRoot = join(dir, "pack-root");
 		await mkdir(packRoot, { recursive: true });
-		await cp(join(REPO_ROOT, "package.json"), join(packRoot, "package.json"));
-		await cp(join(REPO_ROOT, ".codecarto"), join(packRoot, ".codecarto"), { recursive: true });
+		await cp(join(sourceRoot, "package.json"), join(packRoot, "package.json"));
+		// The developer's own engineering records must NOT travel into the pack
+		// root: the non-vacuity control asserts that exactly the planted record
+		// leaks, and a real record in the checkout (the normal state after
+		// running the engineering loop) would turn that exact match red. Copy
+		// everything except the namespace, so the pack root's namespace holds
+		// only what a test plants there. (Review finding on #441.)
+		const namespaceDir = join(sourceRoot, ".codecarto", ENGINEERING_NAMESPACE);
+		await cp(join(sourceRoot, ".codecarto"), join(packRoot, ".codecarto"), {
+			recursive: true,
+			filter: (source) => source !== namespaceDir && !source.startsWith(namespaceDir + sep),
+		});
 		return fn(packRoot);
 	});
 }
@@ -289,5 +299,29 @@ test("distributable guidance still reaches a fresh workspace", async () => {
 		for (const expected of ["templates/gitignore", "workflow/config.yaml", "GUIDE.md"]) {
 			await assert.doesNotReject(() => stat(join(workspace, expected)), `${expected} must still be seeded`);
 		}
+	});
+});
+
+test("a developer's real engineering record in the checkout does not travel into the pack root (#441 review)", async () => {
+	// The normal state after running the engineering loop is a real record
+	// under .codecarto/engineering/changes/. Before this fix the non-vacuity
+	// control copied it into the pack root and its exact match turned red
+	// on any such checkout. The source tree is a tmp copy of the repo with a
+	// realistic (24-hex, non-synthetic) record planted -- NOT the live
+	// checkout, which no test may write (#437) -- and the pack root built
+	// from it must carry no namespace entries at all.
+	await withTempDir(async (dir) => {
+		const sourceRoot = join(dir, "source");
+		await mkdir(sourceRoot, { recursive: true });
+		await cp(join(REPO_ROOT, "package.json"), join(sourceRoot, "package.json"));
+		await cp(join(REPO_ROOT, ".codecarto"), join(sourceRoot, ".codecarto"), { recursive: true });
+		const real = join(sourceRoot, ".codecarto", ENGINEERING_NAMESPACE, "changes", "chg_9f3a2b1c4d5e6f7a8b9c0d1e");
+		await mkdir(real, { recursive: true });
+		await writeFile(join(real, "change.json"), '{"synthetic":"stands in for a developer record"}\n', "utf8");
+		assert.equal(SYNTHETIC_ID.test("chg_9f3a2b1c4d5e6f7a8b9c0d1e"), false, "the stand-in must look like a real record, or this proves nothing about real records");
+		await withPackRoot(async (packRoot) => {
+			const entries = await readdir(join(packRoot, ".codecarto", ENGINEERING_NAMESPACE, "changes")).catch(() => []);
+			assert.deepEqual(entries, [], "the pack root copy carried an engineering record from its source checkout");
+		}, sourceRoot);
 	});
 });
