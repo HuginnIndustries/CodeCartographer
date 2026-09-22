@@ -31,7 +31,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const engineeringMcp = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/engineering.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 const { openStore } = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/index.ts`).href);
 
 const { ENGINEERING_TOOLS } = engineeringMcp;
@@ -86,7 +86,7 @@ test("an unknown action is refused, not treated as a default", async () => {
 	await withWorkspace(async (cwd) => {
 		await assert.rejects(
 			() => handleChange({ cwd, action: "delete_everything" }),
-			(error) => error instanceof McpError && error.code === ErrorCode.InvalidParams,
+			(error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidParams,
 		);
 	});
 });
@@ -95,7 +95,7 @@ test("a missing action is refused", async () => {
 	await withWorkspace(async (cwd) => {
 		await assert.rejects(
 			() => handleChange({ cwd }),
-			(error) => error instanceof McpError && error.code === ErrorCode.InvalidParams,
+			(error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidParams,
 		);
 	});
 });
@@ -124,7 +124,7 @@ test("an agent cannot approve its own work through ordinary fields", async () =>
 		]) {
 			await assert.rejects(
 				() => handleChange({ cwd, change_id: changeId, ...forged }),
-				(error) => error instanceof McpError,
+				(error) => error instanceof ProtocolError,
 				`${JSON.stringify(forged)} was not refused`,
 			);
 		}
@@ -175,7 +175,7 @@ test("a stale revision is refused rather than silently overwriting", async () =>
 		await handleChange({ cwd, action: "update", change_id: changeId, outcome: "first write", revision: stale });
 		await assert.rejects(
 			() => handleChange({ cwd, action: "update", change_id: changeId, outcome: "second write", revision: stale }),
-			(error) => error instanceof McpError && /revision|conflict|stale/i.test(error.message),
+			(error) => error instanceof ProtocolError && /revision|conflict|stale/i.test(error.message),
 		);
 	});
 });
@@ -265,7 +265,7 @@ test("an explicitly refused action says why, rather than reading as a typo", asy
 			await assert.rejects(
 				() => handleChange({ cwd, action }),
 				(error) => {
-					assert.ok(error instanceof McpError, `${action} did not raise an McpError`);
+					assert.ok(error instanceof ProtocolError, `${action} did not raise an ProtocolError`);
 					assert.match(error.message, /not available through this surface/, `${action} was not refused with a reason`);
 					return true;
 				},
@@ -280,7 +280,7 @@ test("a caller cannot supply a derived field on create", async () => {
 		for (const field of ["decision", "authority", "discharges", "approved_by", "accepted_at"]) {
 			await assert.rejects(
 				() => handleChange({ cwd, action: "create", title: "t", outcome: "o", [field]: "anything" }),
-				(error) => error instanceof McpError && new RegExp(`${field} is derived`).test(error.message),
+				(error) => error instanceof ProtocolError && new RegExp(`${field} is derived`).test(error.message),
 				`${field} was accepted from a caller`,
 			);
 		}
@@ -410,7 +410,7 @@ test("a blank or whitespace-only required field is refused", async () => {
 		for (const blank of ["", "   ", "\t", "\n"]) {
 			await assert.rejects(
 				() => handleChange({ cwd, action: "create", title: blank, outcome: "something" }),
-				(error) => error instanceof McpError && /title/.test(error.message),
+				(error) => error instanceof ProtocolError && /title/.test(error.message),
 				`a title of ${JSON.stringify(blank)} was accepted`,
 			);
 		}
@@ -436,7 +436,7 @@ test("a proof that is not an object is refused", async () => {
 		for (const bad of ["a string", 42, true, ["an", "array"], null]) {
 			await assert.rejects(
 				() => handleChange({ cwd, action: "record_proof", change_id: created.structuredContent.change_id, proof: bad }),
-				(error) => error instanceof McpError && /proof/.test(error.message),
+				(error) => error instanceof ProtocolError && /proof/.test(error.message),
 				`a proof of ${JSON.stringify(bad)} was accepted`,
 			);
 		}
@@ -464,7 +464,7 @@ test("an accepted change cannot be rewritten through update", async () => {
 			await store.put({ ...change, state, revision: nextRevision }, current ? { ifRevision: current.record.revision } : undefined);
 			await assert.rejects(
 				() => handleChange({ cwd, action: "update", change_id: id, revision: nextRevision, title: "MUTATED AFTER ACCEPTANCE" }),
-				(error) => error instanceof McpError && new RegExp(state).test(error.message),
+				(error) => error instanceof ProtocolError && new RegExp(state).test(error.message),
 				`a ${state} change was editable`,
 			);
 			const after = (await store.get("change", id)).record;
@@ -483,21 +483,21 @@ test("an update without the revision it read is refused, not applied blindly", a
 		const id = created.structuredContent.change_id;
 		await assert.rejects(
 			() => handleChange({ cwd, action: "update", change_id: id, title: "BLIND OVERWRITE" }),
-			(error) => error instanceof McpError && /requires the revision you last read/.test(error.message),
+			(error) => error instanceof ProtocolError && /requires the revision you last read/.test(error.message),
 			"a blind update was applied",
 		);
 		const shown = await handleChange({ cwd, action: "show", change_id: id });
 		assert.equal(shown.structuredContent.title, "Original", "the record changed despite the refusal");
 
 		// A non-integer revision is a caller error, not a silent coercion. The
-		// message must name the TYPE problem: asserting only "some McpError"
+		// message must name the TYPE problem: asserting only "some ProtocolError"
 		// let the integer check be deleted, because the undefined check above
 		// already rejects "1" and null for a different reason.
 		for (const bad of ["1", 1.5, null, {}, Number.NaN]) {
 			await assert.rejects(
 				() => handleChange({ cwd, action: "update", change_id: id, revision: bad, title: "x" }),
 				(error) => {
-					assert.ok(error instanceof McpError, `a revision of ${JSON.stringify(bad)} did not raise an McpError`);
+					assert.ok(error instanceof ProtocolError, `a revision of ${JSON.stringify(bad)} did not raise an ProtocolError`);
 					assert.match(
 						error.message,
 						/revision must be an integer|requires the revision you last read/,
@@ -511,7 +511,7 @@ test("an update without the revision it read is refused, not applied blindly", a
 		// 1.5 and NaN are defined, so they reach the integer check specifically.
 		await assert.rejects(
 			() => handleChange({ cwd, action: "update", change_id: id, revision: 1.5, title: "x" }),
-			(error) => error instanceof McpError && /revision must be an integer/.test(error.message),
+			(error) => error instanceof ProtocolError && /revision must be an integer/.test(error.message),
 			"a fractional revision was not refused as a type error",
 		);
 	});
@@ -576,8 +576,8 @@ test("a bad argument is a caller error, not an internal one", async () => {
 			await assert.rejects(
 				() => handleChange({ cwd, action: "create", title: "t", outcome: "o", ...args }),
 				(error) => {
-					assert.ok(error instanceof McpError, `${why} did not raise an McpError`);
-					assert.equal(error.code, ErrorCode.InvalidParams, `${why} was reported as an internal error (${error.code})`);
+					assert.ok(error instanceof ProtocolError, `${why} did not raise an ProtocolError`);
+					assert.equal(error.code, ProtocolErrorCode.InvalidParams, `${why} was reported as an internal error (${error.code})`);
 					return true;
 				},
 				`${why} was accepted`,
@@ -589,7 +589,7 @@ test("a bad argument is a caller error, not an internal one", async () => {
 		await handleChange({ ...args });
 		await assert.rejects(
 			() => handleChange({ ...args, title: "Beta" }),
-			(error) => error instanceof McpError && error.code === ErrorCode.InvalidParams && /new request_id/.test(error.message),
+			(error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidParams && /new request_id/.test(error.message),
 			"a conflicting retry was reported as an internal error",
 		);
 	});
@@ -604,7 +604,7 @@ test("an inherited property name is not treated as a refused action", async () =
 			await assert.rejects(
 				() => handleChange({ cwd, action }),
 				(error) => {
-					assert.ok(error instanceof McpError);
+					assert.ok(error instanceof ProtocolError);
 					assert.ok(!/native code|\[object Object\]/.test(error.message), `${action} leaked engine internals: ${error.message}`);
 					assert.match(error.message, /unknown action/);
 					return true;

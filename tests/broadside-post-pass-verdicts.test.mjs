@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/broadside.ts`).href);
@@ -257,11 +257,11 @@ test("codecarto_broadside collect: regenerate_post_passes is validated and repor
 			await writeFile(join(runDir, "verified.json"), JSON.stringify(VERIFIED), "utf8");
 			await assert.rejects(
 				server.handleBroadside({ cwd: dir, action: "collect", regenerate_post_passes: "yes" }),
-				(error) => error instanceof McpError && error.code === ErrorCode.InvalidParams && /must be a boolean/.test(error.message),
+				(error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidParams && /must be a boolean/.test(error.message),
 			);
 			await assert.rejects(
 				server.handleBroadside({ cwd: dir, action: "collect", regenerate_post_passes: true, include_synthesis: false, include_triage: false }),
-				(error) => error instanceof McpError && error.code === ErrorCode.InvalidParams && /needs at least one of/.test(error.message),
+				(error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidParams && /needs at least one of/.test(error.message),
 			);
 			const result = await server.handleBroadside({ cwd: dir, action: "collect", regenerate_post_passes: true, wait_seconds: 5 });
 			assert.deepEqual(result.structuredContent.regenerated, ["synthesis", "triage"]);

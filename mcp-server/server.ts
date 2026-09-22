@@ -13,14 +13,8 @@
 // Tools that produce phase or skill text return it inline as the tool result;
 // the host decides how to surface it (display, feed to the agent, etc.).
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-	CallToolRequestSchema,
-	ErrorCode,
-	ListToolsRequestSchema,
-	McpError,
-} from "@modelcontextprotocol/sdk/types.js";
+import { type ListToolsResult, ProtocolError, ProtocolErrorCode, Server } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { cp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 
@@ -130,20 +124,20 @@ import { type CodecartoConfig, describeConfigProblems, loadUserConfig, resolveUs
 function requireOptionalPhase(phase: unknown): string | undefined {
 	if (phase === undefined || phase === null) return undefined;
 	if (typeof phase !== "string") {
-		throw new McpError(ErrorCode.InvalidParams, `phase must be a string when provided, got ${typeof phase}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `phase must be a string when provided, got ${typeof phase}`);
 	}
 	return phase.trim() || undefined;
 }
 
 async function validateCwd(cwd: unknown): Promise<string> {
 	if (typeof cwd !== "string" || !cwd.trim()) {
-		throw new McpError(ErrorCode.InvalidParams, "cwd is required");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "cwd is required");
 	}
 	if (!isAbsolute(cwd)) {
-		throw new McpError(ErrorCode.InvalidParams, `cwd must be an absolute path, got: ${cwd}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `cwd must be an absolute path, got: ${cwd}`);
 	}
 	if (!(await pathExists(cwd))) {
-		throw new McpError(ErrorCode.InvalidParams, `cwd does not exist: ${cwd}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `cwd does not exist: ${cwd}`);
 	}
 	return cwd;
 }
@@ -160,7 +154,7 @@ async function validateCwd(cwd: unknown): Promise<string> {
 async function optionalCwd(cwd: unknown): Promise<string | null> {
 	if (cwd === undefined || cwd === null) return null;
 	if (typeof cwd !== "string") {
-		throw new McpError(ErrorCode.InvalidParams, "cwd must be a string when given");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "cwd must be a string when given");
 	}
 	if (cwd.trim() === "") return null;
 	return validateCwd(cwd.trim());
@@ -172,11 +166,11 @@ async function requireWorkspace(cwd: string): Promise<WorkspaceState> {
 	// — so it is InvalidRequest, not the InternalError a host would retry or
 	// report as a server bug (self-audit mech 2.8).
 	const state = await getWorkspaceState(cwd).catch((error) => {
-		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
 	if (!state) {
-		throw new McpError(
-			ErrorCode.InvalidRequest,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidRequest,
 			`No CodeCartographer workspace at ${cwd}. Call codecarto_init first.`,
 		);
 	}
@@ -206,7 +200,7 @@ async function buildMcpPhasePrompt(
 		return await buildPhasePrompt(state, phase, forced, { auto });
 	} catch (error) {
 		if (error instanceof PhasePreflightError) {
-			throw new McpError(ErrorCode.InvalidRequest, error.message);
+			throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error.message);
 		}
 		throw error;
 	}
@@ -218,11 +212,11 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 	const cwd = await validateCwd(args.cwd);
 	const pipelineChoice = args.pipeline ? resolvePipelineChoice(args.pipeline) : null;
 	if (args.pipeline && !pipelineChoice) {
-		throw new McpError(ErrorCode.InvalidParams, `Unknown pipeline: ${args.pipeline}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown pipeline: ${args.pipeline}`);
 	}
 
 	if (!(await pathExists(packagedWorkspaceDir))) {
-		throw new McpError(ErrorCode.InternalError, "Packaged .codecarto assets are missing on the MCP server.");
+		throw new ProtocolError(ProtocolErrorCode.InternalError, "Packaged .codecarto assets are missing on the MCP server.");
 	}
 
 	const targetWorkspaceDir = join(cwd, ".codecarto");
@@ -246,8 +240,8 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 
 	if (targetExists && !broadsideOnly) {
 		if (!args.force) {
-			throw new McpError(
-				ErrorCode.InvalidRequest,
+			throw new ProtocolError(
+				ProtocolErrorCode.InvalidRequest,
 				sameWorkspace
 					? `The .codecarto/ at ${targetWorkspaceDir} is CodeCartographer's own packaged template (a checkout install), and it holds workspace state. Pass force: true to move that state — status, findings, handoffs, usage data, closeouts, dashboard — to a .codecarto-backup-TIMESTAMP/ directory and reinitialize; the framework files stay in place. Consider codecarto_open to reattach without resetting.`
 					: `A .codecarto/ directory already exists at ${targetWorkspaceDir}. Pass force: true to back it up and reinitialize. Warning: this moves all existing findings, handoffs, usage data, closeouts, and phase progress to a .codecarto-backup-TIMESTAMP/ directory.`,
@@ -281,7 +275,7 @@ export async function handleInit(args: { cwd: string; pipeline?: string; force?:
 	const resolvedPipelinePath = join(targetWorkspaceDir, selectedPipelinePath);
 
 	if (!(await pathExists(resolvedPipelinePath))) {
-		throw new McpError(ErrorCode.InvalidParams, `Pipeline file not found: ${selectedPipelinePath}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Pipeline file not found: ${selectedPipelinePath}`);
 	}
 
 	const pipeline = await loadYamlFile<PipelineFile>(resolvedPipelinePath);
@@ -377,7 +371,7 @@ export async function handleSwitchPipeline(args: { cwd: string; pipeline: string
 
 	const pipelineChoice = resolvePipelineChoice(args.pipeline);
 	if (!pipelineChoice) {
-		throw new McpError(ErrorCode.InvalidRequest, `Unknown pipeline: ${args.pipeline}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `Unknown pipeline: ${args.pipeline}`);
 	}
 
 	if (state.status.pipeline === pipelineChoice) {
@@ -417,7 +411,7 @@ export async function handleNext(args: { cwd: string; unattended?: boolean }) {
 		// Not a result: a host looping on codecarto_next would read a text
 		// answer as "done" (#228). There is no prompt to hand out until the
 		// pipeline file is fixed.
-		throw new McpError(ErrorCode.InvalidRequest, describeStuckPipeline(outcome.blocked));
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, describeStuckPipeline(outcome.blocked));
 	}
 	if (outcome.kind === "complete") {
 		return textResult("All CodeCartographer phases are complete. Run codecarto_skill for post-pipeline work.", {
@@ -434,13 +428,13 @@ export async function handleNext(args: { cwd: string; unattended?: boolean }) {
 
 export async function handlePhase(args: { cwd: string; phase: string; unattended?: boolean }) {
 	if (typeof args.phase !== "string" || !args.phase.trim()) {
-		throw new McpError(ErrorCode.InvalidParams, "phase is required");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "phase is required");
 	}
 	const cwd = await validateCwd(args.cwd);
 	const state = await requireWorkspace(cwd);
 	const phase = resolvePhase(state, args.phase);
 	if (!phase) {
-		throw new McpError(ErrorCode.InvalidParams, `Unknown phase: ${args.phase}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown phase: ${args.phase}`);
 	}
 	const unattended = args.unattended === true;
 	const prompt = await buildMcpPhasePrompt(state, phase, true, unattended);
@@ -451,7 +445,7 @@ export async function handleValidate(args: { cwd: string; phase?: string }) {
 	const cwd = await validateCwd(args.cwd);
 	const state = await requireWorkspace(cwd);
 	const validation = await validatePhaseOutput(state, requireOptionalPhase(args.phase)).catch((error) => {
-		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
 	const summary = buildValidationSummary(validation).join("\n");
 	return textResult(summary, {
@@ -471,17 +465,17 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 	const cwd = await validateCwd(args.cwd);
 	const initialState = await requireWorkspace(cwd);
 	const validation = await validatePhaseOutput(initialState, requireOptionalPhase(args.phase)).catch((error) => {
-		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
 	if (validation.overall === "FAIL" || validation.overall === "MISSING") {
-		throw new McpError(
-			ErrorCode.InvalidRequest,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidRequest,
 			`Cannot complete ${validation.phaseId}: validation is ${validation.overall}.\n${buildValidationSummary(validation).join("\n")}`,
 		);
 	}
 
 	const { updatedState, closeoutNotice, orchestratorCheckpoint, warnings } = await completeValidatedPhase(cwd, validation, "codecarto_complete").catch((error) => {
-		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
 
 	// Record the run in the usage log (issue #100). MCP hosts execute phases in
@@ -536,7 +530,7 @@ export async function handleComplete(args: { cwd: string; phase?: string }) {
 
 export async function handleSkill(args: { cwd: string; name: string }) {
 	if (typeof args.name !== "string" || !args.name.trim()) {
-		throw new McpError(ErrorCode.InvalidParams, "name is required");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "name is required");
 	}
 	const cwd = await validateCwd(args.cwd);
 
@@ -545,7 +539,7 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 	// repository with no workspace at all, so it is served ahead of both gates.
 	if (args.name.trim() === BROADSIDE_SKILL_NAME) {
 		const skill = await readBroadsideSkill(cwd).catch((error) => {
-			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+			throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
 		return textResult(skill.content, { skill: BROADSIDE_SKILL_NAME, path: skill.path, postPipeline: false });
 	}
@@ -563,7 +557,7 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 		const state = await requireWorkspace(cwd);
 		const skillName = await resolveSkillName(state.workspaceDir, ENGINEERING_SKILL_NAME);
 		if (!skillName) {
-			throw new McpError(ErrorCode.InvalidRequest, `Unknown skill: ${ENGINEERING_SKILL_NAME}.`);
+			throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `Unknown skill: ${ENGINEERING_SKILL_NAME}.`);
 		}
 		const prompt = await buildSkillPrompt(state, skillName, { postPipeline: false });
 		return textResult(prompt, { skill: skillName, postPipeline: false });
@@ -572,13 +566,13 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 	const state = await requireWorkspace(cwd);
 	const outcome = resolvePipelineOutcome(state);
 	if (outcome.kind === "eligible") {
-		throw new McpError(
-			ErrorCode.InvalidRequest,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidRequest,
 			`Cannot run skill: pipeline is not complete (next phase: ${outcome.phase.id}). Finish the pipeline first.`,
 		);
 	}
 	if (outcome.kind === "stuck") {
-		throw new McpError(ErrorCode.InvalidRequest, `Cannot run skill: the pipeline is not complete. ${describeStuckPipeline(outcome.blocked)}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `Cannot run skill: the pipeline is not complete. ${describeStuckPipeline(outcome.blocked)}`);
 	}
 	// Resolve against the installed list only: the name is never joined onto a
 	// path, so a traversal like `../findings/architecture` cannot splice a
@@ -587,8 +581,8 @@ export async function handleSkill(args: { cwd: string; name: string }) {
 	if (!skillName) {
 		const available = await listSkillNames(state.workspaceDir);
 		const hint = available.length > 0 ? ` Available: ${available.join(", ")}.` : " No skills installed.";
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			`Unknown skill: ${args.name.trim()}.${hint} The Broad-Side reading guide is served as \`${BROADSIDE_SKILL_NAME}\` and is not pipeline-gated.`,
 		);
 	}
@@ -604,13 +598,13 @@ function resolveLibraryPath(args: { library_path?: unknown }, config: CodecartoC
 		: null;
 	if (explicit) {
 		if (!isAbsolute(explicit)) {
-			throw new McpError(ErrorCode.InvalidParams, `library_path must be absolute, got: ${explicit}`);
+			throw new ProtocolError(ProtocolErrorCode.InvalidParams, `library_path must be absolute, got: ${explicit}`);
 		}
 		return explicit;
 	}
 	if (config.library.path) return config.library.path;
-	throw new McpError(
-		ErrorCode.InvalidParams,
+	throw new ProtocolError(
+		ProtocolErrorCode.InvalidParams,
 		"library_path is required (pass it explicitly, or pass cwd and configure library.path in ~/.codecarto/config.yaml or .codecarto/workflow/config.yaml).",
 	);
 }
@@ -636,20 +630,20 @@ async function loadEffectiveConfig(cwd: string | null): Promise<CodecartoConfig>
  */
 function refuseOnConfigProblems(config: CodecartoConfig, tool: string): void {
 	if (config.problems.length === 0) return;
-	throw new McpError(
-		ErrorCode.InvalidRequest,
+	throw new ProtocolError(
+		ProtocolErrorCode.InvalidRequest,
 		[`${tool} refused: the configuration has problems. Fix or remove the offending file, then retry.`, ...describeConfigProblems(config)].join("\n"),
 	);
 }
 
 function asStringArray(value: unknown, fieldName: string): string[] {
 	if (!Array.isArray(value)) {
-		throw new McpError(ErrorCode.InvalidParams, `${fieldName} must be an array of strings`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `${fieldName} must be an array of strings`);
 	}
 	const out: string[] = [];
 	for (const v of value) {
 		if (typeof v !== "string") {
-			throw new McpError(ErrorCode.InvalidParams, `${fieldName} must contain only strings`);
+			throw new ProtocolError(ProtocolErrorCode.InvalidParams, `${fieldName} must contain only strings`);
 		}
 		out.push(v);
 	}
@@ -671,7 +665,7 @@ function buildGenerationFromArg(model_metadata: unknown): EntryGeneration {
 	};
 	if (model_metadata === undefined || model_metadata === null) return defaults;
 	if (typeof model_metadata !== "object") {
-		throw new McpError(ErrorCode.InvalidParams, "model_metadata must be an object");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "model_metadata must be an object");
 	}
 	const m = model_metadata as Record<string, unknown>;
 	const out = { ...defaults };
@@ -699,16 +693,16 @@ export async function readSpecArg(
 	if (typeof args.spec === "string" && args.spec.length > 0) return args.spec;
 	if (typeof args.spec_path === "string" && args.spec_path.length > 0) {
 		if (!isAbsolute(args.spec_path)) {
-			throw new McpError(ErrorCode.InvalidParams, `spec_path must be absolute, got: ${args.spec_path}`);
+			throw new ProtocolError(ProtocolErrorCode.InvalidParams, `spec_path must be absolute, got: ${args.spec_path}`);
 		}
 		if (!Array.isArray(allowedRoots) || allowedRoots.length === 0) {
-			throw new McpError(
-				ErrorCode.InternalError,
+			throw new ProtocolError(
+				ProtocolErrorCode.InternalError,
 				"refusing to read spec_path without a containment root — this is a caller bug, not a client error",
 			);
 		}
 		if (!(await pathExists(args.spec_path))) {
-			throw new McpError(ErrorCode.InvalidParams, `spec_path does not exist: ${args.spec_path}`);
+			throw new ProtocolError(ProtocolErrorCode.InvalidParams, `spec_path does not exist: ${args.spec_path}`);
 		}
 		// Enforce path containment: spec_path must be within an allowed root
 		// (cwd's .codecarto/ or the configured library path) to prevent
@@ -718,8 +712,8 @@ export async function readSpecArg(
 			allowedRoots.map((root) => isWithinPathResolved(resolvedSpecPath, root)),
 		);
 		if (!withinAllowed.some((result) => result)) {
-			throw new McpError(
-				ErrorCode.InvalidParams,
+			throw new ProtocolError(
+				ProtocolErrorCode.InvalidParams,
 				`spec_path must be within the workspace (.codecarto/) or the configured library path. Got: ${args.spec_path}`,
 			);
 		}
@@ -728,7 +722,7 @@ export async function readSpecArg(
 		// the read; the canonical one cannot (#362).
 		return readFile(resolvedSpecPath, "utf8");
 	}
-	throw new McpError(ErrorCode.InvalidParams, "Either spec (inline content) or spec_path (absolute file path) is required");
+	throw new ProtocolError(ProtocolErrorCode.InvalidParams, "Either spec (inline content) or spec_path (absolute file path) is required");
 }
 
 async function resolveDefaultsFromWorkspace(
@@ -806,8 +800,8 @@ export async function handlePublish(args: Record<string, unknown>) {
 	const libraryPath = resolveLibraryPath(args, config);
 	const marker = await discoverLibrary(libraryPath);
 	if (!marker) {
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			`No CodeCartographer library at ${libraryPath} (missing .codecarto-library marker). Create one before publishing.`,
 		);
 	}
@@ -818,10 +812,10 @@ export async function handlePublish(args: Record<string, unknown>) {
 
 	const spec = await readSpecArg(args, allowedRoots);
 	if (typeof args.source_repo !== "string" || args.source_repo.trim() === "") {
-		throw new McpError(ErrorCode.InvalidParams, "source_repo is required");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "source_repo is required");
 	}
 	if (typeof args.headline !== "string" || args.headline.trim() === "") {
-		throw new McpError(ErrorCode.InvalidParams, "headline is required");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "headline is required");
 	}
 	const tags = asStringArray(args.tags ?? [], "tags");
 	const capabilities = asStringArray(args.capabilities ?? [], "capabilities");
@@ -830,8 +824,8 @@ export async function handlePublish(args: Record<string, unknown>) {
 	const slugInput = typeof args.slug === "string" && args.slug.trim() !== "" ? args.slug.trim() : null;
 	const slug = slugInput ?? deriveSlug(sourceRepo);
 	if (!isValidSlug(slug)) {
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			`Resolved slug "${slug}" is invalid. Provide an explicit slug (lowercase ASCII, starts with a letter, max 64 chars).`,
 		);
 	}
@@ -848,8 +842,8 @@ export async function handlePublish(args: Record<string, unknown>) {
 		: undefined;
 
 	if (marker.namespaced && !namespace) {
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			"Library is namespaced — namespace argument is required (or set library.namespace in config.yaml).",
 		);
 	}
@@ -885,8 +879,8 @@ export async function handlePublish(args: Record<string, unknown>) {
 		const specSource = typeof args.spec_path === "string" && args.spec_path.trim() !== ""
 			? args.spec_path.trim()
 			: `inline (${spec.length} characters)`;
-		throw new McpError(
-			ErrorCode.InvalidRequest,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidRequest,
 			[
 				"Publish not performed: library.publish_confirm is set and this call did not carry confirm: true. Nothing was written.",
 				`Would publish ${label} to ${libraryPath}`,
@@ -959,8 +953,8 @@ export async function handleLibraryList(args: Record<string, unknown>) {
 	const libraryPath = resolveLibraryPath(args, config);
 	const marker = await discoverLibrary(libraryPath);
 	if (!marker) {
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			`No CodeCartographer library at ${libraryPath} (missing .codecarto-library marker).`,
 		);
 	}
@@ -1011,8 +1005,8 @@ export async function handleLibraryReindex(args: Record<string, unknown>) {
 	const libraryPath = resolveLibraryPath(args, config);
 	const marker = await discoverLibrary(libraryPath);
 	if (!marker) {
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			`No CodeCartographer library at ${libraryPath} (missing .codecarto-library marker).`,
 		);
 	}
@@ -1035,13 +1029,13 @@ export async function handleLibraryReindex(args: Record<string, unknown>) {
 
 export async function handleLibraryInit(args: { library_path: string; name?: string; namespace?: string }) {
 	if (!args.library_path || typeof args.library_path !== "string") {
-		throw new McpError(ErrorCode.InvalidParams, "library_path is required.");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "library_path is required.");
 	}
 	// Same rule as resolveLibraryPath for the other library tools: a relative
 	// path would resolve against the MCP server process's cwd and then be
 	// persisted verbatim into the user-global config (#134).
 	if (!isAbsolute(args.library_path)) {
-		throw new McpError(ErrorCode.InvalidParams, `library_path must be absolute, got: ${args.library_path}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `library_path must be absolute, got: ${args.library_path}`);
 	}
 
 	const libraryPath = args.library_path;
@@ -1049,8 +1043,8 @@ export async function handleLibraryInit(args: { library_path: string; name?: str
 	// The rule codecarto_publish applies to the namespace later, applied
 	// before it is written into the config.
 	if (namespaced && !isValidSlug(args.namespace!)) {
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			`Invalid namespace "${args.namespace}" (lowercase ASCII, starts with a letter, max 64 chars).`,
 		);
 	}
@@ -1067,7 +1061,7 @@ export async function handleLibraryInit(args: { library_path: string; name?: str
 	// does not switch the codecarto_publish confirm gate on (#244). A config
 	// file that cannot be parsed is left alone and reported.
 	await writeLibraryConfig(configPath, libraryPath, args.namespace ?? null).catch((error) => {
-		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
 	const written = args.namespace ? "library.path and library.namespace" : "library.path";
 
@@ -1091,14 +1085,14 @@ export async function handleVision(args: { cwd: string; raw_text: string }) {
 	// synthesize a vision brief from. Every sibling handler validates its
 	// required string argument; this one did not.
 	if (typeof args.raw_text !== "string" || !args.raw_text.trim()) {
-		throw new McpError(ErrorCode.InvalidParams, "raw_text is required (the user's raw product description)");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "raw_text is required (the user's raw product description)");
 	}
 	const workspaceDir = join(cwd, ".codecarto");
 	const interviewPath = join(workspaceDir, "findings", "vision-capture", "INTERVIEW.md");
 	const visionPath = join(workspaceDir, "inputs", "vision.md");
 
 	if (!(await pathExists(interviewPath))) {
-		throw new McpError(ErrorCode.InvalidRequest, "Vision interview skill not found. Run codecarto_init with the synthesis pipeline first.");
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, "Vision interview skill not found. Run codecarto_init with the synthesis pipeline first.");
 	}
 
 	const interviewSkill = await readFile(interviewPath, "utf8");
@@ -1168,7 +1162,7 @@ export async function handleOpen(args: { cwd: string }) {
 	const cwd = await validateCwd(args.cwd);
 	const workspaceDir = join(cwd, ".codecarto");
 	if (!(await pathExists(join(workspaceDir, "workflow", "status.yaml")))) {
-		throw new McpError(ErrorCode.InvalidRequest, "No existing CodeCartographer workspace found. Run codecarto_init first.");
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, "No existing CodeCartographer workspace found. Run codecarto_init first.");
 	}
 	const state = await requireWorkspace(cwd);
 	const outcome = resolvePipelineOutcome(state);
@@ -1218,7 +1212,7 @@ export async function handleDashboard(args: { cwd: string }) {
 	const cwd = await validateCwd(args.cwd);
 	await requireWorkspace(cwd);
 	if (!(await writeDashboard(cwd, PACKAGE_VERSION))) {
-		throw new McpError(ErrorCode.InvalidRequest, "Dashboard render failed: the workspace state could not be gathered or .codecarto/dashboard.html is not writable.");
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, "Dashboard render failed: the workspace state could not be gathered or .codecarto/dashboard.html is not writable.");
 	}
 	return textResult("Dashboard regenerated: .codecarto/dashboard.html", { path: ".codecarto/dashboard.html" });
 }
@@ -1247,7 +1241,7 @@ export async function handleRefreshScaffold(args: { cwd: string }) {
 	const cwd = await validateCwd(args.cwd);
 	await requireWorkspace(cwd);
 	const result = await refreshScaffold(cwd).catch((error) => {
-		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
 	const shown = result.written.slice(0, 20);
 	const lines = [
@@ -1267,12 +1261,12 @@ export async function handleRefreshScaffold(args: { cwd: string }) {
 
 export async function handleAmend(args: { cwd: string; name: string }) {
 	if (typeof args.name !== "string" || !args.name.trim()) {
-		throw new McpError(ErrorCode.InvalidParams, "name is required (the amendment file's slug under .codecarto/scratch/amendments/)");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "name is required (the amendment file's slug under .codecarto/scratch/amendments/)");
 	}
 	const cwd = await validateCwd(args.cwd);
 	await requireWorkspace(cwd);
 	const { applied, closeoutNotice } = await applyAmendment(cwd, args.name).catch((error) => {
-		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
 
 	// An amendment exists precisely to change the numbers the dashboard shows
@@ -1304,8 +1298,8 @@ function resolveBroadsideApiKey(explicit: string | undefined, config: { apiKey: 
 	const fromEnv = process.env.OPENROUTER_API_KEY?.trim();
 	if (fromEnv) return fromEnv;
 	if (config.apiKey) return config.apiKey;
-	throw new McpError(
-		ErrorCode.InvalidParams,
+	throw new ProtocolError(
+		ProtocolErrorCode.InvalidParams,
 		"No OpenRouter API key found. Pass api_key, set the OPENROUTER_API_KEY environment variable, or add api_key to .codecarto/broadside/config.yaml.",
 	);
 }
@@ -1332,7 +1326,7 @@ export async function handleBroadside(args: {
 	const cwd = await validateCwd(args.cwd);
 	const action = args.action ?? "submit";
 	if (!["submit", "collect", "status", "models", "verify"].includes(action)) {
-		throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${action}. Valid actions: submit, collect, status, models, verify.`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown action: ${action}. Valid actions: submit, collect, status, models, verify.`);
 	}
 
 	// A config.yaml that exists but cannot be read refuses every action that
@@ -1345,7 +1339,7 @@ export async function handleBroadside(args: {
 		config = await loadBroadsideConfig(broadsideDirFor(cwd));
 	} catch (error) {
 		if (!(error instanceof BroadsideConfigError) || action !== "status") {
-			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+			throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		}
 		config = defaultBroadsideConfig();
 		configWarning = error.message;
@@ -1353,7 +1347,7 @@ export async function handleBroadside(args: {
 
 	if (action === "status") {
 		const { state } = await runBroadsideStatus(cwd).catch((error) => {
-			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+			throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
 		const lines = [statusText(state)];
 		if (configWarning) lines.push(`Warning: ${configWarning}`);
@@ -1378,7 +1372,7 @@ export async function handleBroadside(args: {
 		const { entries, benchmarks, endpoints } = await listBatchModels(broadsideDirFor(cwd), config, apiKey, {
 			includeBenchmarks: args.include_benchmarks === true,
 		}).catch((error) => {
-			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+			throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
 		return textResult(modelsText(entries, { benchmarks, defaultModel: config.model, endpoints }), {
 			models: entries,
@@ -1396,7 +1390,7 @@ export async function handleBroadside(args: {
 		if (args.lenses && args.lenses.length > 0) {
 			const unknown = args.lenses.filter((l) => !BROADSIDE_LENS_IDS.includes(l as BroadsideLensId));
 			if (unknown.length > 0) {
-				throw new McpError(ErrorCode.InvalidParams, `Unknown lens(es): ${unknown.join(", ")}. Valid: ${BROADSIDE_LENS_IDS.join(", ")}`);
+				throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown lens(es): ${unknown.join(", ")}. Valid: ${BROADSIDE_LENS_IDS.join(", ")}`);
 			}
 			lenses = args.lenses as BroadsideLensId[];
 		} else {
@@ -1414,19 +1408,19 @@ export async function handleBroadside(args: {
 		// model's ceiling — so a wrong id fails before anything is submitted.
 		const model = typeof args.model === "string" && args.model.trim() ? args.model.trim() : config.model;
 		if (args.model !== undefined && !(typeof args.model === "string" && args.model.trim())) {
-			throw new McpError(ErrorCode.InvalidParams, "model must be a non-empty OpenRouter batch model id (see action 'models').");
+			throw new ProtocolError(ProtocolErrorCode.InvalidParams, "model must be a non-empty OpenRouter batch model id (see action 'models').");
 		}
 		const lensModels: Partial<Record<BroadsideLensId, string>> = {};
 		if (args.lens_models !== undefined) {
 			if (!args.lens_models || typeof args.lens_models !== "object" || Array.isArray(args.lens_models)) {
-				throw new McpError(ErrorCode.InvalidParams, "lens_models must be an object mapping lens ids to batch model ids.");
+				throw new ProtocolError(ProtocolErrorCode.InvalidParams, "lens_models must be an object mapping lens ids to batch model ids.");
 			}
 			for (const [lensId, value] of Object.entries(args.lens_models)) {
 				if (!BROADSIDE_LENS_IDS.includes(lensId as BroadsideLensId)) {
-					throw new McpError(ErrorCode.InvalidParams, `lens_models: unknown lens "${lensId}". Valid: ${BROADSIDE_LENS_IDS.join(", ")}`);
+					throw new ProtocolError(ProtocolErrorCode.InvalidParams, `lens_models: unknown lens "${lensId}". Valid: ${BROADSIDE_LENS_IDS.join(", ")}`);
 				}
 				if (typeof value !== "string" || !value.trim()) {
-					throw new McpError(ErrorCode.InvalidParams, `lens_models.${lensId} must be a non-empty OpenRouter batch model id.`);
+					throw new ProtocolError(ProtocolErrorCode.InvalidParams, `lens_models.${lensId} must be a non-empty OpenRouter batch model id.`);
 				}
 				lensModels[lensId as BroadsideLensId] = value.trim();
 			}
@@ -1440,7 +1434,7 @@ export async function handleBroadside(args: {
 			force: args.force === true,
 			incremental,
 		}).catch((error) => {
-			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+			throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
 
 		const lines = [estimateSubmitText(result, lenses.map(getLens))];
@@ -1460,7 +1454,7 @@ export async function handleBroadside(args: {
 				// The `collect` action normalizes this same call; without it here,
 				// a failure during submit-with-wait reached the client as an
 				// opaque InternalError instead of naming its cause.
-				throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+				throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 			});
 			lines.push("", collectResultText(collect));
 		}
@@ -1482,10 +1476,10 @@ export async function handleBroadside(args: {
 		// call's cost is known only when it returns — so the pass stops before
 		// the next finding once reached; absent, config.yaml's cap applies.
 		if (args.top !== undefined && !(typeof args.top === "number" && Number.isInteger(args.top) && args.top >= 1)) {
-			throw new McpError(ErrorCode.InvalidParams, "top must be a positive integer.");
+			throw new ProtocolError(ProtocolErrorCode.InvalidParams, "top must be a positive integer.");
 		}
 		if (args.model !== undefined && !(typeof args.model === "string" && args.model.trim())) {
-			throw new McpError(ErrorCode.InvalidParams, "model must be a non-empty OpenRouter model id.");
+			throw new ProtocolError(ProtocolErrorCode.InvalidParams, "model must be a non-empty OpenRouter model id.");
 		}
 		const maxCost = typeof args.max_cost === "number" && args.max_cost >= 0 ? args.max_cost : config.maxCost;
 		const verified = await runBroadsideVerify(cwd, apiKey, {
@@ -1495,7 +1489,7 @@ export async function handleBroadside(args: {
 			maxCost,
 			signal: serverLifetime?.signal,
 		}).catch((error) => {
-			throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+			throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 		});
 		return textResult(verifyResultText(verified), {
 			runId: verified.runId,
@@ -1512,10 +1506,10 @@ export async function handleBroadside(args: {
 
 	// action === "collect"
 	if (args.regenerate_post_passes !== undefined && typeof args.regenerate_post_passes !== "boolean") {
-		throw new McpError(ErrorCode.InvalidParams, "regenerate_post_passes must be a boolean.");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "regenerate_post_passes must be a boolean.");
 	}
 	if (args.regenerate_post_passes && !includeSynthesis && !includeTriage) {
-		throw new McpError(ErrorCode.InvalidParams, "regenerate_post_passes needs at least one of include_synthesis and include_triage.");
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, "regenerate_post_passes needs at least one of include_synthesis and include_triage.");
 	}
 	const collect = await runBroadsideCollect(cwd, apiKey, {
 		waitMs,
@@ -1526,7 +1520,7 @@ export async function handleBroadside(args: {
 		...(runId && { runId }),
 		...(args.regenerate_post_passes && { regeneratePostPasses: true }),
 	}).catch((error) => {
-		throw new McpError(ErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, error instanceof Error ? error.message : String(error));
 	});
 	return textResult(collectResultText(collect), {
 		runId: collect.runId,
@@ -1991,7 +1985,7 @@ const HANDLERS: Record<string, (args: any) => Promise<unknown>> = {
 export async function handleGuide(args: { topic?: string }) {
 	const topics = await listGuideTopics();
 	const document: GuideDocument = await readGuide(args.topic).catch((error) => {
-		throw new McpError(ErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, error instanceof Error ? error.message : String(error));
 	});
 	const other = topics.filter((name) => name !== document.topic);
 	const footer = other.length > 0
@@ -2002,30 +1996,44 @@ export async function handleGuide(args: { topic?: string }) {
 
 // ---------- server bootstrap ----------
 
+// The inventory is fixed for the life of the process (TOOLS and
+// ENGINEERING_TOOLS are module constants), so a 2026-07-28 client may cache
+// `tools/list` for a long time and share it across sessions. `server/discover`
+// is left at the SDK default (ttlMs 0, private) because its answer is what a
+// client should re-probe on every connection. Hints are emitted only on
+// 2026-07-28-era responses; a 2025-era response never carries them.
+const TOOLS_LIST_CACHE_HINT = { ttlMs: 24 * 60 * 60 * 1000, cacheScope: "public" as const };
+
 export function buildServer() {
 	const server = new Server(
 		{ name: "codecartographer", version: PACKAGE_VERSION },
-		{ capabilities: { tools: {} } },
+		{
+			capabilities: { tools: {} },
+			cacheHints: { "tools/list": TOOLS_LIST_CACHE_HINT },
+		},
 	);
 
 	// The engineering surface is appended rather than interleaved: it is
 	// experimental, and a host diffing the inventory should see exactly one
 	// addition at the end rather than a reshuffle of the analysis tools.
-	server.setRequestHandler(ListToolsRequestSchema, async () => ({
-		tools: [...TOOLS, ...ENGINEERING_TOOLS] as unknown as typeof TOOLS[number][],
+	// TOOLS is `as const` (readonly tuples); the SDK's ListToolsResult wants
+	// mutable arrays. The cast crosses that gap only — the objects are
+	// identical on the wire.
+	server.setRequestHandler("tools/list", async () => ({
+		tools: [...TOOLS, ...ENGINEERING_TOOLS] as unknown as ListToolsResult["tools"],
 	}));
 
-	server.setRequestHandler(CallToolRequestSchema, async (request) => {
+	server.setRequestHandler("tools/call", async (request) => {
 		const handler = HANDLERS[request.params.name];
 		if (!handler) {
-			throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
+			throw new ProtocolError(ProtocolErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
 		}
 		try {
 			return (await handler(request.params.arguments ?? {})) as Awaited<ReturnType<typeof handleStatus>>;
 		} catch (error) {
-			if (error instanceof McpError) throw error;
-			throw new McpError(
-				ErrorCode.InternalError,
+			if (error instanceof ProtocolError) throw error;
+			throw new ProtocolError(
+				ProtocolErrorCode.InternalError,
 				error instanceof Error ? error.message : String(error),
 			);
 		}
@@ -2044,11 +2052,23 @@ export function buildServer() {
 let serverLifetime: AbortController | null = null;
 
 export async function startStdioServer() {
-	const server = buildServer();
-	const transport = new StdioServerTransport();
 	serverLifetime = new AbortController();
 	const lifetime = serverLifetime;
-	server.onclose = () => lifetime.abort();
+	// `serveStdio` owns the era decision for the connection: a 2025-era opening
+	// (`initialize`) pins a legacy-era instance and is served exactly as the SDK
+	// v1 line served it; a 2026-07-28 opening (an envelope-bearing
+	// `server/discover` or request) pins a modern-era instance, on which the
+	// SDK itself answers `server/discover` and stamps `resultType`, the caching
+	// hints and `serverInfo` onto every result. The factory is called once per
+	// connection, so one process still serves one client.
+	serveStdio(
+		() => {
+			const server = buildServer();
+			server.onclose = () => lifetime.abort();
+			return server;
+		},
+		{ onerror: (error) => console.error(`codecarto-mcp: ${error.message}`) },
+	);
 	// The SDK's stdio transport listens for stdin `data` and `error` only — it
 	// never sees the end of the stream — so a client that exits mid-request
 	// leaves the server polling with nobody to answer to (#322, observed: a
@@ -2057,5 +2077,4 @@ export async function startStdioServer() {
 	const gone = () => lifetime.abort();
 	process.stdin.once("end", gone);
 	process.stdin.once("close", gone);
-	await server.connect(transport);
 }

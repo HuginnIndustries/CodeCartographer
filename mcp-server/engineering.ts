@@ -38,7 +38,7 @@
 
 import { createHash } from "node:crypto";
 
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
 
 import {
 	buildChangeBrief,
@@ -124,12 +124,12 @@ function asCallerError(error: unknown): unknown {
 		case "idempotency-conflict":
 			// Retrying verbatim will never succeed: the key is already bound to
 			// different bytes. Say so rather than looking like a blip.
-			return new McpError(ErrorCode.InvalidParams, `${message}; use a new request_id or resend the original payload`);
+			return new ProtocolError(ProtocolErrorCode.InvalidParams, `${message}; use a new request_id or resend the original payload`);
 		case "invalid-enum":
 		case "invalid-value":
 		case "invalid-request":
 		case "stale-revision":
-			return new McpError(ErrorCode.InvalidParams, message);
+			return new ProtocolError(ProtocolErrorCode.InvalidParams, message);
 		default:
 			return error;
 	}
@@ -148,7 +148,7 @@ function displayText(value: string): string {
 }
 
 function invalid(message: string): never {
-	throw new McpError(ErrorCode.InvalidParams, message);
+	throw new ProtocolError(ProtocolErrorCode.InvalidParams, message);
 }
 
 /** A non-empty string argument, or a refusal naming the field. */
@@ -214,7 +214,7 @@ export function createChangeHandler(deps: {
 			invalid(`action is required; one of ${CHANGE_ACTIONS.join(", ")}`);
 		}
 		if (Object.hasOwn(REFUSED_ACTIONS, action)) {
-			throw new McpError(ErrorCode.InvalidParams, `${action} is not available through this surface: ${REFUSED_ACTIONS[action]}`);
+			throw new ProtocolError(ProtocolErrorCode.InvalidParams, `${action} is not available through this surface: ${REFUSED_ACTIONS[action]}`);
 		}
 		if (!(CHANGE_ACTIONS as readonly string[]).includes(action)) {
 			invalid(`unknown action ${JSON.stringify(action)}; one of ${CHANGE_ACTIONS.join(", ")}`);
@@ -336,8 +336,8 @@ async function updateChange(store: EngineeringStore, args: ChangeArgs, textResul
 	// leaves the approval validating against a change it no longer describes.
 	// The record would then state an outcome nobody approved.
 	if (TERMINAL_CHANGE_STATES.has(record.state)) {
-		throw new McpError(
-			ErrorCode.InvalidRequest,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidRequest,
 			`change ${changeId} is ${record.state} and cannot be edited: an approval records agreement to a specific title and outcome, ` +
 				`so changing them would leave the approval describing bytes nobody approved. Open a new change instead.`,
 		);
@@ -349,18 +349,18 @@ async function updateChange(store: EngineeringStore, args: ChangeArgs, textResul
 	// second writer's work vanished with no error reported to anyone.
 	const revision = args.revision;
 	if (revision === undefined) {
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			`update requires the revision you last read (change ${changeId} is at revision ${record.revision}), ` +
 				`so a concurrent writer's work cannot be overwritten silently`,
 		);
 	}
 	if (typeof revision !== "number" || !Number.isInteger(revision)) {
-		throw new McpError(ErrorCode.InvalidParams, `revision must be an integer, got ${JSON.stringify(revision)}`);
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, `revision must be an integer, got ${JSON.stringify(revision)}`);
 	}
 	if (revision !== record.revision) {
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			`stale revision ${String(revision)}: change ${changeId} is at revision ${record.revision}; re-read it and retry`,
 		);
 	}
@@ -415,8 +415,8 @@ async function planChange(store: EngineeringStore, args: ChangeArgs, textResult:
 		references: record.references,
 	});
 	if (!brief.ok || !brief.markdown) {
-		throw new McpError(
-			ErrorCode.InvalidParams,
+		throw new ProtocolError(
+			ProtocolErrorCode.InvalidParams,
 			`this change cannot be planned yet: ${(brief.errors ?? []).map((e) => e.message).join("; ") || "the brief could not be built"}`,
 		);
 	}
@@ -452,7 +452,7 @@ async function recordProof(store: EngineeringStore, args: ChangeArgs, textResult
 		provenance: { source: "mcp:tool-call", attested_by: "caller" },
 	});
 	if (ingested.ok === false) {
-		throw new McpError(ErrorCode.InvalidParams, ingested.errors.map((e) => e.message).join("; "));
+		throw new ProtocolError(ProtocolErrorCode.InvalidParams, ingested.errors.map((e) => e.message).join("; "));
 	}
 	return textResult(`Recorded proof ${ingested.proof.id} (${ingested.proof.result}, authority ${ingested.authority}).`, {
 		proof_id: ingested.proof.id,

@@ -12,7 +12,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { phaseIdFromSessionName } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/phase-compaction.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 function response(status, body) {
 	return { status, ok: status < 300, json: async () => body, text: async () => JSON.stringify(body) };
@@ -27,12 +27,12 @@ test("a status.yaml the workspace loader cannot use is InvalidRequest, not Inter
 		const statusPath = join(cwd, ".codecarto", "workflow", "status.yaml");
 		await writeFile(statusPath, "pipeline: workflow/no-such-pipeline.yaml\nschema_version: 1\n", "utf8");
 		await assert.rejects(server.handleStatus({ cwd }), (error) => {
-			assert.ok(error instanceof McpError);
-			assert.equal(error.code, ErrorCode.InvalidRequest, "a config problem is the caller's to fix, not a server bug");
+			assert.ok(error instanceof ProtocolError);
+			assert.equal(error.code, ProtocolErrorCode.InvalidRequest, "a config problem is the caller's to fix, not a server bug");
 			return true;
 		});
 		await writeFile(statusPath, "pipeline: workflow/pipeline-lite.yaml\n  bad: indent\n", "utf8");
-		await assert.rejects(server.handleNext({ cwd }), (error) => error instanceof McpError && error.code === ErrorCode.InvalidRequest && /YAML line 2/.test(error.message));
+		await assert.rejects(server.handleNext({ cwd }), (error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidRequest && /YAML line 2/.test(error.message));
 	} finally {
 		await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 	}

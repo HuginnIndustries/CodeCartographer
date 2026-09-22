@@ -18,7 +18,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/broadside.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 const { BROADSIDE_DEFAULT_MAX_COST, BroadsideConfigError, BroadsideStateError, broadsideDirFor, defaultBroadsideConfig, loadBroadsideConfig, loadBroadsideState, persistBroadsideRun, runBroadsideCollect, runBroadsideSubmit, saveBroadsideState } = core;
 
 process.env.OPENROUTER_API_KEY = "sk-fake";
@@ -173,8 +173,8 @@ test("a config.yaml that cannot be parsed refuses submit, collect, and models on
 
 		for (const action of ["submit", "collect", "models"]) {
 			await assert.rejects(server.handleBroadside({ cwd: dir, action, api_key: "sk-fake" }), (error) => {
-				assert.ok(error instanceof McpError);
-				assert.equal(error.code, ErrorCode.InvalidRequest);
+				assert.ok(error instanceof ProtocolError);
+				assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 				assert.match(error.message, /Broad-Side config .*could not be parsed/);
 				return true;
 			}, action);
@@ -215,7 +215,7 @@ test("a corrupt state.json refuses submit and collect, is preserved, and is neve
 		await writeFile(statePath, corrupt, "utf8");
 
 		const refused = (error) => {
-			assert.ok(error instanceof BroadsideStateError || error instanceof McpError, String(error));
+			assert.ok(error instanceof BroadsideStateError || error instanceof ProtocolError, String(error));
 			assert.match(error.message, /Broad-Side state .*state\.json could not be parsed .*A copy is preserved at .*state\.json\.corrupt-[0-9a-f]{8}; the file is not overwritten\. Repair state\.json from the copy/);
 			return true;
 		};

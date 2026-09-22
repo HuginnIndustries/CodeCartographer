@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // End-to-end smoke test for the published codecartographer-pi MCP server.
 // Installs the package from npm into a temp dir, drives the bin via the
-// MCP SDK's stdio client, and runs nine TAP-style assertions covering the
-// happy path and key negative cases.
+// MCP SDK's stdio client, and runs TAP-style assertions covering the happy
+// path and key negative cases — first through the 2025-era `initialize`
+// handshake (what every shipping host sends today), then through the
+// 2026-07-28 `server/discover` negotiation (#185).
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import assert from "node:assert/strict";
 import { execFile as execFileCb } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -224,7 +226,46 @@ async function main() {
 	});
 
 	await client.close();
-	console.log("1..9");
+
+	// The same binary, opened in the 2026-07-28 era: the client probes with
+	// `server/discover` and, on a modern verdict, every request carries the
+	// per-request `_meta` envelope. `mode: 'auto'` is what a negotiating host
+	// does; a modern verdict here proves the server answered the probe.
+	const modernTransport = new StdioClientTransport({ command: binPath, args: [], stderr: "pipe" });
+	modernTransport.stderr?.on("data", (c) => stderrChunks.push(c));
+	const modern = new Client(
+		{ name: "codecarto-smoke-2026", version: "0.0.0" },
+		{ capabilities: {}, versionNegotiation: { mode: "auto" } },
+	);
+
+	await step("2026-07-28: server/discover negotiation reaches the modern era", async () => {
+		await Promise.race([
+			modern.connect(modernTransport),
+			new Promise((_, rej) => setTimeout(() => rej(new Error("connect timeout 10s")), 10_000)),
+		]);
+		assert.equal(modern.getServerVersion()?.name, "codecartographer");
+		assert.deepEqual(Object.keys(modern.getServerCapabilities() ?? {}), ["tools"]);
+	});
+
+	await step("2026-07-28: tools/list carries the same inventory and the caching hints", async () => {
+		const listed = await modern.listTools();
+		assert.deepEqual(listed.tools.map((t) => t.name).sort(), EXPECTED_TOOLS);
+		assert.equal(listed.cacheScope, "public", "the static inventory is shareable");
+		assert.ok(listed.ttlMs >= 60_000, `expected a long ttlMs, got ${listed.ttlMs}`);
+	});
+
+	await step("2026-07-28: tools/call keeps both content halves and standard error codes", async () => {
+		const result = await modern.callTool({ name: "codecarto_status", arguments: { cwd: target } });
+		assert.equal(result.structuredContent?.currentPhase, "architecture");
+		assert.ok((result.content?.[0]?.text ?? "").length > 0, "text content present");
+		await expectReject(modern.callTool({ name: "codecarto_status", arguments: {} }), {
+			code: -32602,
+			message: /cwd is required/,
+		});
+	});
+
+	await modern.close();
+	console.log("1..12");
 }
 
 try {

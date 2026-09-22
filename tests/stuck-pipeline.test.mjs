@@ -19,7 +19,7 @@ const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
 const { buildAutoSummary } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/auto-runner.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 const REPORT = "# A\n\n## Validation\n\n| # | c | r | e |\n|---|---|---|---|\n| 1 | c | PASS | e |\n\n**Overall:** PASS\n";
 const STUCK = /^Pipeline is stuck: b depends on nope, which is not in this pipeline\. No phase can run until the pipeline file's depends_on is fixed \(or switch pipelines with codecarto_switch_pipeline \/ \/codecarto-switch-pipeline\)\.$/m;
@@ -124,13 +124,13 @@ test("codecarto_status reports stuck (probe P6), and next / skill / amend refuse
 		assert.deepEqual(status.structuredContent.stuck, [{ phaseId: "b", missing: [{ dependencyId: "nope", reason: "not-in-pipeline" }] }]);
 
 		const refused = (error) => {
-			assert.ok(error instanceof McpError);
-			assert.equal(error.code, ErrorCode.InvalidRequest);
+			assert.ok(error instanceof ProtocolError);
+			assert.equal(error.code, ProtocolErrorCode.InvalidRequest);
 			assert.match(error.message, /Pipeline is stuck: b depends on nope, which is not in this pipeline/);
 			return true;
 		};
 		await assert.rejects(server.handleNext({ cwd }), refused);
-		await assert.rejects(server.handleSkill({ cwd, name: "spec-delta-application" }), (error) => refused(error) && /^MCP error -32600: Cannot run skill: the pipeline is not complete\./.test(error.message));
+		await assert.rejects(server.handleSkill({ cwd, name: "spec-delta-application" }), (error) => refused(error) && /^Cannot run skill: the pipeline is not complete\./.test(error.message));
 		await mkdir(join(codecarto, "scratch", "amendments"), { recursive: true });
 		await writeFile(join(codecarto, "scratch", "amendments", "x.yaml"), "schema_version: 1\nopen_question_closures:\n  - q1\n", "utf8");
 		await assert.rejects(server.handleAmend({ cwd, name: "x" }), (error) => refused(error) && /Cannot amend: the pipeline is not complete\./.test(error.message));

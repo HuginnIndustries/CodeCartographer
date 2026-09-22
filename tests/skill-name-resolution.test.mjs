@@ -18,7 +18,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const core = await import(pathToFileURL(`${REPO_ROOT}/core/index.ts`).href);
 const server = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { default: codeCartographerExtension } = await import(pathToFileURL(`${REPO_ROOT}/extensions/codecarto/index.ts`).href);
-const { McpError, ErrorCode } = await import("@modelcontextprotocol/sdk/types.js");
+const { ProtocolError, ProtocolErrorCode } = await import("@modelcontextprotocol/server");
 
 const PASSING_REPORT = [
 	"# Map",
@@ -151,9 +151,9 @@ test("codecarto_skill refuses a traversal name on a completed pipeline (probe P5
 		await assert.rejects(
 			server.handleSkill({ cwd, name: TRAVERSAL }),
 			(error) => {
-				assert.ok(error instanceof McpError, "expected McpError");
-				assert.equal(error.code, ErrorCode.InvalidParams);
-				assert.match(error.message, /^MCP error -32602: Unknown skill: \.\.\/findings\/architecture\./);
+				assert.ok(error instanceof ProtocolError, "expected ProtocolError");
+				assert.equal(error.code, ProtocolErrorCode.InvalidParams);
+				assert.match(error.message, /^Unknown skill: \.\.\/findings\/architecture\./);
 				assert.match(error.message, /Available: /, "the refusal lists what is installed");
 				return true;
 			},
