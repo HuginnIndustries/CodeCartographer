@@ -2,7 +2,7 @@
 // framework logic shared by every wrapper.
 
 import { randomBytes } from "node:crypto";
-import { open, readdir, readFile, rm, stat, unlink, utimes } from "node:fs/promises";
+import { open, readdir, readFile, rename, rm, stat, unlink, utimes } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type {
 	CarryForwardEntry,
@@ -457,6 +457,8 @@ export interface AcquireLockOptions {
 	 * hung; default {@link STALE_LOCK_MS}. A dead holder is removed at once.
 	 */
 	staleMs?: number;
+	/** @internal File operations seam for deterministic lock race tests. */
+	fsOps?: { stat: typeof stat; rename: typeof rename; unlink: typeof unlink };
 }
 
 /**
@@ -490,6 +492,7 @@ export interface AcquireLockOptions {
 export async function acquireLock(lockPath: string, options: AcquireLockOptions = {}): Promise<LockHandle> {
 	const timeoutMs = options.timeoutMs ?? LOCK_TIMEOUT_MS;
 	const staleMs = options.staleMs ?? STALE_LOCK_MS;
+	const fsOps = options.fsOps ?? { stat, rename, unlink };
 	const startedAt = Date.now();
 	const dir = dirname(lockPath);
 	const base = basename(lockPath);
@@ -536,11 +539,14 @@ export async function acquireLock(lockPath: string, options: AcquireLockOptions 
 
 		// A pre-#355 lock file: honour it while fresh, remove it when stale.
 		if (names.includes(base)) {
-			const legacyStat = await stat(lockPath).catch(() => null);
+			const legacyStat = await fsOps.stat(lockPath).catch((error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") blocked = true;
+				return null;
+			});
 			if (legacyStat && Date.now() - legacyStat.mtimeMs <= staleMs) blocked = true;
 			else if (legacyStat) {
 				const holder = await describeLockHolder(lockPath);
-				if (await removeIfPresent(lockPath)) brokeStale = holder;
+				if (await removeIfPresent(lockPath, lockPath, fsOps)) brokeStale = holder;
 			}
 		}
 
@@ -549,7 +555,7 @@ export async function acquireLock(lockPath: string, options: AcquireLockOptions 
 		for (const name of names) {
 			if (!name.startsWith(`${base}.c.`) || name === basename(choosingPath)) continue;
 			const path = join(dir, name);
-			if (await ownerIsGone(path, staleMs)) {
+			if (await ownerIsGone(path, staleMs, fsOps)) {
 				await rm(path, { force: true }).catch(() => undefined);
 				continue;
 			}
@@ -562,11 +568,11 @@ export async function acquireLock(lockPath: string, options: AcquireLockOptions 
 			const ahead = names.filter((name) => name.startsWith(`${base}.t.`) && name < ticketName).sort();
 			for (const name of ahead) {
 				const path = join(dir, name);
-				if (await ownerIsGone(path, staleMs)) {
-					// Recorded only by the waiter whose rm actually removed it; the
-					// others saw the same dead ticket and removed nothing.
+				if (await ownerIsGone(path, staleMs, fsOps)) {
+					// Only the waiter that claims the dead ticket records its holder;
+					// other waiters cannot claim the same path.
 					const holder = await describeLockHolder(path);
-					if (await removeIfPresent(path)) brokeStale = holder;
+					if (await removeIfPresent(path, lockPath, fsOps)) brokeStale = holder;
 					continue;
 				}
 				blocked = true;
@@ -593,19 +599,36 @@ export async function acquireLock(lockPath: string, options: AcquireLockOptions 
 }
 
 /**
- * Remove `path`; true when this call removed it, false when it was already
- * gone. `unlink`, not `rm`: `fs.promises.rm` reports success to every one
- * of several concurrent callers, and the point here is to know which one
- * actually took the file away.
+ * Atomically move a stale claim out of the queue. Only the waiter whose
+ * rename succeeds reports the break. The tombstone is outside the ticket
+ * namespace, so even a Windows unlink failure cannot revive the claim.
  */
-async function removeIfPresent(path: string): Promise<boolean> {
+async function removeIfPresent(
+	path: string,
+	lockPath: string,
+	fsOps: NonNullable<AcquireLockOptions["fsOps"]>,
+): Promise<boolean> {
+	const tombstone = `${lockPath}.reaped.${randomBytes(8).toString("hex")}`;
 	try {
-		await unlink(path);
-		return true;
+		await fsOps.rename(path, tombstone);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		// Windows can report a losing rename as EPERM or EBUSY. Confirm
+		// absence; a real permission/sharing error must still surface.
+		if (["EPERM", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+			try {
+				await fsOps.stat(path);
+			} catch (statError) {
+				if ((statError as NodeJS.ErrnoException).code === "ENOENT") return false;
+				throw statError;
+			}
+		}
 		throw error;
 	}
+	// Cleanup is best effort: the original claim is already gone. A leftover
+	// tombstone cannot be mistaken for a ticket or legacy lock.
+	await fsOps.unlink(tombstone).catch(() => undefined);
+	return true;
 }
 
 /** Create `path` exclusively with `content`; the descriptor is closed either way (#131). */
@@ -624,12 +647,12 @@ async function writeExclusive(path: string, content: string): Promise<void> {
  * cannot be signalled (another user's process) counts as alive. A file that
  * vanished while we looked is gone, and so is its owner's claim.
  */
-async function ownerIsGone(path: string, staleMs: number): Promise<boolean> {
+async function ownerIsGone(path: string, staleMs: number, fsOps: NonNullable<AcquireLockOptions["fsOps"]>): Promise<boolean> {
 	let fileStat;
 	try {
-		fileStat = await stat(path);
-	} catch {
-		return true;
+		fileStat = await fsOps.stat(path);
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT";
 	}
 	if (Date.now() - fileStat.mtimeMs > staleMs) return true;
 	const { pid } = await describeLockHolder(path);
