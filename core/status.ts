@@ -536,12 +536,15 @@ export async function acquireLock(lockPath: string, options: AcquireLockOptions 
 		while (true) {
 			const names = await readdir(dir).catch(() => [] as string[]);
 			let blocked = false;
-			// Failed tombstone cleanup must not leave permanent files in a repo.
+			// Failed cleanup must not leave permanent tombstones or claim markers.
 			for (const name of names) {
-				if (!name.startsWith(`${base}.reaped.`)) continue;
+				const claimPrefix = `${base}.claim.`;
+				if (!name.startsWith(`${base}.reaped.`) && !name.startsWith(claimPrefix)) continue;
 				const path = join(dir, name);
 				const fileStat = await fsOps.stat(path).catch(() => null);
-				if (fileStat && Date.now() - fileStat.mtimeMs > staleMs) {
+				const claimSourceGone = name.startsWith(claimPrefix)
+					&& !(await pathExists(join(dir, name.slice(claimPrefix.length))));
+				if (claimSourceGone || (fileStat && Date.now() - fileStat.mtimeMs > staleMs)) {
 					await rm(path, { force: true }).catch(() => undefined);
 				}
 			}
@@ -632,9 +635,19 @@ async function removeIfPresent(
 	fsOps: NonNullable<AcquireLockOptions["fsOps"]>,
 ): Promise<"claimed" | "gone" | "busy"> {
 	const tombstone = `${lockPath}.reaped.${randomBytes(8).toString("hex")}`;
+	// Windows can let concurrent renames of the same source both report
+	// success. This stable, exclusive marker decides who may claim that name.
+	const claimPath = `${lockPath}.claim.${basename(path)}`;
+	try {
+		await writeExclusive(claimPath, `${process.pid}\n`);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return "busy";
+		throw error;
+	}
 	try {
 		await fsOps.rename(path, tombstone);
 	} catch (error) {
+		await rm(claimPath, { force: true }).catch(() => undefined);
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "gone";
 		// Windows can report contention as a permission or sharing error.
 		// An existing source blocks this round; a missing one lost the race.
@@ -649,9 +662,16 @@ async function removeIfPresent(
 		}
 		throw error;
 	}
-	// Cleanup is best effort: the original claim is already gone. A leftover
-	// tombstone cannot be mistaken for a ticket or legacy lock.
+	// Keep the claim marker until stale cleanup: Windows can briefly expose
+	// the source path after rename reports success. Neither file is a ticket.
 	await fsOps.unlink(tombstone).catch(() => undefined);
+	try {
+		await fsOps.stat(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			await rm(claimPath, { force: true }).catch(() => undefined);
+		}
+	}
 	return "claimed";
 }
 

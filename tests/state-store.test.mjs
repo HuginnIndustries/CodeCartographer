@@ -328,6 +328,40 @@ test("Windows claim contention retries while the stale ticket still exists", asy
 	}
 });
 
+test("only one waiter reports a break when Windows exposes the source after rename succeeds", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-claim-visible-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		const dead = await deadTicket(dir);
+		let renameCalls = 0;
+		const fsOps = {
+			stat,
+			rename: async (from, to) => {
+				if (from === dead) {
+					renameCalls += 1;
+					return; // Model Windows reporting success while the source is still visible.
+				}
+				await rename(from, to);
+			},
+			unlink,
+		};
+		const first = await acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
+		assert.equal(first.brokeStale?.pid, 4194303);
+		await first.release();
+		const secondPromise = acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
+		await wait(100);
+		assert.equal(await settled(secondPromise), false, "the claim marker blocks a second break");
+		await unlink(dead);
+		const second = await secondPromise;
+		assert.equal(second.brokeStale, undefined);
+		assert.equal(renameCalls, 1);
+		await second.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
+
 test("Windows claim errors after another waiter removed the ticket do not report a break", async () => {
 	for (const code of ["EPERM", "EBUSY", "EACCES"]) {
 		const { dir, cleanup } = await tempDir("cc-lock-claim-gone-");
