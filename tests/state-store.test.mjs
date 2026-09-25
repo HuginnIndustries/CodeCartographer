@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -285,9 +285,102 @@ test("Windows unlink errors after a stale-ticket claim cannot give two waiters t
 			assert.equal(claimed, 1, "one rename claimed the dead ticket");
 			assert.equal(handles.filter((handle) => handle.brokeStale).length, 1);
 			assert.equal(errors, 1, `the winning claim encountered ${code} on cleanup`);
+			const [tombstone] = (await readdir(dir)).filter((name) => name.includes(".reaped."));
+			assert.ok(tombstone, "failed cleanup left a tombstone");
+			const old = new Date(Date.now() - 1_000);
+			await utimes(join(dir, tombstone), old, old);
+			const next = await acquireLock(lockPath, { fsOps, staleMs: 100 });
+			await next.release();
+			assert.deepEqual(await readdir(dir), [], "the next waiter swept the old tombstone");
 		} finally {
 			await cleanup();
 		}
+	}
+});
+
+test("Windows claim contention retries while the stale ticket still exists", async () => {
+	for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+		const { dir, cleanup } = await tempDir("cc-lock-claim-busy-");
+		try {
+			const lockPath = join(dir, "status.yaml.lock");
+			const dead = await deadTicket(dir);
+			let attempts = 0;
+			const fsOps = {
+				stat,
+				rename: async (from, to) => {
+					if (from === dead && attempts++ === 0) {
+						const error = new Error("ticket held open by another waiter");
+						error.code = code;
+						throw error;
+					}
+					await rename(from, to);
+				},
+				unlink,
+			};
+			const handle = await acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
+			assert.equal(attempts, 2, `${code} retried the claim`);
+			assert.equal(handle.brokeStale?.pid, 4194303);
+			await handle.release();
+			assert.deepEqual(await readdir(dir), [], "no ticket remains after release");
+		} finally {
+			await cleanup();
+		}
+	}
+});
+
+test("Windows claim errors after another waiter removed the ticket do not report a break", async () => {
+	for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+		const { dir, cleanup } = await tempDir("cc-lock-claim-gone-");
+		try {
+			const lockPath = join(dir, "status.yaml.lock");
+			const dead = await deadTicket(dir);
+			let attempts = 0;
+			const fsOps = {
+				stat,
+				rename: async (from, to) => {
+					if (from === dead) {
+						attempts += 1;
+						await unlink(from);
+						const error = new Error("losing Windows claim");
+						error.code = code;
+						throw error;
+					}
+					await rename(from, to);
+				},
+				unlink,
+			};
+			const handle = await acquireLock(lockPath, { fsOps });
+			assert.equal(attempts, 1);
+			assert.equal(handle.brokeStale, undefined, `${code} was a lost race`);
+			await handle.release();
+			assert.deepEqual(await readdir(dir), []);
+		} finally {
+			await cleanup();
+		}
+	}
+});
+
+test("a claim error removes this waiter's ticket before rejecting", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-claim-error-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		const dead = await deadTicket(dir);
+		const fsOps = {
+			stat,
+			rename: async () => {
+				const error = new Error("claim failed");
+				error.code = "EIO";
+				throw error;
+			},
+			unlink,
+		};
+		await assert.rejects(acquireLock(lockPath, { fsOps }), /claim failed/);
+		assert.deepEqual(await readdir(dir), [basename(dead)], "the failed waiter's ticket was removed");
+		const handle = await acquireLock(lockPath);
+		await handle.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
 	}
 });
 

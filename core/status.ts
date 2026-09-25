@@ -527,74 +527,97 @@ export async function acquireLock(lockPath: string, options: AcquireLockOptions 
 	}, Math.max(50, Math.floor(staleMs / 4)));
 	heartbeat.unref?.();
 
-	const giveUp = async (): Promise<never> => {
-		clearInterval(heartbeat);
-		await rm(ticketPath, { force: true }).catch(() => undefined);
+	const giveUp = (): never => {
 		throw new Error(`Timed out waiting for lock: ${lockPath}`);
 	};
 
-	while (true) {
-		const names = await readdir(dir).catch(() => [] as string[]);
-		let blocked = false;
-
-		// A pre-#355 lock file: honour it while fresh, remove it when stale.
-		if (names.includes(base)) {
-			const legacyStat = await fsOps.stat(lockPath).catch((error: NodeJS.ErrnoException) => {
-				if (error.code !== "ENOENT") blocked = true;
-				return null;
-			});
-			if (legacyStat && Date.now() - legacyStat.mtimeMs <= staleMs) blocked = true;
-			else if (legacyStat) {
-				const holder = await describeLockHolder(lockPath);
-				if (await removeIfPresent(lockPath, lockPath, fsOps)) brokeStale = holder;
+	let acquired = false;
+	try {
+		while (true) {
+			const names = await readdir(dir).catch(() => [] as string[]);
+			let blocked = false;
+			// Failed tombstone cleanup must not leave permanent files in a repo.
+			for (const name of names) {
+				if (!name.startsWith(`${base}.reaped.`)) continue;
+				const path = join(dir, name);
+				const fileStat = await fsOps.stat(path).catch(() => null);
+				if (fileStat && Date.now() - fileStat.mtimeMs > staleMs) {
+					await rm(path, { force: true }).catch(() => undefined);
+				}
 			}
-		}
 
-		// Someone is between taking a number and writing their ticket: their
-		// number may be earlier than ours. Wait, unless they died in the door.
-		for (const name of names) {
-			if (!name.startsWith(`${base}.c.`) || name === basename(choosingPath)) continue;
-			const path = join(dir, name);
-			if (await ownerIsGone(path, staleMs, fsOps)) {
-				await rm(path, { force: true }).catch(() => undefined);
-				continue;
+			// A pre-#355 lock file: honour it while fresh, remove it when stale.
+			if (names.includes(base)) {
+				const legacyStat = await fsOps.stat(lockPath).catch((error: NodeJS.ErrnoException) => {
+					if (error.code !== "ENOENT") blocked = true;
+					return null;
+				});
+				if (legacyStat && Date.now() - legacyStat.mtimeMs <= staleMs) blocked = true;
+				else if (legacyStat) {
+					const holder = await describeLockHolder(lockPath);
+					const claim = await removeIfPresent(lockPath, lockPath, fsOps);
+					if (claim === "claimed") brokeStale = holder;
+					if (claim === "busy") blocked = true;
+				}
 			}
-			blocked = true;
-		}
 
-		// Every ticket ahead of ours whose owner is alive blocks us; a dead or
-		// hung owner's ticket is removed by its own name.
-		if (!blocked) {
-			const ahead = names.filter((name) => name.startsWith(`${base}.t.`) && name < ticketName).sort();
-			for (const name of ahead) {
+			// Someone is between taking a number and writing their ticket: their
+			// number may be earlier than ours. Wait, unless they died in the door.
+			for (const name of names) {
+				if (!name.startsWith(`${base}.c.`) || name === basename(choosingPath)) continue;
 				const path = join(dir, name);
 				if (await ownerIsGone(path, staleMs, fsOps)) {
-					// Only the waiter that claims the dead ticket records its holder;
-					// other waiters cannot claim the same path.
-					const holder = await describeLockHolder(path);
-					if (await removeIfPresent(path, lockPath, fsOps)) brokeStale = holder;
+					await rm(path, { force: true }).catch(() => undefined);
 					continue;
 				}
 				blocked = true;
-				break;
 			}
-		}
 
-		if (!blocked) {
-			// Our own ticket must still be there: a waiter that judged us hung
-			// (the machine slept past staleMs) has already let someone in.
-			if (!(await pathExists(ticketPath))) return giveUp();
-			return {
-				release: async () => {
-					clearInterval(heartbeat);
-					await rm(ticketPath, { force: true }).catch(() => undefined);
-				},
-				...(brokeStale && { brokeStale }),
-			};
-		}
+			// Every ticket ahead of ours whose owner is alive blocks us; a dead or
+			// hung owner's ticket is removed by its own name.
+			if (!blocked) {
+				const ahead = names.filter((name) => name.startsWith(`${base}.t.`) && name < ticketName).sort();
+				for (const name of ahead) {
+					const path = join(dir, name);
+					if (await ownerIsGone(path, staleMs, fsOps)) {
+						// Only the waiter that claims the dead ticket records its holder;
+						// other waiters cannot claim the same path.
+						const holder = await describeLockHolder(path);
+						const claim = await removeIfPresent(path, lockPath, fsOps);
+						if (claim === "claimed") brokeStale = holder;
+						if (claim === "busy") {
+							blocked = true;
+							break;
+						}
+						continue;
+					}
+					blocked = true;
+					break;
+				}
+			}
 
-		if (Date.now() - startedAt > timeoutMs) return giveUp();
-		await sleep(LOCK_RETRY_MS);
+			if (!blocked) {
+				// Our own ticket must still be there: a waiter that judged us hung
+				// (the machine slept past staleMs) has already let someone in.
+				if (!(await pathExists(ticketPath))) giveUp();
+				acquired = true;
+				return {
+					release: async () => {
+						clearInterval(heartbeat);
+						await rm(ticketPath, { force: true }).catch(() => undefined);
+					},
+					...(brokeStale && { brokeStale }),
+				};
+			}
+
+			if (Date.now() - startedAt > timeoutMs) giveUp();
+			await sleep(LOCK_RETRY_MS);
+		}
+	} finally {
+		if (!acquired) {
+			clearInterval(heartbeat);
+			await rm(ticketPath, { force: true }).catch(() => undefined);
+		}
 	}
 }
 
@@ -607,28 +630,29 @@ async function removeIfPresent(
 	path: string,
 	lockPath: string,
 	fsOps: NonNullable<AcquireLockOptions["fsOps"]>,
-): Promise<boolean> {
+): Promise<"claimed" | "gone" | "busy"> {
 	const tombstone = `${lockPath}.reaped.${randomBytes(8).toString("hex")}`;
 	try {
 		await fsOps.rename(path, tombstone);
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-		// Windows can report a losing rename as EPERM or EBUSY. Confirm
-		// absence; a real permission/sharing error must still surface.
-		if (["EPERM", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "gone";
+		// Windows can report contention as a permission or sharing error.
+		// An existing source blocks this round; a missing one lost the race.
+		if (["EPERM", "EBUSY", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) {
 			try {
 				await fsOps.stat(path);
 			} catch (statError) {
-				if ((statError as NodeJS.ErrnoException).code === "ENOENT") return false;
+				if ((statError as NodeJS.ErrnoException).code === "ENOENT") return "gone";
 				throw statError;
 			}
+			return "busy";
 		}
 		throw error;
 	}
 	// Cleanup is best effort: the original claim is already gone. A leftover
 	// tombstone cannot be mistaken for a ticket or legacy lock.
 	await fsOps.unlink(tombstone).catch(() => undefined);
-	return true;
+	return "claimed";
 }
 
 /** Create `path` exclusively with `content`; the descriptor is closed either way (#131). */
