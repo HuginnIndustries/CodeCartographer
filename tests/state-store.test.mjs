@@ -258,14 +258,14 @@ test("Windows unlink errors after a stale-ticket claim cannot give two waiters t
 		const { dir, cleanup } = await tempDir("cc-lock-windows-");
 		try {
 			const lockPath = join(dir, "status.yaml.lock");
-			await deadTicket(dir);
-			let claimed = 0;
+			const dead = await deadTicket(dir);
+			const claimedPaths = [];
 			let errors = 0;
 			const fsOps = {
 				stat,
 				rename: async (from, to) => {
 					await rename(from, to);
-					if (from.includes(".t.")) claimed += 1;
+					if (from.includes(".t.")) claimedPaths.push(from);
 				},
 				unlink: async (path) => {
 					if (path.includes(".reaped.")) {
@@ -282,7 +282,7 @@ test("Windows unlink errors after a stale-ticket claim cannot give two waiters t
 				await handle.release();
 				return handle;
 			}));
-			assert.equal(claimed, 1, "one rename claimed the dead ticket");
+			assert.deepEqual(claimedPaths, [dead], "only the planted dead ticket was claimed");
 			assert.equal(handles.filter((handle) => handle.brokeStale).length, 1);
 			assert.equal(errors, 1, `the winning claim encountered ${code} on cleanup`);
 			const [tombstone] = (await readdir(dir)).filter((name) => name.includes(".reaped."));
