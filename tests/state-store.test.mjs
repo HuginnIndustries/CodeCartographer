@@ -6,9 +6,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -248,6 +248,195 @@ test("many waiters, one dead ticket ahead of them: one holder at a time, every w
 		assert.equal(served, 8);
 		assert.equal(handles.filter((h) => h.brokeStale).length, 1, "exactly one waiter removed the dead ticket");
 		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("Windows unlink errors after a stale-ticket claim cannot give two waiters the break", async () => {
+	for (const code of ["EPERM", "EBUSY"]) {
+		const { dir, cleanup } = await tempDir("cc-lock-windows-");
+		try {
+			const lockPath = join(dir, "status.yaml.lock");
+			const dead = await deadTicket(dir);
+			const claimedPaths = [];
+			let errors = 0;
+			const fsOps = {
+				stat,
+				rename: async (from, to) => {
+					await rename(from, to);
+					if (from.includes(".t.")) claimedPaths.push(from);
+				},
+				unlink: async (path) => {
+					if (path.includes(".reaped.")) {
+						const error = new Error("Windows unlink race");
+						error.code = code;
+						errors += 1;
+						throw error;
+					}
+					await unlink(path);
+				},
+			};
+			const handles = await Promise.all(Array.from({ length: 2 }, async () => {
+				const handle = await acquireLock(lockPath, { fsOps });
+				await handle.release();
+				return handle;
+			}));
+			assert.deepEqual(claimedPaths, [dead], "only the planted dead ticket was claimed");
+			assert.equal(handles.filter((handle) => handle.brokeStale).length, 1);
+			assert.equal(errors, 1, `the winning claim encountered ${code} on cleanup`);
+			const [tombstone] = (await readdir(dir)).filter((name) => name.includes(".reaped."));
+			assert.ok(tombstone, "failed cleanup left a tombstone");
+			const old = new Date(Date.now() - 1_000);
+			await utimes(join(dir, tombstone), old, old);
+			const next = await acquireLock(lockPath, { fsOps, staleMs: 100 });
+			await next.release();
+			assert.deepEqual(await readdir(dir), [], "the next waiter swept the old tombstone");
+		} finally {
+			await cleanup();
+		}
+	}
+});
+
+test("Windows claim contention retries while the stale ticket still exists", async () => {
+	for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+		const { dir, cleanup } = await tempDir("cc-lock-claim-busy-");
+		try {
+			const lockPath = join(dir, "status.yaml.lock");
+			const dead = await deadTicket(dir);
+			let attempts = 0;
+			const fsOps = {
+				stat,
+				rename: async (from, to) => {
+					if (from === dead && attempts++ === 0) {
+						const error = new Error("ticket held open by another waiter");
+						error.code = code;
+						throw error;
+					}
+					await rename(from, to);
+				},
+				unlink,
+			};
+			const handle = await acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
+			assert.equal(attempts, 2, `${code} retried the claim`);
+			assert.equal(handle.brokeStale?.pid, 4194303);
+			await handle.release();
+			assert.deepEqual(await readdir(dir), [], "no ticket remains after release");
+		} finally {
+			await cleanup();
+		}
+	}
+});
+
+test("only one waiter reports a break when Windows exposes the source after rename succeeds", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-claim-visible-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		const dead = await deadTicket(dir);
+		let renameCalls = 0;
+		const fsOps = {
+			stat,
+			rename: async (from, to) => {
+				if (from === dead) {
+					renameCalls += 1;
+					return; // Model Windows reporting success while the source is still visible.
+				}
+				await rename(from, to);
+			},
+			unlink,
+		};
+		const first = await acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
+		assert.equal(first.brokeStale?.pid, 4194303);
+		await first.release();
+		const secondPromise = acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
+		await wait(100);
+		assert.equal(await settled(secondPromise), false, "the claim marker blocks a second break");
+		await unlink(dead);
+		const second = await secondPromise;
+		assert.equal(second.brokeStale, undefined);
+		assert.equal(renameCalls, 1);
+		await second.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("Windows claim errors after another waiter removed the ticket do not report a break", async () => {
+	for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+		const { dir, cleanup } = await tempDir("cc-lock-claim-gone-");
+		try {
+			const lockPath = join(dir, "status.yaml.lock");
+			const dead = await deadTicket(dir);
+			let attempts = 0;
+			const fsOps = {
+				stat,
+				rename: async (from, to) => {
+					if (from === dead) {
+						attempts += 1;
+						await unlink(from);
+						const error = new Error("losing Windows claim");
+						error.code = code;
+						throw error;
+					}
+					await rename(from, to);
+				},
+				unlink,
+			};
+			const handle = await acquireLock(lockPath, { fsOps });
+			assert.equal(attempts, 1);
+			assert.equal(handle.brokeStale, undefined, `${code} was a lost race`);
+			await handle.release();
+			assert.deepEqual(await readdir(dir), []);
+		} finally {
+			await cleanup();
+		}
+	}
+});
+
+test("a claim error removes this waiter's ticket before rejecting", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-claim-error-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		const dead = await deadTicket(dir);
+		const fsOps = {
+			stat,
+			rename: async () => {
+				const error = new Error("claim failed");
+				error.code = "EIO";
+				throw error;
+			},
+			unlink,
+		};
+		await assert.rejects(acquireLock(lockPath, { fsOps }), /claim failed/);
+		assert.deepEqual(await readdir(dir), [basename(dead)], "the failed waiter's ticket was removed");
+		const handle = await acquireLock(lockPath);
+		await handle.release();
+		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("a non-ENOENT ticket stat error is not evidence that its owner is gone", async () => {
+	const { dir, cleanup } = await tempDir("cc-lock-stat-");
+	try {
+		const lockPath = join(dir, "status.yaml.lock");
+		const dead = await deadTicket(dir);
+		const fsOps = {
+			stat: async (path) => {
+				if (path === dead) {
+					const error = new Error("Windows stat denied");
+					error.code = "EPERM";
+					throw error;
+				}
+				return stat(path);
+			},
+			rename,
+			unlink,
+		};
+		await assert.rejects(acquireLock(lockPath, { fsOps, timeoutMs: 150 }), /Timed out waiting for lock/);
+		assert.equal(existsSync(dead), true, "an unreadable ticket is not reaped");
 	} finally {
 		await cleanup();
 	}
