@@ -10,6 +10,7 @@
 		"outDir": "dist",
 		"rootDir": ".",
 		"declaration": true,
+		"stripInternal": true,
 		"isolatedModules": true,
 		"allowJs": true,
 		"strict": false,
