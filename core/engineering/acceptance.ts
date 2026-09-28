@@ -7,6 +7,11 @@
 // be enforced by a pure core function IS enforced by that function rather than
 // re-implemented here:
 //
+//   - `evaluateAcceptanceGate` (E06) runs FIRST, on a fresh re-read of the
+//     working tree the caller supplies: a candidate the gate refuses, or one
+//     whose bytes have moved since capture, is never presented and no request
+//     is issued (receipt path step 1). Soliciting a decision on refused work
+//     would ask a person to decide something the records already decided.
 //   - `acceptanceChannelSupported` decides whether a decision may be asked for
 //     at all (trusted channel AND a registry entry at the exact live client
 //     version). The registry is empty today, so every host stops at
@@ -32,10 +37,11 @@
 // where an MRTR presenter would plug in later, behind the same `Presenter`
 // seam.
 
-import { mkdir, readdir, readFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFile } from "../utils.ts";
+import { describeGateOutcome, evaluateAcceptanceGate, type GateOutcome } from "./gates.ts";
 import { engineeringPaths, newNonce, newRecordId } from "./ids.ts";
 import type { EngineeringStore } from "./store.ts";
 import { StoreError } from "./store.ts";
@@ -56,6 +62,7 @@ import {
 	type ProofRecord,
 	type ReviewRecord,
 	type SliceRecord,
+	type SnapshotInput,
 	type SnapshotRecord,
 	type VerifiedAcceptanceIntegration,
 } from "./types.ts";
@@ -92,9 +99,22 @@ export interface Presenter {
 	elicit(form: AcceptanceForm, options: { timeoutMs: number }): Promise<ElicitationResponse>;
 }
 
+/** The adapter's fresh re-read of the working tree in the candidate's scope, or why it could not be taken. */
+export type CandidateRereadResult =
+	| { ok: true; reread: Pick<SnapshotInput, "coverage" | "manifest" | "repository">; limitations?: string[] }
+	| { ok: false; reason: string };
+
 export interface RequestAcceptanceArgs {
 	change_id: string;
 	attempt_id: string;
+	/**
+	 * Re-read the working tree in the bound candidate's scope, at request
+	 * time. Only the adapter can see the repository; without a re-read the
+	 * freshness the contract requires cannot be checked, so a caller that
+	 * supplies none — or whose read fails — gets `needs-human-acceptance`
+	 * with that reason and no request is issued.
+	 */
+	reread?: (candidate: SnapshotRecord) => Promise<CandidateRereadResult>;
 	/** Derived by the adapter from the transport and host configuration; never from the request. */
 	capabilities: HostCapabilities;
 	/** How this host session is named in the receipt, e.g. `stdio session 1`. */
@@ -109,6 +129,8 @@ export interface RequestAcceptanceArgs {
 }
 
 export type RequestAcceptanceResult =
+	/** The gate refused, or the tree could not be re-read: nobody was asked and NO request was issued. `gate` carries the blockers when the gate ran. */
+	| { outcome: "blocked" | "needs-human-acceptance"; assurance: "verified" | "cooperative"; request_id?: undefined; request?: undefined; reason: string; gate?: GateOutcome }
 	| { outcome: "needs-human-acceptance"; assurance: "verified" | "cooperative"; request_id: string; request: AcceptanceRequest; reason: string }
 	| { outcome: "accepted"; assurance: "verified" | "cooperative"; request_id: string; request: AcceptanceRequest; approval: ApprovalRecord; classification: { class: AcceptanceClass; reasons: string[] } }
 	| { outcome: "rejected" | "declined" | "cancelled" | "timed-out" | "invalid" | "refused"; assurance: "verified" | "cooperative"; request_id: string; request: AcceptanceRequest; reason: string; elicitation: ElicitationOutcome };
@@ -232,8 +254,33 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 	for (const id of await listIds(store, change.id, attempt.id, "proofs")) proofs.push(await readRecord<ProofRecord>(store, "proof", id, context));
 	const reviews: ReviewRecord[] = [];
 	for (const id of await listIds(store, change.id, attempt.id, "reviews")) reviews.push(await readRecord<ReviewRecord>(store, "review", id, context));
-	const otherApprovals: ApprovalRecord[] = [];
-	for (const id of await listIds(store, change.id, attempt.id, "approvals")) otherApprovals.push(await readRecord<ApprovalRecord>(store, "approval", id, context));
+
+	// Receipt path step 1: re-read the tree, then run the gate on it. Without
+	// a re-read the contract's freshness check cannot run, and a gate that
+	// cannot see the tree must not be allowed to say may-accept.
+	const rereadResult: CandidateRereadResult = args.reread ? await args.reread(candidate) : { ok: false, reason: "the working tree cannot be re-read on this surface; the candidate's freshness cannot be checked, so nobody is asked" };
+	// The gate runs whether or not the re-read succeeded — the work is
+	// judged first, so a failed read can never hide an unproved obligation —
+	// but only a gate that SAW the tree can pass.
+	const gate = await evaluateAcceptanceGate(store, {
+		change_id: change.id,
+		attempt_id: attempt.id,
+		host: { can_obtain_human_decision: true, storage: { boundary: capabilities.storage_boundary } },
+		...(rereadResult.ok ? { candidate_reread: rereadResult.reread } : {}),
+		policy: assurance,
+	});
+	if (gate.state !== "may-accept") {
+		return {
+			outcome: gate.state === "refused" ? "blocked" : "needs-human-acceptance",
+			assurance,
+			reason: `the acceptance gate did not pass (${gate.blockers.map((b) => b.code).join(", ") || gate.state}); no request was issued and nobody was asked\n\n${describeGateOutcome(gate)}`,
+			gate,
+		};
+	}
+	if (rereadResult.ok === false) {
+		return { outcome: "needs-human-acceptance", assurance, reason: rereadResult.reason, gate };
+	}
+	const rereadLimitations = rereadResult.limitations ?? [];
 
 	// Channel decision first, because it bounds the TTL: a request that will be
 	// presented must expire before the client gives up, one that will only be
@@ -248,6 +295,28 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 		support = { supported: false, reason: `the registered integration's client_request_timeout_ms (${String(clientTimeout)}) leaves no usable window for a request; the client cannot be asked` };
 	}
 	const ttl = support.supported ? Math.min(ELICITATION_TTL_MS, (clientTimeout as number) - TTL_MARGIN_MS) : ACCEPTANCE_REQUEST_MAX_TTL_MS;
+
+	// One request in flight per attempt. The marker is held across the
+	// elicitation wait (up to the TTL), which is exactly why the store's
+	// change lock is NOT used here: that lock serializes every write to the
+	// change, and holding it for minutes while a person reads a form would
+	// block unrelated proof and review writes. A marker left by a crashed
+	// server expires with the request it guarded (its `expires_at`).
+	const marker = await acquireInFlightMarker(store, change.id, attempt.id, new Date(issued.getTime() + ttl), now);
+	if (marker === null) {
+		throw new StoreError("invalid-state", `another acceptance request for attempt ${attempt.id} is in flight; a second request cannot be issued until it resolves`);
+	}
+	try {
+	// The approvals are read INSIDE the marker so a concurrent winner's mint
+	// is visible here. An accepted approval already bound to this candidate's
+	// digest decides the question; asking again would mint a duplicate.
+	const otherApprovals: ApprovalRecord[] = [];
+	for (const id of await listIds(store, change.id, attempt.id, "approvals")) otherApprovals.push(await readRecord<ApprovalRecord>(store, "approval", id, context));
+	const alreadyAccepted = otherApprovals.find((a) => a.decision === "accepted" && a.candidate_digest === candidate.digest && a.candidate_snapshot_id === candidate.id);
+	if (alreadyAccepted) {
+		throw new StoreError("invalid-state", `already-accepted: approval ${alreadyAccepted.id} already binds an accepted decision to candidate ${candidate.id} (${candidate.digest}); soliciting a second approval asks a human to decide something already decided`);
+	}
+
 	const request = buildAcceptanceRequest({
 		id: newRecordId("acceptance-request"),
 		nonce: newNonce(),
@@ -261,7 +330,7 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 		reviews,
 		assurance,
 		storage_boundary: capabilities.storage_boundary,
-		limitations: [],
+		limitations: [...rereadLimitations],
 	});
 	await persistRequest(store, request);
 	const base = { assurance, request_id: request.id, request };
@@ -369,4 +438,56 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 		reviews,
 	});
 	return { outcome: "accepted", ...base, approval, classification };
+	} finally {
+		await marker.release();
+	}
+}
+
+/** The in-flight marker's path: beside the requests it guards, never a record the store lists. */
+function inFlightMarkerPath(store: EngineeringStore, changeId: string, attemptId: string): string {
+	return join(store.root, "changes", changeId, "attempts", attemptId, "requests", ".in-flight");
+}
+
+/**
+ * Create the marker with O_EXCL. On EEXIST, a marker whose recorded
+ * `expires_at` has passed belongs to a request that can no longer be
+ * answered (a crashed server, a client that never replied); it is removed
+ * and creation is retried ONCE. A live marker means refusal.
+ */
+async function acquireInFlightMarker(store: EngineeringStore, changeId: string, attemptId: string, expiresAt: Date, now: () => Date): Promise<{ release(): Promise<void> } | null> {
+	const path = inFlightMarkerPath(store, changeId, attemptId);
+	await mkdir(dirname(path), { recursive: true });
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			const handle = await open(path, "wx");
+			try {
+				await handle.writeFile(`${JSON.stringify({ expires_at: expiresAt.toISOString() })}\n`);
+			} finally {
+				await handle.close();
+			}
+			return { release: async () => rm(path, { force: true }) };
+		} catch (error) {
+			if ((error as { code?: string }).code !== "EEXIST") throw error;
+			let stale = false;
+			try {
+				const parsed = JSON.parse(await readFile(path, "utf8")) as { expires_at?: unknown };
+				const expires = typeof parsed.expires_at === "string" ? Date.parse(parsed.expires_at) : Number.NaN;
+				if (Number.isFinite(expires)) {
+					stale = expires < now().getTime();
+				} else {
+					// A marker with no readable `expires_at` (a crash between
+					// create and write) is cleared only once it is older than
+					// the contract's maximum request TTL: no request it could
+					// have guarded can still be answered by then.
+					const { mtimeMs } = await stat(path);
+					stale = mtimeMs + ACCEPTANCE_REQUEST_MAX_TTL_MS < now().getTime();
+				}
+			} catch {
+				stale = false;
+			}
+			if (!stale || attempt === 1) return null;
+			await rm(path, { force: true });
+		}
+	}
+	return null;
 }

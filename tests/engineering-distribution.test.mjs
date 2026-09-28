@@ -325,3 +325,34 @@ test("a developer's real engineering record in the checkout does not travel into
 		}, sourceRoot);
 	});
 });
+
+test("the published declarations compile for a consumer with skipLibCheck off: no @internal member is referenced by a public signature", async () => {
+	// `stripInternal` removes an `@internal` interface from the .d.ts but
+	// leaves any PUBLIC signature that names it dangling (TS2304 in the
+	// consumer). Consumers with `skipLibCheck: false` see that as a broken
+	// package. The repo's own tsc, not npx, so the check runs offline.
+	await withTempDir(async (dir) => {
+		const tsc = join(REPO_ROOT, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc");
+		const consumer = join(dir, "use.ts");
+		const dist = pathToFileURL(join(REPO_ROOT, "dist")).pathname;
+		await writeFile(consumer, [
+			`import { buildServer } from "${dist}/mcp-server/server.js";`,
+			`import { openStore, requestAcceptance } from "${dist}/core/index.js";`,
+			`const server = buildServer();`,
+			`void server; void openStore; void requestAcceptance;`,
+			``,
+		].join("\n"));
+		await writeFile(join(dir, "tsconfig.json"), JSON.stringify({
+			compilerOptions: { noEmit: true, skipLibCheck: false, module: "NodeNext", moduleResolution: "NodeNext", target: "ES2022", strict: true, types: ["node"], typeRoots: [join(REPO_ROOT, "node_modules", "@types")] },
+			files: [consumer],
+		}));
+		const run = await execFileAsync(tsc, ["-p", join(dir, "tsconfig.json")], { cwd: REPO_ROOT, shell: process.platform === "win32" }).then(
+			({ stdout, stderr }) => ({ code: 0, out: `${stdout}${stderr}` }),
+			(error) => ({ code: error.code ?? 1, out: `${error.stdout ?? ""}${error.stderr ?? ""}` }),
+		);
+		// Errors inside the SDK's own declarations are not this package's to
+		// fix; only diagnostics that name a file under dist/ are ours.
+		const ours = run.out.split("\n").filter((line) => /dist\/(core|mcp-server)\/.*error TS/.test(line) || /use\.ts.*error TS/.test(line));
+		assert.deepEqual(ours, [], `the published declarations do not compile for a consumer:\n${run.out}`);
+	});
+});

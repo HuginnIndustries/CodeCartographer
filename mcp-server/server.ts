@@ -2025,7 +2025,10 @@ export interface BuildServerOptions {
 	acceptanceRegistry?: ReadonlyArray<VerifiedAcceptanceIntegration>;
 }
 
-export function buildServer(options: BuildServerOptions = {}) {
+export function buildServer(): Server;
+/** @internal */
+export function buildServer(options: BuildServerOptions): Server;
+export function buildServer(options: BuildServerOptions = {}): Server {
 	const server = new Server(
 		{ name: "codecartographer", version: PACKAGE_VERSION },
 		{

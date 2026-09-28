@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -23,7 +23,8 @@ const LAUNCHER = join(REPO_ROOT, "tests/helpers/acceptance-server.mjs");
 const FIXTURES = join(REPO_ROOT, "tests/fixtures/engineering/v1/valid");
 const readFixture = async (name) => JSON.parse(await readFile(join(FIXTURES, name), "utf8"));
 const engineering = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/index.ts`).href);
-const { openStore, evaluateApprovalReceipt, classifyAcceptance, VERIFIED_ACCEPTANCE_INTEGRATIONS } = engineering;
+const { openStore, evaluateApprovalReceipt, classifyAcceptance, VERIFIED_ACCEPTANCE_INTEGRATIONS, computeSnapshotDigest } = engineering;
+const { readWorkingTree } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/working-tree.ts`).href);
 
 const CHANGE = await readFixture("change.json");
 const SLICE = await readFixture("slice.json");
@@ -39,18 +40,45 @@ const observedProof = (proof) => ({ ...proof, provenance: { ...proof.provenance,
 /** The registry entry the SUPPORTED cases run under (test-only; the shipped registry is empty). */
 const REGISTERED = { host: "mcp-server", client: "claude-code", client_version: "2.1.277", channel: "mcp-elicitation", client_request_timeout_ms: 150_000, evidence: "test-only: scripted client, not a live check" };
 
-/** A workspace whose attempt is ready for acceptance, seeded through the real store. */
-async function withWorkspace(fn) {
+/**
+ * The candidate's tree, materialized on disk. The paths mirror the fixture
+ * snapshot's manifest; the bytes are synthetic. The candidate record the
+ * store is seeded with is CAPTURED from this tree by the same reader the
+ * adapter uses at acceptance time, so the re-read compares like with like
+ * and an edit after capture is a real digest mismatch.
+ */
+async function materializeTree(cwd) {
+	await mkdir(join(cwd, "src", "widgets"), { recursive: true });
+	await mkdir(join(cwd, "tests"), { recursive: true });
+	await mkdir(join(cwd, "tools"), { recursive: true });
+	await mkdir(join(cwd, "scripts"), { recursive: true });
+	await mkdir(join(cwd, ".git"), { recursive: true });
+	await writeFile(join(cwd, "src", "widgets", "count.ts"), "export function count(items) {\n\treturn items.length;\n}\n");
+	await writeFile(join(cwd, "tests", "widgets-count.test.mjs"), "// synthetic test file\n");
+	await writeFile(join(cwd, "tools", "run-tests"), "#!/bin/sh\nnode --test\n");
+	await chmod(join(cwd, "tools", "run-tests"), 0o755);
+	await symlink("../src/widgets/count.ts", join(cwd, "scripts", "count"));
+	await writeFile(join(cwd, ".git", "HEAD"), `${SNAPSHOT.repository.head}\n`);
+}
+
+/** A workspace whose attempt is ready for acceptance, seeded through the real store, with the candidate's bytes on disk. */
+async function withWorkspace(fn, { records } = {}) {
 	const cwd = await mkdtemp(join(tmpdir(), "cc-e08-"));
 	try {
 		// Initialize through the compiled server the way a host does, then seed the store.
 		const { handleInit } = await import(pathToFileURL(`${REPO_ROOT}/dist/mcp-server/server.js`).href);
 		await handleInit({ cwd, pipeline: "lite" });
+		await materializeTree(cwd);
+		const read = await readWorkingTree(cwd, SNAPSHOT);
+		assert.equal(read.ok, true, read.ok ? "" : read.reason);
+		const candidate = { ...SNAPSHOT, ...read.reread, digest: computeSnapshotDigest(read.reread) };
+		const review = { ...REVIEW, candidate_digest: candidate.digest };
 		const store = await openStore(join(cwd, ".codecarto"));
-		for (const record of [CHANGE, SLICE, ATTEMPT, SNAPSHOT, observedProof(PROOF), observedProof(PROOF2), REVIEW]) await store.put(record);
+		const seed = records ? records({ candidate, review }) : [CHANGE, SLICE, ATTEMPT, candidate, observedProof(PROOF), observedProof(PROOF2), review];
+		for (const record of seed) await store.put(record);
 		const attemptDir = join(store.root, "changes", CHANGE.id, "attempts", ATTEMPT.id);
 		const list = async (dir) => (await readdir(join(attemptDir, dir)).catch(() => [])).filter((n) => n.endsWith(".json"));
-		return await fn({ cwd, store, attemptDir, list });
+		return await fn({ cwd, store, attemptDir, list, candidate, review });
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}
@@ -136,7 +164,7 @@ async function storedRequest(attemptDir, id) {
 
 test("(a) with the contract's empty registry every host stops at needs-human-acceptance: request stored, nothing minted, nothing presented", async () => {
 	assert.deepEqual(VERIFIED_ACCEPTANCE_INTEGRATIONS, [], "this PR must not register an integration");
-	await withWorkspace(async ({ cwd, attemptDir, list }) => {
+	await withWorkspace(async ({ cwd, attemptDir, list, candidate }) => {
 		await withClient({ answer: () => ({ result: await_never() }) }, async ({ send, elicitations }) => {
 			const reply = await request(send, cwd);
 			assert.ok(!reply.error, JSON.stringify(reply.error));
@@ -149,7 +177,7 @@ test("(a) with the contract's empty registry every host stops at needs-human-acc
 			assert.deepEqual(await list("approvals"), []);
 			assert.equal(elicitations.length, 0, "nothing may be presented on an unverified integration");
 			const stored = await storedRequest(attemptDir, out.request_id);
-			assert.equal(stored.candidate_digest, SNAPSHOT.digest);
+			assert.equal(stored.candidate_digest, candidate.digest);
 			assert.equal(stored.presentation.assurance, "verified");
 			assert.ok(stored.presentation.limitations.some((l) => /not host-enforced|agent tools|storage/i.test(l)), `storage limitation disclosed: ${JSON.stringify(stored.presentation.limitations)}`);
 			assert.match(reply.result.content[0].text, /needs-human-acceptance/);
@@ -193,7 +221,7 @@ test("(c) registered 2.1.277 but the live client says 2.1.283: unsupported, nami
 // ---------------------------------------------------------------- (d) accept/accept
 
 test("(d) registered pair, accept/accept: approval minted, bound to the stored request, evaluates ok, classifies cooperative (D3)", async () => {
-	await withWorkspace(async ({ cwd, store, attemptDir, list }) => {
+	await withWorkspace(async ({ cwd, store, attemptDir, list, candidate, review }) => {
 		const answer = await elicitation("accept-accept");
 		await withClient({ registry: [REGISTERED], answer: () => ({ result: { ...answer, content: { ...answer.content, note: "Looks right; ship it." } } }) }, async ({ send, elicitations }) => {
 			const reply = await request(send, cwd);
@@ -232,9 +260,9 @@ test("(d) registered pair, accept/accept: approval minted, bound to the stored r
 			assert.ok(Date.parse(stored.expires_at) - Date.parse(stored.issued_at) < REGISTERED.client_request_timeout_ms);
 			assert.ok(!out.classification_reasons.some((r) => /request timeout/.test(r)), JSON.stringify(out.classification_reasons));
 
-			const receipt = evaluateApprovalReceipt(approval, { request: stored, consumed_nonces: [], attempt: ATTEMPT, candidate: SNAPSHOT });
+			const receipt = evaluateApprovalReceipt(approval, { request: stored, consumed_nonces: [], attempt: ATTEMPT, candidate });
 			assert.deepEqual(receipt, { ok: true, accepted: true });
-			const reading = classifyAcceptance(approval, { request: stored, consumed_nonces: [], attempt: ATTEMPT, candidate: SNAPSHOT, current_storage: { boundary: "none" }, integrations: [REGISTERED], proofs: [observedProof(PROOF), observedProof(PROOF2)], reviews: [REVIEW] });
+			const reading = classifyAcceptance(approval, { request: stored, consumed_nonces: [], attempt: ATTEMPT, candidate, current_storage: { boundary: "none" }, integrations: [REGISTERED], proofs: [observedProof(PROOF), observedProof(PROOF2)], reviews: [review] });
 			assert.equal(reading.class, "cooperative");
 		});
 	});
@@ -295,13 +323,15 @@ test("(h') a registered client whose timeout is shorter than the adapter's windo
 			assert.ok(ttl > 0 && ttl < quick.client_request_timeout_ms, `TTL ${ttl} must sit strictly inside the ${quick.client_request_timeout_ms} ms client timeout`);
 			assert.ok(!out.classification_reasons.some((r) => /request timeout/.test(r)), JSON.stringify(out.classification_reasons));
 		});
+	});
+	await withWorkspace(async ({ cwd, list }) => {
 		const unusable = { ...REGISTERED, client_request_timeout_ms: 1_000 };
 		await withClient({ registry: [unusable], answer: () => ({ result: await_never() }) }, async ({ send, elicitations }) => {
 			const out = (await request(send, cwd)).result.structuredContent;
 			assert.equal(out.outcome, "needs-human-acceptance", JSON.stringify(out));
 			assert.match(out.reason, /leaves no usable window/);
 			assert.equal(elicitations.length, 0);
-			assert.equal((await list("approvals")).length, 1, "the earlier approval is untouched");
+			assert.deepEqual(await list("approvals"), []);
 		});
 	});
 });
@@ -409,6 +439,148 @@ test("(l) no request field can raise host capability or carry a decision", async
 			}
 			assert.equal(elicitations.length, 0);
 			assert.deepEqual(await list("requests"), [], "a refused request stores nothing");
+		});
+	});
+});
+
+// ---------------------------------------------------------------- (m) the gate runs first (review P1c)
+
+test("(m) an attempt the gate refuses (no review) is never presented: blocked with review-missing, 0 elicitations, no request, no approval", async () => {
+	await withWorkspace(
+		async ({ cwd, list }) => {
+			await withClient({ registry: [REGISTERED], answer: () => ({ result: await_never() }) }, async ({ send, elicitations }) => {
+				const reply = await request(send, cwd);
+				assert.ok(!reply.error, JSON.stringify(reply.error));
+				const out = reply.result.structuredContent;
+				assert.equal(out.outcome, "blocked", JSON.stringify(out));
+				assert.equal(out.gate_state, "refused");
+				assert.ok(out.blockers.some((b) => b.code === "review-missing"), JSON.stringify(out.blockers));
+				assert.match(out.reason, /review-missing/);
+				assert.match(reply.result.content[0].text, /# Acceptance refused/);
+				assert.equal(out.request_id, undefined, "no request is issued for refused work");
+				assert.equal(elicitations.length, 0, "nobody was asked");
+				assert.deepEqual(await list("requests"), []);
+				assert.deepEqual(await list("approvals"), []);
+			});
+		},
+		{ records: ({ candidate }) => [CHANGE, SLICE, ATTEMPT, candidate, observedProof(PROOF), observedProof(PROOF2)] },
+	);
+});
+
+test("(m') a tree edited after the candidate was captured is never presented: blocked naming staleness, 0 elicitations, no request, no approval", async () => {
+	await withWorkspace(async ({ cwd, list, candidate }) => {
+		await writeFile(join(cwd, "src", "widgets", "count.ts"), "export function count(items) {\n\treturn items.length + 1;\n}\n");
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: await_never() }) }, async ({ send, elicitations }) => {
+			const out = (await request(send, cwd)).result.structuredContent;
+			assert.equal(out.outcome, "blocked", JSON.stringify(out));
+			const stale = out.blockers.find((b) => b.code === "proof-stale");
+			assert.ok(stale, JSON.stringify(out.blockers));
+			assert.match(stale.detail, new RegExp(`the working tree no longer matches candidate ${candidate.id}`));
+			assert.match(stale.detail, /digest-mismatch|has digest .*; the tree now has/);
+			assert.equal(elicitations.length, 0);
+			assert.deepEqual(await list("requests"), []);
+			assert.deepEqual(await list("approvals"), []);
+		});
+	});
+});
+
+test("(m'') the MCP gate action re-reads the tree: an edited tree is refused as stale, not disclosed as unread", async () => {
+	await withWorkspace(async ({ cwd }) => {
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: await_never() }) }, async ({ send }) => {
+			const gate = (send) => send("tools/call", { name: "codecarto_change", arguments: { cwd, action: "gate", change_id: CHANGE.id, attempt_id: ATTEMPT.id } });
+			const before = (await gate(send)).result.structuredContent;
+			assert.equal(before.state, "needs-human-acceptance", JSON.stringify(before));
+			assert.ok(!before.limitations.some((l) => /supplied no re-read/.test(l)), `the tree WAS re-read: ${JSON.stringify(before.limitations)}`);
+			await writeFile(join(cwd, "README.md"), "# added after capture\n");
+			const after = (await gate(send)).result.structuredContent;
+			assert.equal(after.state, "refused", JSON.stringify(after));
+			assert.ok(after.blockers.some((b) => b.code === "proof-stale" && /no longer matches/.test(b.detail)), JSON.stringify(after.blockers));
+		});
+	});
+});
+
+// ---------------------------------------------------------------- (n) one approval per candidate (review P4a/P4b)
+
+test("(n) a second request after an accepted approval is refused already-accepted; exactly one approval on disk", async () => {
+	await withWorkspace(async ({ cwd, list }) => {
+		const answer = await elicitation("accept-accept");
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: answer }) }, async ({ send, elicitations }) => {
+			const first = (await request(send, cwd)).result.structuredContent;
+			assert.equal(first.outcome, "accepted", JSON.stringify(first));
+			const second = await request(send, cwd);
+			assert.ok(second.error, "the second request must be refused");
+			assert.match(second.error.message, /already-accepted: approval apr_[0-9a-f]{24} already binds an accepted decision to candidate/);
+			assert.equal(elicitations.length, 1, "the person is asked once");
+			assert.equal((await list("approvals")).length, 1);
+			assert.equal((await list("requests")).length, 1, "no second request is issued");
+		});
+	});
+});
+
+test("(n') two concurrent requests: exactly one approval, the other refused because a request is in flight", async () => {
+	await withWorkspace(async ({ cwd, list }) => {
+		const answer = await elicitation("accept-accept");
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: answer, delay: 300 }) }, async ({ send, elicitations }) => {
+			const [a, b] = await Promise.all([request(send, cwd), request(send, cwd)]);
+			const accepted = [a, b].filter((r) => r.result?.structuredContent?.outcome === "accepted");
+			const refused = [a, b].filter((r) => r.error);
+			assert.equal(accepted.length, 1, JSON.stringify([a, b]));
+			assert.equal(refused.length, 1, JSON.stringify([a, b]));
+			assert.match(refused[0].error.message, /another acceptance request for attempt .* is in flight|already-accepted/);
+			assert.equal(elicitations.length, 1, "the person is asked once");
+			assert.deepEqual(await list("approvals"), [`${accepted[0].result.structuredContent.approval_id}.json`]);
+			assert.equal((await readdir(join(cwd, ".codecarto", "engineering", "changes", CHANGE.id, "attempts", ATTEMPT.id, "requests"))).includes(".in-flight"), false, "the marker is released on every exit path");
+		});
+	});
+});
+
+test("(n'') a stale in-flight marker (crashed server, past its expires_at) does not wedge the attempt; a live one does", async () => {
+	await withWorkspace(async ({ cwd, attemptDir, list }) => {
+		const marker = join(attemptDir, "requests", ".in-flight");
+		await mkdir(dirname(marker), { recursive: true });
+		const answer = await elicitation("accept-accept");
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: answer }) }, async ({ send, elicitations }) => {
+			await writeFile(marker, `${JSON.stringify({ expires_at: new Date(Date.now() + 60_000).toISOString() })}\n`);
+			const live = await request(send, cwd);
+			assert.ok(live.error, "a live marker refuses");
+			assert.match(live.error.message, /in flight/);
+			assert.equal(elicitations.length, 0);
+			await writeFile(marker, `${JSON.stringify({ expires_at: new Date(Date.now() - 1_000).toISOString() })}\n`);
+			const out = (await request(send, cwd)).result.structuredContent;
+			assert.equal(out.outcome, "accepted", JSON.stringify(out));
+			assert.equal(elicitations.length, 1);
+			assert.equal((await list("approvals")).length, 1);
+		});
+	});
+});
+
+// ---------------------------------------------------------------- (o) the receipt is minted from the request, never from the answer (mutant M6)
+
+test("(o) extra fields in the client's accept content never reach the approval: nonce and presentation_digest come from the STORED request", async () => {
+	await withWorkspace(async ({ cwd, store, attemptDir, list }) => {
+		const answer = await elicitation("accept-accept");
+		// Every forged value is one no honest receipt could carry, so a plain
+		// substring search over the stored approval is a sufficient leak check.
+		const forged = { nonce: "ffffffffffffffffffffffffffffffff", presentation_digest: `sha256:${"ab".repeat(32)}`, approved: "forged-approved", host: "forged-host", assurance: "forged-verified", decided_at: "2020-01-01T00:00:00Z" };
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: { ...answer, content: { ...answer.content, ...forged } } }) }, async ({ send }) => {
+			const out = (await request(send, cwd)).result.structuredContent;
+			assert.equal(out.outcome, "accepted", JSON.stringify(out));
+			const approval = (await store.get("approval", out.approval_id, { changeId: CHANGE.id, attemptId: ATTEMPT.id })).record;
+			const stored = await storedRequest(attemptDir, out.request_id);
+			assert.equal(approval.receipt.nonce, stored.nonce);
+			assert.notEqual(approval.receipt.nonce, forged.nonce);
+			assert.equal(approval.receipt.presentation_digest, stored.presentation_digest);
+			assert.notEqual(approval.receipt.presentation_digest, forged.presentation_digest);
+			assert.equal(approval.receipt.host, "mcp-server");
+			assert.equal(approval.assurance, "cooperative");
+			assert.notEqual(approval.decided_at, forged.decided_at);
+			const text = JSON.stringify(approval);
+			for (const [field, value] of Object.entries(forged)) {
+				assert.ok(!text.includes(JSON.stringify(value)), `${field} from the answer leaked into the approval`);
+			}
+			assert.equal("approved" in approval, false);
+			assert.equal(approval.assurance, "cooperative");
+			assert.equal((await list("approvals")).length, 1);
 		});
 	});
 });

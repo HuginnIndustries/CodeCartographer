@@ -54,9 +54,11 @@ import {
 	type HostCapabilities,
 	type Presenter,
 	type ProofRecord,
+	type SnapshotRecord,
 	type VerifiedAcceptanceIntegration,
 } from "../core/engineering/index.ts";
-import { ENGINEERING_SCHEMA_VERSION } from "../core/engineering/types.ts";
+import { ENGINEERING_SCHEMA_VERSION, type AttemptRecord } from "../core/engineering/types.ts";
+import { readWorkingTree } from "./working-tree.ts";
 
 /** Every action this surface implements. Pinned so the schema and the dispatch cannot drift. */
 export const CHANGE_ACTIONS = ["create", "update", "show", "list", "plan", "record_proof", "gate", "request_acceptance"] as const;
@@ -135,6 +137,11 @@ function asCallerError(error: unknown): unknown {
 		case "invalid-request":
 		case "stale-revision":
 			return new ProtocolError(ProtocolErrorCode.InvalidParams, message);
+		case "invalid-state":
+			// The records are not in a state this action can act on (no
+			// candidate bound, already accepted, a request in flight). The
+			// request is what is wrong, so a retry without change fails again.
+			return new ProtocolError(ProtocolErrorCode.InvalidRequest, message);
 		default:
 			return error;
 	}
@@ -250,9 +257,9 @@ export function createChangeHandler(deps: {
 			case "record_proof":
 				return await recordProof(store, args, deps.textResult);
 			case "gate":
-				return await gateChange(store, args, deps.textResult);
+				return await gateChange(store, args, deps.textResult, cwd);
 			case "request_acceptance":
-				return await requestAcceptanceAction(store, args, deps.textResult, deps.session?.());
+				return await requestAcceptanceAction(store, args, deps.textResult, deps.session?.(), cwd);
 		}
 	};
 }
@@ -476,16 +483,38 @@ async function recordProof(store: EngineeringStore, args: ChangeArgs, textResult
 	});
 }
 
-async function gateChange(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown) {
+/**
+ * The bound candidate of an attempt, or null when the records do not resolve.
+ * The gate reports the missing record itself; this only serves the re-read.
+ */
+async function boundCandidate(store: EngineeringStore, changeId: string, attemptId: string): Promise<SnapshotRecord | null> {
+	try {
+		const attempt = (await store.get("attempt", attemptId, { changeId })).record as AttemptRecord;
+		if (!attempt.candidate_snapshot_id) return null;
+		return (await store.get("snapshot", attempt.candidate_snapshot_id, { changeId, attemptId })).record as SnapshotRecord;
+	} catch {
+		return null;
+	}
+}
+
+async function gateChange(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown, cwd: string) {
 	const changeId = requireString(args, "change_id");
 	const attemptId = typeof args.attempt_id === "string" ? args.attempt_id : undefined;
+	// The re-read is what lets the gate check freshness at all; without it the
+	// gate can only disclose that the tree was not looked at. A candidate that
+	// cannot be re-read gets no re-read, and the gate says so.
+	const candidate = attemptId ? await boundCandidate(store, changeId, attemptId) : null;
+	const reread = candidate ? await readWorkingTree(cwd, candidate) : null;
 	const outcome = await evaluateAcceptanceGate(store, {
 		change_id: changeId,
 		attempt_id: attemptId ?? "",
 		// An MCP tool call cannot obtain a human decision on its own. Saying so
 		// is the honest answer; E08 introduces the channel that can.
 		host: { can_obtain_human_decision: false, storage: { boundary: "none", protection: "unknown" } },
+		...(reread?.ok ? { candidate_reread: reread.reread } : {}),
 	});
+	if (reread && reread.ok === false) outcome.limitations.push(`the working tree could not be re-read: ${reread.reason}`);
+	if (reread?.ok) outcome.limitations.push(...reread.limitations);
 	return textResult(describeGateOutcome(outcome), {
 		change_id: changeId,
 		state: outcome.state,
@@ -547,7 +576,7 @@ export function hostCapabilitiesFromSession(session: AcceptanceSession | undefin
 	};
 }
 
-async function requestAcceptanceAction(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown, session: AcceptanceSession | undefined) {
+async function requestAcceptanceAction(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown, session: AcceptanceSession | undefined, cwd: string) {
 	refuseDerivedFields(args, "request_acceptance");
 	for (const field of HOST_CAPABILITY_FIELDS) {
 		if (args[field] !== undefined) invalid(`unknown field ${field}: host capabilities and decisions are derived from the session and the client, never from a request`);
@@ -565,6 +594,9 @@ async function requestAcceptanceAction(store: EngineeringStore, args: ChangeArgs
 			presenter: session?.presenter ?? { elicit: async () => ({ threw: "no session: nothing can be presented" }) },
 			current_storage: session?.current_storage ?? { boundary: "none" },
 			registry: session?.registry,
+			// The adapter is the only party that can see the repository, so
+			// the fresh re-read the gate compares against is taken HERE.
+			reread: (candidate) => readWorkingTree(cwd, candidate),
 		});
 	} catch (error) {
 		throw asCallerError(error);
@@ -574,9 +606,20 @@ async function requestAcceptanceAction(store: EngineeringStore, args: ChangeArgs
 		attempt_id: attemptId,
 		outcome: result.outcome,
 		assurance: result.assurance,
-		request_id: result.request_id,
-		expires_at: result.request.expires_at,
 	};
+	if (result.request === undefined) {
+		// The gate refused or the tree could not be re-read: no request was
+		// issued and nobody was asked. The blockers are the whole answer.
+		structured.reason = result.reason;
+		if (result.gate) {
+			structured.gate_state = result.gate.state;
+			structured.blockers = result.gate.blockers;
+			structured.limitations = result.gate.limitations;
+		}
+		return textResult(`${result.outcome}: ${displayText(result.reason.split("\n")[0])} (no request issued; nothing presented).\n\n${result.gate ? describeGateOutcome(result.gate) : ""}`, structured);
+	}
+	structured.request_id = result.request_id;
+	structured.expires_at = result.request.expires_at;
 	if (result.outcome === "accepted") {
 		structured.approval_id = result.approval.id;
 		structured.classification = result.classification.class;

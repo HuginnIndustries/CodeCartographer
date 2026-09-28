@@ -151,11 +151,14 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	// no network, and nothing that writes outside the namespace.
 	// lift (E09) reads a planning artifact into the record vocabulary. It
 	// imports only the id grammar and sits with the other pure readers.
-	// acceptance (E08) sits beside proofs and gates: it reads the store to
+	// acceptance (E08) sits ABOVE gates, beside traverse: the receipt path's
+	// step 1 has it run the gate (E06) on a fresh re-read of the tree before
+	// any request is issued, so it imports gates.ts. It reads the store to
 	// bind a request and to persist an approval the validators have already
 	// passed. It imports no child process and no network; the client is
-	// reached only through the Presenter its caller hands it.
-	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, lift: 2, store: 3, proofs: 4, gates: 4, acceptance: 4, traverse: 5, index: 6 };
+	// reached only through the Presenter its caller hands it, and the tree
+	// only through the reread callback the adapter hands it.
+	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, lift: 2, store: 3, proofs: 4, gates: 4, acceptance: 5, traverse: 5, index: 6 };
 	// Everything except the store must stay pure. Splitting the rule rather
 	// than dropping it: a validator that gained a `node:fs` import would
 	// still fail, which is the property this test was written for.
