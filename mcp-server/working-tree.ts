@@ -7,7 +7,9 @@
 // module is the one place on the MCP surface that walks the workspace.
 //
 // It OBSERVES and never executes: no git process, no spawn. HEAD is resolved
-// by reading `.git/HEAD` (and the ref or packed-refs it points at). What it
+// by reading `.git/HEAD` (and the ref or packed-refs it points at); a `.git`
+// FILE (a `git worktree`) is followed to the git dir it names, and its
+// `commondir` for shared refs. What it
 // cannot observe without running git — whether tracked content differs from
 // HEAD — is carried from the candidate and DISCLOSED by the caller as a
 // limitation; a same-bytes tree cannot differ in dirtiness in a way that
@@ -20,7 +22,7 @@
 
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile, readlink } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 import { collectSnapshot, patternCovers, type ObservedEntry } from "../core/engineering/snapshots.ts";
 import type { CoverageExclusion, SnapshotRecord } from "../core/engineering/types.ts";
@@ -30,28 +32,82 @@ export type CandidateReread = Pick<SnapshotRecord, "coverage" | "manifest" | "re
 export type WorkingTreeRead = { ok: true; reread: CandidateReread; limitations: string[] } | { ok: false; reason: string };
 
 const VCS_METADATA = new Set([".git"]);
+const SHA = /^[0-9a-f]{40}$/;
 
-/** Resolve HEAD by reading the repository's own files; `undefined` when there is no `.git` here. */
-async function readGitHead(root: string): Promise<string | undefined> {
-	let head: string;
+/**
+ * Locate the git directory for `root`, by reading files only. A `.git`
+ * DIRECTORY is the git dir itself. A `.git` FILE (a worktree, `git worktree
+ * add`) holds `gitdir: <path>` naming the per-worktree git dir, absolute or
+ * relative to the worktree root; its `commondir` file (relative to that git
+ * dir) names the shared git dir that holds refs and packed-refs. Nothing
+ * else is followed: a malformed `.git` file yields `undefined`, and the
+ * paths are taken exactly as `gitdir:` / `commondir` name them.
+ */
+async function locateGitDirs(root: string): Promise<{ gitdir: string; commondir: string } | undefined> {
+	const dotGit = join(root, ".git");
+	let info;
 	try {
-		head = (await readFile(join(root, ".git", "HEAD"), "utf8")).trim();
+		info = await lstat(dotGit);
 	} catch {
 		return undefined;
 	}
-	if (/^[0-9a-f]{40}$/.test(head)) return head;
-	const ref = head.startsWith("ref: ") ? head.slice(5).trim() : undefined;
-	if (!ref || ref.includes("..") || ref.startsWith("/")) return undefined;
+	if (info.isDirectory()) return { gitdir: dotGit, commondir: dotGit };
+	if (!info.isFile()) return undefined;
+	let text: string;
 	try {
-		const direct = (await readFile(join(root, ".git", ...ref.split("/")), "utf8")).trim();
-		if (/^[0-9a-f]{40}$/.test(direct)) return direct;
+		text = await readFile(dotGit, "utf8");
 	} catch {
-		// fall through to packed-refs
+		return undefined;
+	}
+	const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
+	if (!firstLine.startsWith("gitdir: ")) return undefined;
+	const named = firstLine.slice("gitdir: ".length).trim();
+	if (named.length === 0) return undefined;
+	const gitdir = resolve(root, named);
+	try {
+		if (!(await lstat(gitdir)).isDirectory()) return undefined;
+	} catch {
+		return undefined;
+	}
+	let commondir = gitdir;
+	try {
+		const common = (await readFile(join(gitdir, "commondir"), "utf8")).split(/\r?\n/, 1)[0]?.trim() ?? "";
+		if (common.length > 0) commondir = resolve(gitdir, common);
+	} catch {
+		// no commondir file: the git dir is its own common dir
+	}
+	return { gitdir, commondir };
+}
+
+/** Resolve HEAD by reading the repository's own files; `undefined` when there is no `.git` here or it is malformed. */
+async function readGitHead(root: string): Promise<string | undefined> {
+	const dirs = await locateGitDirs(root);
+	if (!dirs) return undefined;
+	let head: string;
+	try {
+		head = (await readFile(join(dirs.gitdir, "HEAD"), "utf8")).trim();
+	} catch {
+		return undefined;
+	}
+	if (SHA.test(head)) return head;
+	const ref = head.startsWith("ref: ") ? head.slice(5).trim() : undefined;
+	if (!ref || ref.includes("..") || ref.startsWith("/") || ref.includes("\\")) return undefined;
+	const segments = ref.split("/");
+	if (segments.some((s) => s.length === 0)) return undefined;
+	// A worktree's own git dir may hold a per-worktree loose ref (HEAD-relative
+	// refs live there); shared branches live under the common dir.
+	for (const base of dirs.gitdir === dirs.commondir ? [dirs.commondir] : [dirs.gitdir, dirs.commondir]) {
+		try {
+			const direct = (await readFile(join(base, ...segments), "utf8")).trim();
+			if (SHA.test(direct)) return direct;
+		} catch {
+			// fall through
+		}
 	}
 	try {
-		for (const line of (await readFile(join(root, ".git", "packed-refs"), "utf8")).split("\n")) {
+		for (const line of (await readFile(join(dirs.commondir, "packed-refs"), "utf8")).split("\n")) {
 			const [sha, name] = line.trim().split(/\s+/);
-			if (name === ref && /^[0-9a-f]{40}$/.test(sha ?? "")) return sha;
+			if (name === ref && SHA.test(sha ?? "")) return sha;
 		}
 	} catch {
 		// no packed-refs
@@ -129,7 +185,7 @@ export async function readWorkingTree(root: string, candidate: SnapshotRecord): 
 			? { vcs: "git", ...(head ? { head } : {}), dirty: candidate.repository.dirty }
 			: { vcs: "none", dirty: candidate.repository.dirty };
 	if (candidate.repository.vcs === "git" && head === undefined) {
-		return { ok: false, reason: `the candidate was captured from a git tree but no HEAD could be read under ${root}/.git; the tree cannot be re-read in the candidate's scope` };
+		return { ok: false, reason: `the candidate was captured from a git tree but no HEAD could be read under ${join(root, ".git")} (a git directory, or a worktree gitdir file whose git dir and refs are readable); the tree cannot be re-read in the candidate's scope` };
 	}
 	limitations.push("the re-read observed file bytes and HEAD by reading the repository directly; repository.dirty is carried from the candidate, not re-observed");
 	const collected = collectSnapshot({

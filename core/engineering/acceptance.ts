@@ -37,7 +37,7 @@
 // where an MRTR presenter would plug in later, behind the same `Presenter`
 // seam.
 
-import { mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFile } from "../utils.ts";
@@ -69,6 +69,7 @@ import {
 import {
 	acceptanceChannelSupported,
 	buildAcceptanceRequest,
+	checkCandidateFreshness,
 	classifyAcceptance,
 	elicitationDecision,
 	evaluateApprovalReceipt,
@@ -361,8 +362,30 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 		return { outcome: decision, ...base, reason, elicitation: decision };
 	}
 
-	// ACCEPTED: mint in-process from the request and the host's own state,
-	// never from the response beyond its decision and note.
+	// ACCEPTED: the contract checks freshness "before issuing AND AGAIN
+	// BEFORE MINTING". The person read a form describing the bytes captured
+	// as `candidate`; if the tree moved while they were deciding, their
+	// answer is about bytes that are no longer there, and minting would bind
+	// an acceptance to a candidate the tree no longer matches. Re-read now,
+	// with the same reader the gate used, and refuse on any mismatch or
+	// read failure. The stored request stays (it was issued honestly); no
+	// approval is written.
+	const again: CandidateRereadResult = args.reread ? await args.reread(candidate) : { ok: false, reason: "the working tree cannot be re-read on this surface" };
+	if (again.ok === false) {
+		return { outcome: "refused", ...base, reason: `proof-stale: the tree could not be re-read after the person decided (${again.reason}); nothing was minted`, elicitation: decision };
+	}
+	const stillFresh = checkCandidateFreshness(candidate, again.reread);
+	if (stillFresh.ok === false) {
+		return {
+			outcome: "refused",
+			...base,
+			reason: `proof-stale: the tree moved while the person was deciding; the working tree no longer matches candidate ${candidate.id}: ${stillFresh.errors.map((e) => e.message).join("; ")}; nothing was minted`,
+			elicitation: decision,
+		};
+	}
+
+	// Mint in-process from the request and the host's own state, never from
+	// the response beyond its decision and note.
 	const client = { name: capabilities.client?.name ?? "unknown", version: capabilities.client?.version ?? "" };
 	const note = "content" in response && response.content && typeof (response.content as { note?: unknown }).note === "string" && ((response.content as { note: string }).note.trim().length > 0)
 		? (response.content as { note: string }).note
@@ -453,6 +476,14 @@ function inFlightMarkerPath(store: EngineeringStore, changeId: string, attemptId
  * `expires_at` has passed belongs to a request that can no longer be
  * answered (a crashed server, a client that never replied); it is removed
  * and creation is retried ONCE. A live marker means refusal.
+ *
+ * A marker whose content cannot be parsed (a crash between create and
+ * write left it empty or truncated) is judged by its mtime instead: it is
+ * cleared only once it is older than the contract's maximum request TTL,
+ * when no request it could have guarded can still be answered. Only a
+ * regular file is ever cleared; anything else at the marker's path
+ * (a directory, a symlink) is not a marker this module wrote and is refused
+ * rather than removed.
  */
 async function acquireInFlightMarker(store: EngineeringStore, changeId: string, attemptId: string, expiresAt: Date, now: () => Date): Promise<{ release(): Promise<void> } | null> {
 	const path = inFlightMarkerPath(store, changeId, attemptId);
@@ -468,26 +499,44 @@ async function acquireInFlightMarker(store: EngineeringStore, changeId: string, 
 			return { release: async () => rm(path, { force: true }) };
 		} catch (error) {
 			if ((error as { code?: string }).code !== "EEXIST") throw error;
-			let stale = false;
-			try {
-				const parsed = JSON.parse(await readFile(path, "utf8")) as { expires_at?: unknown };
-				const expires = typeof parsed.expires_at === "string" ? Date.parse(parsed.expires_at) : Number.NaN;
-				if (Number.isFinite(expires)) {
-					stale = expires < now().getTime();
-				} else {
-					// A marker with no readable `expires_at` (a crash between
-					// create and write) is cleared only once it is older than
-					// the contract's maximum request TTL: no request it could
-					// have guarded can still be answered by then.
-					const { mtimeMs } = await stat(path);
-					stale = mtimeMs + ACCEPTANCE_REQUEST_MAX_TTL_MS < now().getTime();
+			if (attempt === 1) return null;
+			const stale = await inFlightMarkerIsStale(path, now);
+			if (stale !== true) {
+				if (typeof stale === "string") {
+					throw new StoreError("invalid-state", `the in-flight marker for attempt ${attemptId} at ${path} ${stale}; it was not written by this adapter and is not removed. Remove it by hand once you have confirmed no request is in flight`);
 				}
-			} catch {
-				stale = false;
+				return null;
 			}
-			if (!stale || attempt === 1) return null;
+			// Not recursive: only the regular file lstat just saw is removed.
 			await rm(path, { force: true });
 		}
 	}
 	return null;
+}
+
+/**
+ * Whether an existing marker may be cleared. `true`: past its `expires_at`,
+ * or unparseable and older than the maximum TTL. `false`: live, or a stat
+ * failure (then the retry will report). A string: the path is not a regular
+ * file, with the reason.
+ */
+async function inFlightMarkerIsStale(path: string, now: () => Date): Promise<boolean | string> {
+	let info;
+	try {
+		info = await lstat(path);
+	} catch {
+		return false;
+	}
+	if (info.isSymbolicLink()) return "is a symbolic link";
+	if (info.isDirectory()) return "is a directory";
+	if (!info.isFile()) return "is not a regular file";
+	let expires = Number.NaN;
+	try {
+		const parsed = JSON.parse(await readFile(path, "utf8")) as { expires_at?: unknown } | null;
+		if (parsed && typeof parsed === "object" && typeof parsed.expires_at === "string") expires = Date.parse(parsed.expires_at);
+	} catch {
+		// unparseable: judged by mtime below
+	}
+	if (Number.isFinite(expires)) return expires < now().getTime();
+	return info.mtimeMs + ACCEPTANCE_REQUEST_MAX_TTL_MS < now().getTime();
 }

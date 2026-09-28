@@ -12,8 +12,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -23,7 +24,13 @@ const LAUNCHER = join(REPO_ROOT, "tests/helpers/acceptance-server.mjs");
 const FIXTURES = join(REPO_ROOT, "tests/fixtures/engineering/v1/valid");
 const readFixture = async (name) => JSON.parse(await readFile(join(FIXTURES, name), "utf8"));
 const engineering = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/index.ts`).href);
-const { openStore, evaluateApprovalReceipt, classifyAcceptance, VERIFIED_ACCEPTANCE_INTEGRATIONS, computeSnapshotDigest } = engineering;
+const { openStore, evaluateApprovalReceipt, classifyAcceptance, VERIFIED_ACCEPTANCE_INTEGRATIONS, computeSnapshotDigest, requestAcceptance, checkCandidateFreshness } = engineering;
+const { hostCapabilitiesFromSession } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/engineering.ts`).href);
+const execFileAsync = promisify(execFile);
+
+/** chmod 000 denies nothing to root and does not exist on Windows. */
+const CANNOT_RESTRICT = (process.platform === "win32" && "chmod 000 does not deny reads on Windows") || (typeof process.getuid === "function" && process.getuid() === 0 && "root reads chmod-000 files");
+const NO_SYMLINKS = process.platform === "win32" && "symlink creation needs a privilege on Windows";
 const { readWorkingTree } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/working-tree.ts`).href);
 
 const CHANGE = await readFixture("change.json");
@@ -583,4 +590,325 @@ test("(o) extra fields in the client's accept content never reach the approval: 
 			assert.equal((await list("approvals")).length, 1);
 		});
 	});
+});
+
+// ---------------------------------------------------------------- (p) freshness AGAIN before minting (review #4; contract: "before issuing and again before minting")
+
+test("(p) a tree edited while the person was deciding is refused before minting: proof-stale, 0 approvals, request stored, marker released; an untouched tree still accepts", async () => {
+	await withWorkspace(async ({ cwd, attemptDir, list, candidate }) => {
+		const answer = await elicitation("accept-accept");
+		// The scripted presenter edits a covered file, then answers accept.
+		const editThenAccept = async () => {
+			await writeFile(join(cwd, "src", "widgets", "count.ts"), "export function count(items) {\n\treturn items.length + 1; // edited while the form was open\n}\n");
+			return { result: answer };
+		};
+		await withClient({ registry: [REGISTERED], answer: editThenAccept }, async ({ send, elicitations }) => {
+			const out = (await request(send, cwd)).result.structuredContent;
+			assert.equal(out.outcome, "refused", JSON.stringify(out));
+			assert.match(out.reason, /^proof-stale: the tree moved while the person was deciding/);
+			assert.match(out.reason, new RegExp(`no longer matches candidate ${candidate.id}`));
+			assert.equal(out.elicitation, "accepted", "the person DID answer accept; the refusal is the tree's, not theirs");
+			assert.equal(elicitations.length, 1);
+			assert.deepEqual(await list("approvals"), []);
+			assert.deepEqual(await list("requests"), [`${out.request_id}.json`], "the request was issued honestly and stays");
+			assert.equal((await readdir(join(attemptDir, "requests"))).includes(".in-flight"), false, "the marker is released");
+			// The bytes really moved: the same reader now disagrees with the bound candidate.
+			const now = await readWorkingTree(cwd, candidate);
+			assert.equal(now.ok && checkCandidateFreshness(candidate, now.reread).ok, false);
+		});
+	});
+	// Untouched: the second re-read agrees and the approval is minted.
+	await withWorkspace(async ({ cwd, list }) => {
+		const answer = await elicitation("accept-accept");
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: answer }) }, async ({ send }) => {
+			const out = (await request(send, cwd)).result.structuredContent;
+			assert.equal(out.outcome, "accepted", JSON.stringify(out));
+			assert.equal((await list("approvals")).length, 1);
+		});
+	});
+});
+
+// ---------------------------------------------------------------- (q) core: no re-read means nobody is asked (review #8, mutant reread-fail-proceeds)
+
+const CORE_CAPS = hostCapabilitiesFromSession({ elicitation_form: true, client: { name: "claude-code", version: "2.1.277" }, storage_boundary: "none", tool_result_path: "none", current_storage: { boundary: "none" }, presenter: null });
+
+/** Core-level call, bypassing the MCP adapter, with a presenter that counts. */
+async function coreRequest(store, reread) {
+	let presented = 0;
+	const presenter = { elicit: async () => { presented++; return { action: "accept", content: { decision: "accept" } }; } };
+	const result = await requestAcceptance(store, { change_id: CHANGE.id, attempt_id: ATTEMPT.id, capabilities: CORE_CAPS, presenter, current_storage: { boundary: "none" }, registry: [REGISTERED], host_session: "test", ...(reread === undefined ? {} : { reread }) });
+	return { result, presented };
+}
+
+test("(q) requestAcceptance with no reread, or a reread that fails: needs-human-acceptance, 0 elicitations, no request, no approval; the same call with a working reread accepts", async () => {
+	assert.equal(CORE_CAPS.assurance_policy, "verified");
+	await withWorkspace(async ({ store, list, cwd }) => {
+		const none = await coreRequest(store, undefined);
+		assert.equal(none.result.outcome, "needs-human-acceptance", JSON.stringify(none.result));
+		assert.equal(none.result.request_id, undefined, "no request is issued");
+		assert.match(none.result.reason, /cannot be re-read on this surface/);
+		assert.equal(none.result.gate?.state, "may-accept", "the gate ran on the records; only the missing re-read stops the ask");
+		assert.equal(none.presented, 0);
+		assert.deepEqual(await list("requests"), []);
+		assert.deepEqual(await list("approvals"), []);
+
+		const failing = await coreRequest(store, async () => ({ ok: false, reason: "disk on fire" }));
+		assert.equal(failing.result.outcome, "needs-human-acceptance", JSON.stringify(failing.result));
+		assert.equal(failing.result.request_id, undefined);
+		assert.equal(failing.result.reason, "disk on fire");
+		assert.equal(failing.presented, 0);
+		assert.deepEqual(await list("requests"), []);
+		assert.deepEqual(await list("approvals"), []);
+
+		// Control: the identical call with a real re-read presents and mints.
+		const working = await coreRequest(store, (candidate) => readWorkingTree(cwd, candidate));
+		assert.equal(working.result.outcome, "accepted", JSON.stringify(working.result));
+		assert.equal(working.presented, 1);
+		assert.equal((await list("approvals")).length, 1);
+	});
+});
+
+test("(q') a reread that succeeds before the ask but fails after the answer: refused, nothing minted", async () => {
+	await withWorkspace(async ({ store, list, cwd, attemptDir }) => {
+		let calls = 0;
+		const flaky = async (candidate) => (++calls === 1 ? readWorkingTree(cwd, candidate) : { ok: false, reason: "the tree vanished" });
+		const { result, presented } = await coreRequest(store, flaky);
+		assert.equal(result.outcome, "refused", JSON.stringify(result));
+		assert.match(result.reason, /^proof-stale: the tree could not be re-read after the person decided \(the tree vanished\)/);
+		assert.equal(presented, 1);
+		assert.equal(calls, 2, "the tree is read before the ask AND again before minting");
+		assert.deepEqual(await list("approvals"), []);
+		assert.equal((await list("requests")).length, 1);
+		assert.equal((await readdir(join(attemptDir, "requests"))).includes(".in-flight"), false);
+	});
+});
+
+// ---------------------------------------------------------------- (r) the in-flight marker's degenerate shapes (review #5)
+
+test("(r) an unparseable marker: fresh mtime refuses; ancient mtime is cleared and the request proceeds; a directory or symlink at the marker's path is refused by name and never removed", async () => {
+	await withWorkspace(async ({ cwd, attemptDir, list }) => {
+		const marker = join(attemptDir, "requests", ".in-flight");
+		await mkdir(dirname(marker), { recursive: true });
+		const answer = await elicitation("accept-accept");
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: answer }) }, async ({ send, elicitations }) => {
+			await writeFile(marker, "");
+			const fresh = await request(send, cwd);
+			assert.ok(fresh.error, "an empty marker with a fresh mtime is a crash in progress: refused");
+			assert.match(fresh.error.message, /in flight/);
+			assert.equal(elicitations.length, 0);
+			assert.deepEqual(await list("approvals"), []);
+
+			await writeFile(marker, "{not json");
+			const ancient = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+			await utimes(marker, ancient, ancient);
+			const cleared = (await request(send, cwd)).result.structuredContent;
+			assert.equal(cleared.outcome, "accepted", JSON.stringify(cleared));
+			assert.equal(elicitations.length, 1);
+			assert.equal((await list("approvals")).length, 1);
+			assert.equal((await readdir(dirname(marker))).includes(".in-flight"), false);
+		});
+	});
+	await withWorkspace(async ({ cwd, attemptDir, list }) => {
+		const marker = join(attemptDir, "requests", ".in-flight");
+		await mkdir(marker, { recursive: true });
+		await writeFile(join(marker, "keep.txt"), "not ours\n");
+		const ancient = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+		await utimes(marker, ancient, ancient);
+		const answer = await elicitation("accept-accept");
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: answer }) }, async ({ send, elicitations }) => {
+			const dir = await request(send, cwd);
+			assert.ok(dir.error, "a directory at the marker's path is refused");
+			assert.match(dir.error.message, /is a directory; it was not written by this adapter and is not removed/);
+			assert.equal(await readFile(join(marker, "keep.txt"), "utf8"), "not ours\n", "nothing under it was removed");
+			assert.equal(elicitations.length, 0);
+			assert.deepEqual(await list("approvals"), []);
+		});
+	});
+});
+
+test("(r') a symlink at the marker's path is refused by name and never removed", { skip: NO_SYMLINKS }, async () => {
+	await withWorkspace(async ({ cwd, attemptDir, list }) => {
+		const marker = join(attemptDir, "requests", ".in-flight");
+		await mkdir(dirname(marker), { recursive: true });
+		// Under the store, not in the tree: a file in the tree would make the gate refuse stale before the marker is reached.
+		const target = join(attemptDir, "precious.txt");
+		await writeFile(target, "keep\n");
+		await symlink(target, marker);
+		const answer = await elicitation("accept-accept");
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: answer }) }, async ({ send, elicitations }) => {
+			const out = await request(send, cwd);
+			assert.ok(out.error, JSON.stringify(out));
+			assert.match(out.error.message, /is a symbolic link; it was not written by this adapter and is not removed/);
+			assert.equal(await readFile(target, "utf8"), "keep\n");
+			assert.ok((await readdir(dirname(marker))).includes(".in-flight"), "the link itself is left in place");
+			assert.equal(elicitations.length, 0);
+			assert.deepEqual(await list("approvals"), []);
+		});
+	});
+});
+
+// ---------------------------------------------------------------- (s) readWorkingTree on real files (review #8: mode bits, symlinks, exclusions, unreadables)
+
+/** A tree, captured as a candidate by the reader under test; `mutate` then edits it and the verdict is the freshness of the re-read. */
+async function withTree(fn) {
+	const cwd = await mkdtemp(join(tmpdir(), "cc-e08-tree-"));
+	try {
+		await materializeTree(cwd);
+		const read = await readWorkingTree(cwd, SNAPSHOT);
+		assert.equal(read.ok, true, read.ok ? "" : read.reason);
+		const candidate = { ...SNAPSHOT, ...read.reread, digest: computeSnapshotDigest(read.reread) };
+		const verdict = async () => {
+			const again = await readWorkingTree(cwd, candidate);
+			assert.equal(again.ok, true, again.ok ? "" : again.reason);
+			return { fresh: checkCandidateFreshness(candidate, again.reread).ok, reread: again.reread };
+		};
+		return await fn({ cwd, candidate, verdict });
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+}
+
+test("(s) readWorkingTree: an untouched tree is FRESH; a changed executable bit is STALE", { skip: process.platform === "win32" && "mode bits are not observable on Windows" }, async () => {
+	await withTree(async ({ cwd, candidate, verdict }) => {
+		assert.equal((await verdict()).fresh, true);
+		const entry = candidate.manifest.find((e) => e.path === "tools/run-tests");
+		assert.equal(entry?.type, "file");
+		assert.equal(entry.executable, true, "the fixture script is executable at capture");
+		await chmod(join(cwd, "tools", "run-tests"), 0o644);
+		const after = await verdict();
+		assert.equal(after.fresh, false, "the bytes did not change; only the mode did, and that is a different tree");
+		assert.equal(after.reread.manifest.find((e) => e.path === "tools/run-tests").executable, false);
+	});
+	await withTree(async ({ cwd, verdict }) => {
+		await chmod(join(cwd, "src", "widgets", "count.ts"), 0o755);
+		assert.equal((await verdict()).fresh, false);
+	});
+});
+
+test("(s') readWorkingTree records symlinks as links and never follows them: replacing a file with a link to the same bytes is STALE; retargeting a link is STALE", { skip: NO_SYMLINKS }, async () => {
+	await withTree(async ({ cwd, candidate, verdict }) => {
+		const link = candidate.manifest.find((e) => e.path === "scripts/count");
+		assert.equal(link?.type, "symlink", JSON.stringify(link));
+		assert.equal(link.target, "../src/widgets/count.ts", "the link's own target is what is recorded");
+		assert.equal("digest" in link, false, "a link is never hashed through");
+		// Replace a regular file with a symlink to a copy of its bytes.
+		const bytes = await readFile(join(cwd, "tests", "widgets-count.test.mjs"));
+		await writeFile(join(cwd, "tests", "copy.mjs"), bytes);
+		await unlink(join(cwd, "tests", "widgets-count.test.mjs"));
+		await symlink("copy.mjs", join(cwd, "tests", "widgets-count.test.mjs"));
+		const swapped = await verdict();
+		assert.equal(swapped.fresh, false);
+		assert.equal(swapped.reread.manifest.find((e) => e.path === "tests/widgets-count.test.mjs").type, "symlink");
+	});
+	await withTree(async ({ cwd, verdict }) => {
+		// Retarget the existing link to a file with IDENTICAL bytes: only the target string differs.
+		await writeFile(join(cwd, "src", "widgets", "count2.ts"), await readFile(join(cwd, "src", "widgets", "count.ts")));
+		await unlink(join(cwd, "scripts", "count"));
+		await symlink("../src/widgets/count2.ts", join(cwd, "scripts", "count"));
+		const retargeted = await verdict();
+		assert.equal(retargeted.fresh, false);
+		assert.equal(retargeted.reread.manifest.find((e) => e.path === "scripts/count").target, "../src/widgets/count2.ts");
+	});
+});
+
+test("(s'') readWorkingTree applies the candidate's own exclusions: an edit under an excluded pattern is FRESH, an edit outside them is STALE", async () => {
+	await withTree(async ({ cwd, candidate, verdict }) => {
+		const excluded = candidate.coverage.excluded.map((e) => e.pattern);
+		assert.ok(excluded.includes("dist/**"), `the fixture candidate excludes dist/**: ${JSON.stringify(excluded)}`);
+		await mkdir(join(cwd, "dist"), { recursive: true });
+		await writeFile(join(cwd, "dist", "out.js"), "built\n");
+		assert.equal((await verdict()).fresh, true, "dist/** is excluded by the candidate; an edit there is not a change in scope");
+		assert.equal((await verdict()).reread.manifest.some((e) => e.path.startsWith("dist/")), false);
+		await writeFile(join(cwd, "README.md"), "# not excluded\n");
+		assert.equal((await verdict()).fresh, false);
+	});
+});
+
+test("(s''') readWorkingTree reports an unreadable file as uncovered, never silently skipped", { skip: CANNOT_RESTRICT }, async () => {
+	await withTree(async ({ cwd, verdict }) => {
+		const path = join(cwd, "tests", "widgets-count.test.mjs");
+		try {
+			await chmod(path, 0o000);
+			const after = await verdict();
+			assert.equal(after.fresh, false);
+			assert.ok(after.reread.coverage.uncovered_relevant_inputs.includes("tests/widgets-count.test.mjs"), JSON.stringify(after.reread.coverage.uncovered_relevant_inputs));
+			assert.equal(after.reread.manifest.some((e) => e.path === "tests/widgets-count.test.mjs"), false, "an unreadable file is not in the manifest as if read");
+		} finally {
+			await chmod(path, 0o644);
+		}
+	});
+});
+
+// ---------------------------------------------------------------- (t) a real git worktree (`.git` file) resolves HEAD by reading files only
+
+/** git is spawned here only to SET UP the fixture; readWorkingTree itself spawns nothing (its module imports no child_process). */
+async function gitFixtureAvailable() {
+	try {
+		await execFileAsync("git", ["--version"]);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+test("(t) readWorkingTree in a git worktree: `.git` is a gitdir: file; HEAD resolves through gitdir + commondir; switching the worktree's branch is STALE", async (t) => {
+	if (!(await gitFixtureAvailable())) return t.skip("git is not on PATH to set up the fixture");
+	const source = await readFile(join(REPO_ROOT, "mcp-server", "working-tree.ts"), "utf8");
+	assert.equal(/^import .*child_process/m.test(source), false, "the reader never runs git");
+	const dir = await mkdtemp(join(tmpdir(), "cc-e08-wt-"));
+	try {
+		const main = join(dir, "main");
+		const wt = join(dir, "wt");
+		await mkdir(main);
+		const git = (...args) => execFileAsync("git", args, { cwd: main, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+		await git("init", "-q", "-b", "main");
+		await writeFile(join(main, "a.txt"), "a\n");
+		await git("add", "a.txt");
+		await git("commit", "-q", "-m", "one");
+		const first = (await git("rev-parse", "HEAD")).stdout.trim();
+		await writeFile(join(main, "a.txt"), "b\n");
+		await git("commit", "-q", "-am", "two");
+		const second = (await git("rev-parse", "HEAD")).stdout.trim();
+		await git("branch", "-q", "feature", first);
+		await git("worktree", "add", "-q", wt, "feature");
+		// A `.git` FILE with a gitdir: line, as `git worktree add` lays it out.
+		const dotGit = await readFile(join(wt, ".git"), "utf8");
+		assert.match(dotGit, /^gitdir: /);
+
+		const captured = await readWorkingTree(wt, SNAPSHOT);
+		assert.equal(captured.ok, true, captured.ok ? "" : captured.reason);
+		assert.equal(captured.reread.repository.head, first, "the WORKTREE's head, not the main checkout's");
+		assert.notEqual(captured.reread.repository.head, second);
+		assert.deepEqual(captured.reread.manifest.map((e) => e.path), ["a.txt"]);
+		const candidate = { ...SNAPSHOT, ...captured.reread, digest: computeSnapshotDigest(captured.reread) };
+
+		const untouched = await readWorkingTree(wt, candidate);
+		assert.equal(untouched.ok, true);
+		assert.equal(checkCandidateFreshness(candidate, untouched.reread).ok, true, "an untouched worktree is FRESH");
+
+		// Switch the worktree's branch: HEAD moves (and here the bytes too).
+		await execFileAsync("git", ["checkout", "-q", "--detach", second], { cwd: wt });
+		const switched = await readWorkingTree(wt, candidate);
+		assert.equal(switched.ok, true);
+		assert.equal(switched.reread.repository.head, second);
+		assert.equal(checkCandidateFreshness(candidate, switched.reread).ok, false, "a switched worktree is STALE");
+
+		// A branch ref that lives only in packed-refs of the COMMON dir still resolves.
+		await execFileAsync("git", ["checkout", "-q", "feature"], { cwd: wt });
+		await git("pack-refs", "--all");
+		const packed = await readWorkingTree(wt, candidate);
+		assert.equal(packed.ok, true, packed.ok ? "" : packed.reason);
+		assert.equal(packed.reread.repository.head, first);
+		assert.equal(checkCandidateFreshness(candidate, packed.reread).ok, true);
+
+		// Malformed `.git` files refuse with a clear reason, and nothing is followed.
+		for (const [label, content] of [["no gitdir line", "hello\n"], ["empty gitdir", "gitdir: \n"], ["gitdir naming a missing dir", "gitdir: ../nowhere\n"], ["gitdir naming a file", "gitdir: ../main/a.txt\n"]]) {
+			await writeFile(join(wt, ".git"), content);
+			const bad = await readWorkingTree(wt, candidate);
+			assert.equal(bad.ok, false, label);
+			assert.match(bad.reason, /no HEAD could be read/, label);
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
