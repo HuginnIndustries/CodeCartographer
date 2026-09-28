@@ -64,8 +64,14 @@ symlink from inside the sandbox), the namespace itself, the hook directory, the
 interpreter, and the settings file — and mirrors all five with `Write`/`Edit` deny rules
 in `permissions.deny` (the `.codecarto` rule both as `{{PROJECT_DIR}}/.codecarto/**` and as
 `./.codecarto/**`). Denying the whole `.codecarto` directory means the model's own
-`Write`/`Edit`/Bash cannot touch anything under it; the MCP server writes there as a
-separate process and is unaffected. The hook is invoked as `{{NODE}}
+`Write`/`Edit`/Bash cannot touch anything under it. The MCP server writes there as a
+separate process and is unaffected, but the CodeCartographer **analysis pipeline is
+affected**: its phases write their primary output under `.codecarto/findings/` with the
+model's `Write` tool, and that is denied. **This settings file is for engineering-pilot
+sessions only.** Run analysis phases in a separate session with different settings, and
+do not widen the deny back to `.codecarto/engineering` alone to make both work in one
+session: denying the parent is what stops the namespace from being swapped for a symlink.
+The hook is invoked as `{{NODE}}
 {{HOOK_DIR}}/observe.mjs <namespace>` — absolute interpreter, absolute script, no shebang,
 `PATH=/usr/bin:/bin` pinned inside and never consulted; it spawns nothing and sources
 nothing. It is wired to `PostToolUse` and `PostToolUseFailure` with the matcher
@@ -124,6 +130,13 @@ The hook always exits 0: an observer must not block the host.
     run-then-capture with nothing in between is the normal order and is accepted (E01's
     valid proof fixture has exactly that shape); anything after the capture is the gate's
     candidate-reread problem, not this one.
+
+    **With more than one obligation, run-then-capture refuses all but the last check.**
+    Every Bash call can change the tree (`eslint --fix`, `jest -u`, a build writing
+    outputs), so a check command is not exempt: in `run O1, run O2, capture`, O2 is a later
+    Bash and O1 is refused. The order that discharges every obligation is **capture first,
+    then run the checks**. Runs after the capture are covered by the gate's re-read of the
+    tree, not by this rule. Capturing between checks also works.
   There is no session binding: no record ties an attempt to a host session, so a rule
   would have nothing to compare against and was not invented.
 - Matches the observation's `command` **byte-equal** to `ProofObligation.command` on the
@@ -162,7 +175,11 @@ Processed files (proof written or replayed) and activity entries are renamed int
 Bash observation is **kept** while a refused observation it gates (same session, earlier
 `ended_at`) is still in the inbox, so that observation is refused again on the next read.
 Refused files stay in `inbox/` for an operator. `hook-logs/` is append-only from the hook
-and is not touched by the reader. Both grow with every Bash and edit call the model makes
+and is not touched by the reader. A refused Bash call that matches no obligation
+(an `ls`, a `git status`) is itself an earlier observation in its session, so it pins
+every later activity entry and Bash observation of that session in `inbox/` until an
+operator removes it. In practice little rotates once a session has run any non-check
+command. Both grow with every Bash and edit call the model makes
 and the model cannot clean either; an operator prunes `processed/` and `hook-logs/` on
 their own schedule. The reader never removes anything.
 
