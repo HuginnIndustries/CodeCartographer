@@ -333,6 +333,12 @@ export interface ProofObligation {
 	scenario_id: LocalId;
 	check_kind: CheckKind;
 	description: string;
+	/**
+	 * The exact command whose observed run discharges this obligation (E05
+	 * host observations match on byte-equality, never substring). Absent for
+	 * manual procedures and for obligations no host observation may discharge.
+	 */
+	command?: string;
 	/** The weakest collector that may discharge this obligation; never `agent-claimed`. */
 	minimum_collector: Exclude<Collector, "agent-claimed">;
 }

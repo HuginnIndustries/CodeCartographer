@@ -1,0 +1,54 @@
+{
+  "permissions": {
+    "deny": [
+      "Write({{PROJECT_DIR}}/.codecarto/**)",
+      "Edit({{PROJECT_DIR}}/.codecarto/**)",
+      "Write(./.codecarto/**)",
+      "Edit(./.codecarto/**)",
+      "Write({{HOOK_DIR}}/**)",
+      "Edit({{HOOK_DIR}}/**)",
+      "Write({{NODE}})",
+      "Edit({{NODE}})",
+      "Write({{SETTINGS_FILE}})",
+      "Edit({{SETTINGS_FILE}})"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "denyWrite": [
+        "{{PROJECT_DIR}}/.codecarto",
+        "{{PROJECT_DIR}}/.codecarto/engineering",
+        "{{HOOK_DIR}}",
+        "{{NODE}}",
+        "{{SETTINGS_FILE}}"
+      ]
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{NODE}} {{HOOK_DIR}}/observe.mjs {{PROJECT_DIR}}/.codecarto/engineering"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{NODE}} {{HOOK_DIR}}/observe.mjs {{PROJECT_DIR}}/.codecarto/engineering"
+          }
+        ]
+      }
+    ]
+  }
+}
