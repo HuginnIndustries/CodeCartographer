@@ -17,21 +17,46 @@
 // is byte-equal to the obligation's `command` on the attempt's slice.
 // No match, or more than one match, is reported and produces no proof.
 //
+// Binding (reviewer finding 2 on #446): an observation is evidence about
+// THIS attempt's current candidate only if it could be. Three refusals, each
+// of which only ever refuses more, never trusts more:
+//   - `observation-predates-attempt`: ended before the attempt was created;
+//   - `observation-outside-workspace`: recorded in a cwd that is not the
+//     workspace root the store was opened from (realpaths compared);
+//   - `tree-activity-after-run`: a file-changing tool (an ACTIVITY entry the
+//     hook records for Edit/Write/MultiEdit/NotebookEdit) or a later Bash
+//     call in the SAME session ran strictly after the check ended and at or
+//     before the candidate was captured. The tree may have moved between the
+//     run and the capture, so the check cannot vouch for the captured bytes.
+//     This is the contract's stability signal, not a timestamp-order rule:
+//     run-then-capture with nothing in between is the normal order and is
+//     accepted; capture-then-run is the gate's candidate-reread problem.
+// No session binding: no record ties an attempt to a host session, and a
+// rule that invented one would have nothing to compare against.
+//
+// Not observed, and so operator-attested: edits from another session (a
+// subagent, a second window), from the user's editor, or from anything that
+// is not a Claude Code tool call. The hook sees only the session that runs it.
+//
 // Retention: a processed file (proof written or replayed) is renamed into
 // `<namespace>/inbox/processed/` — never deleted, never modified — so the
 // inbox stays bounded while the evidence trail survives. Refused files stay
-// where they are for an operator to inspect. The model can do none of this:
-// the whole namespace is in the host's `denyWrite` set.
+// where they are for an operator to inspect. An activity entry, or an
+// ingested Bash observation, is rotated only when no observation it could
+// gate is still in the inbox (same session, earlier `ended_at`): rotating it
+// sooner would let the refused observation discharge on the next read. The
+// model can do none of this: the whole namespace is in the host's
+// `denyWrite` set.
 
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, rename } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rename } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { ingestProof, type IngestError } from "./proofs.ts";
 import { attestationForHostObservation, isTimestamp } from "./validation.ts";
 import { ENGINEERING_SCHEMA_VERSION } from "./types.ts";
-import type { AssurancePolicy, AttemptRecord, HostCapabilities, ProofRecord, SliceRecord } from "./types.ts";
+import type { AssurancePolicy, AttemptRecord, HostCapabilities, ProofRecord, SliceRecord, SnapshotRecord } from "./types.ts";
 import type { EngineeringStore } from "./store.ts";
 
 export const HOST_OBSERVATION_SCHEMA = "codecarto.host-observation/1";
@@ -55,9 +80,32 @@ export interface HostObservation {
 	ended_at: string;
 }
 
+/**
+ * An ACTIVITY entry: the hook's record that a file-changing tool completed.
+ * Carries nothing from the tool's input — no path, no content — and is never
+ * turned into a proof; it only gates observations that precede it.
+ */
+export interface HostActivity {
+	schema: typeof HOST_OBSERVATION_SCHEMA;
+	kind: "activity";
+	host: string;
+	event: "PostToolUse" | "PostToolUseFailure";
+	tool_name: string;
+	tool_use_id: string;
+	session_id: string;
+	cwd: string;
+	ended_at: string;
+}
+
 export interface IngestHostObservationsOptions {
 	/** The namespace inbox, normally `<store.root>/inbox`. */
 	inboxDir?: string;
+	/**
+	 * The workspace root observations must have been recorded in. Defaults to
+	 * the directory the store's namespace lives under (`<root>/../..`, i.e. the
+	 * project whose `.codecarto/engineering` is the store). Compared by realpath.
+	 */
+	workspaceRoot?: string;
 	capabilities: Partial<Pick<HostCapabilities, "tool_result_path" | "label">>;
 	changeId: string;
 	attemptId: string;
@@ -75,6 +123,9 @@ export interface SkippedObservation {
 		| "oversized"
 		| "not-json"
 		| "invalid-observation"
+		| "observation-predates-attempt"
+		| "observation-outside-workspace"
+		| "tree-activity-after-run"
 		| "no-matching-obligation"
 		| "ambiguous-obligation"
 		| "proof-refused";
@@ -110,6 +161,9 @@ function digestRef(v: unknown): v is { digest: string; size: number } {
 }
 
 const OBSERVATION_KEYS = new Set(["schema", "host", "event", "tool_name", "tool_use_id", "session_id", "cwd", "command", "exit_code", "stdout", "stderr", "started_at", "ended_at", "observer"]);
+const ACTIVITY_KEYS = new Set(["schema", "kind", "host", "event", "tool_name", "tool_use_id", "session_id", "cwd", "ended_at"]);
+/** The tools whose completion the hook records as activity. */
+export const ACTIVITY_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 /**
  * Strict shape check for one inbox record. Unknown keys are refused: the
@@ -133,6 +187,31 @@ export function validateHostObservation(value: unknown): { ok: true; value: Host
 	return { ok: true, value: o as unknown as HostObservation };
 }
 
+/**
+ * Strict shape check for an activity entry: the same closed-shape rule as
+ * an observation (unknown keys refused), and only the tools the hook records.
+ * A `command`, `exit_code` or digest on an activity entry is refused — an
+ * activity entry never carries anything that could be read as a result.
+ */
+export function validateHostActivity(value: unknown): { ok: true; value: HostActivity } | { ok: false; message: string } {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "activity must be an object" };
+	const o = value as Record<string, unknown>;
+	for (const key of Object.keys(o)) if (!ACTIVITY_KEYS.has(key)) return { ok: false, message: `unknown field ${key}` };
+	if (o.schema !== HOST_OBSERVATION_SCHEMA) return { ok: false, message: `schema must be ${HOST_OBSERVATION_SCHEMA}` };
+	if (o.kind !== "activity") return { ok: false, message: "kind must be activity" };
+	if (o.event !== "PostToolUse" && o.event !== "PostToolUseFailure") return { ok: false, message: "event must be PostToolUse or PostToolUseFailure" };
+	for (const key of ["host", "tool_use_id"] as const) if (!nonEmpty(o[key])) return { ok: false, message: `${key} must be a non-empty string` };
+	if (!nonEmpty(o.tool_name) || !ACTIVITY_TOOLS.has(o.tool_name)) return { ok: false, message: `tool_name must be one of ${[...ACTIVITY_TOOLS].join(", ")}` };
+	for (const key of ["session_id", "cwd"] as const) if (typeof o[key] !== "string") return { ok: false, message: `${key} must be a string` };
+	if (!isTimestamp(o.ended_at)) return { ok: false, message: "ended_at must be a timestamp" };
+	return { ok: true, value: o as unknown as HostActivity };
+}
+
+/** An inbox record is an activity entry iff it says so; anything else is held to the observation shape. */
+export function isActivityShaped(value: unknown): boolean {
+	return value !== null && typeof value === "object" && !Array.isArray(value) && (value as { kind?: unknown }).kind === "activity";
+}
+
 /** Deterministic per (attempt, tool_use_id): the same observation replayed yields the same idempotency key. */
 export function observationIdempotencyKey(attemptId: string, observation: Pick<HostObservation, "tool_use_id" | "host">): string {
 	// Hashed: the store requires a safe file name and tool_use_id is host-chosen text.
@@ -153,15 +232,28 @@ export function observationProofId(attemptId: string, observation: Pick<HostObse
 	return `prf_${observationHash(attemptId, observation).slice(0, 24)}`;
 }
 
-async function readRegularJson(path: string): Promise<{ ok: true; text: string } | { ok: false; skip: SkippedObservation }> {
+/**
+ * Read one inbox file as text, refusing anything that is not a small regular
+ * file. Exported with an injectable `lstat` ONLY so a test can make the
+ * `O_NOFOLLOW` open matter: with a stat that lies (reports a regular file for
+ * a path that is a symlink — the swap-between-lstat-and-open window), the
+ * open itself must still refuse to follow. Production callers never pass it.
+ */
+export async function readInboxFile(path: string, fs: { lstat: typeof lstat } = { lstat }): Promise<{ ok: true; text: string } | { ok: false; skip: SkippedObservation }> {
 	const file = path;
-	const st = await lstat(path);
+	const st = await fs.lstat(path);
 	if (st.isSymbolicLink()) return { ok: false, skip: { file, reason: "symlink", message: "symlinks in the inbox are never followed" } };
 	if (!st.isFile()) return { ok: false, skip: { file, reason: "not-a-regular-file", message: "not a regular file" } };
 	if (st.size > MAX_OBSERVATION_BYTES) return { ok: false, skip: { file, reason: "oversized", message: `${st.size} bytes exceeds ${MAX_OBSERVATION_BYTES}` } };
 	// O_NOFOLLOW between lstat and open closes the swap window; the fstat after
 	// open re-checks the object actually opened.
-	const fh = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+	let fh;
+	try {
+		fh = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+	} catch (error) {
+		// ELOOP: the object at the path became a symlink after the lstat.
+		return { ok: false, skip: { file, reason: "symlink", message: `refused to open: ${error instanceof Error ? error.message : String(error)}` } };
+	}
 	try {
 		const fst = await fh.stat();
 		if (!fst.isFile() || fst.size > MAX_OBSERVATION_BYTES) return { ok: false, skip: { file, reason: "not-a-regular-file", message: "file changed between stat and open" } };
@@ -169,6 +261,32 @@ async function readRegularJson(path: string): Promise<{ ok: true; text: string }
 	} finally {
 		await fh.close();
 	}
+}
+
+const ms = (timestamp: string): number => Date.parse(timestamp);
+
+async function realpathOrNull(path: string): Promise<string | null> {
+	try {
+		return await realpath(path);
+	} catch {
+		return null;
+	}
+}
+
+/** One parsed, validated inbox record with its file. */
+type InboxRecord = { file: string; name: string } & ({ kind: "observation"; value: HostObservation } | { kind: "activity"; value: HostActivity });
+
+/**
+ * Did `later` happen in a way that makes `earlier` unable to vouch for the
+ * candidate? Same session, strictly after the check ended, at or before the
+ * capture (an undefined capture bound refuses everything after the run:
+ * without a candidate there is nothing the check could be about anyway).
+ */
+function gates(later: { session_id: string; ended_at: string }, earlier: HostObservation, capturedAtMs: number | undefined): boolean {
+	if (later.session_id !== earlier.session_id) return false;
+	const t = ms(later.ended_at);
+	if (!(t > ms(earlier.ended_at))) return false;
+	return capturedAtMs === undefined || t <= capturedAtMs;
 }
 
 /**
@@ -193,12 +311,28 @@ export async function ingestHostObservations(store: EngineeringStore, options: I
 
 	const attempt = (await store.get("attempt", options.attemptId, { changeId: options.changeId })).record as AttemptRecord;
 	const slice = (await store.get("slice", attempt.slice_id, { changeId: options.changeId })).record as SliceRecord;
+	const attemptCreatedMs = ms(attempt.created_at);
+	// The capture instant of the CURRENT candidate bounds the activity window.
+	// No candidate, or one that cannot be read: the bound is open (refuse more).
+	let capturedAtMs: number | undefined;
+	if (attempt.candidate_snapshot_id !== undefined) {
+		try {
+			const snapshot = (await store.get("snapshot", attempt.candidate_snapshot_id, { changeId: options.changeId, attemptId: attempt.id })).record as SnapshotRecord;
+			capturedAtMs = ms(snapshot.captured_at);
+		} catch {
+			capturedAtMs = undefined;
+		}
+	}
+	const workspaceRoot = await realpathOrNull(options.workspaceRoot ?? resolve(store.root, "..", ".."));
 
+	// Pass 1: read and classify every file. Activity entries and observations
+	// are both needed before any observation can be judged.
+	const records: InboxRecord[] = [];
 	for (const name of entries) {
 		const file = join(inboxDir, name);
 		let text: string;
 		try {
-			const read = await readRegularJson(file);
+			const read = await readInboxFile(file);
 			if (read.ok === false) {
 				outcome.skipped.push(read.skip);
 				continue;
@@ -215,22 +349,66 @@ export async function ingestHostObservations(store: EngineeringStore, options: I
 			outcome.skipped.push({ file, reason: "not-json", message: error instanceof Error ? error.message : String(error) });
 			continue;
 		}
+		if (isActivityShaped(parsed)) {
+			const activity = validateHostActivity(parsed);
+			if (activity.ok === false) {
+				outcome.skipped.push({ file, reason: "invalid-observation", message: `activity: ${activity.message}` });
+				continue;
+			}
+			records.push({ file, name, kind: "activity", value: activity.value });
+			continue;
+		}
 		const validated = validateHostObservation(parsed);
 		if (validated.ok === false) {
 			outcome.skipped.push({ file, reason: "invalid-observation", message: validated.message });
 			continue;
 		}
-		const observation = validated.value;
+		records.push({ file, name, kind: "observation", value: validated.value });
+	}
+
+	// Everything that can gate an observation: activity entries, and every
+	// Bash observation (a later Bash call may have modified files too).
+	const gating = records.map((r) => ({ file: r.file, tool_use_id: r.value.tool_use_id, tool_name: r.value.tool_name, session_id: r.value.session_id, ended_at: r.value.ended_at }));
+
+	// Pass 2: judge and ingest each observation.
+	const rotatable: InboxRecord[] = [];
+	const remaining: HostObservation[] = [];
+	for (const record of records) {
+		if (record.kind === "activity") {
+			rotatable.push(record);
+			continue;
+		}
+		const { file, value: observation } = record;
+
+		if (ms(observation.ended_at) < attemptCreatedMs) {
+			outcome.skipped.push({ file, reason: "observation-predates-attempt", message: `ended ${observation.ended_at}, before attempt ${attempt.id} was created at ${attempt.created_at}` });
+			remaining.push(observation);
+			continue;
+		}
+		const observedIn = await realpathOrNull(observation.cwd);
+		if (workspaceRoot === null || observedIn === null || observedIn !== workspaceRoot) {
+			outcome.skipped.push({ file, reason: "observation-outside-workspace", message: `recorded in ${JSON.stringify(observation.cwd)}, not the workspace root ${JSON.stringify(workspaceRoot)}` });
+			remaining.push(observation);
+			continue;
+		}
+		const later = gating.find((g) => g.file !== file && gates(g, observation, capturedAtMs));
+		if (later !== undefined) {
+			outcome.skipped.push({ file, reason: "tree-activity-after-run", message: `${later.tool_name} call ${later.tool_use_id} completed at ${later.ended_at}, after this check ended at ${observation.ended_at} and before the candidate was captured; the tree may have moved` });
+			remaining.push(observation);
+			continue;
+		}
 
 		// Exact command equality only. A substring or prefix match would let
 		// `npm test; true` discharge the obligation for `npm test`.
 		const matches = slice.proof_obligations.filter((o) => o.command !== undefined && o.command === observation.command);
 		if (matches.length === 0) {
 			outcome.skipped.push({ file, reason: "no-matching-obligation", message: `no obligation on slice ${slice.id} names command ${JSON.stringify(observation.command)}` });
+			remaining.push(observation);
 			continue;
 		}
 		if (matches.length > 1) {
 			outcome.skipped.push({ file, reason: "ambiguous-obligation", message: `obligations ${matches.map((o) => o.id).join(", ")} all name command ${JSON.stringify(observation.command)}` });
+			remaining.push(observation);
 			continue;
 		}
 		const obligation = matches[0];
@@ -270,22 +448,32 @@ export async function ingestHostObservations(store: EngineeringStore, options: I
 			// e.g. idempotency-conflict: same tool_use_id, different bytes — two
 			// files claiming to be one call. Neither is believed.
 			outcome.skipped.push({ file, reason: "proof-refused", message: error instanceof Error ? error.message : String(error) });
+			remaining.push(observation);
 			continue;
 		}
 		if (ingested.ok === false) {
 			outcome.skipped.push({ file, reason: "proof-refused", message: ingested.errors.map((e) => e.message).join("; "), errors: ingested.errors });
+			remaining.push(observation);
 			continue;
 		}
 		outcome.ingested.push({ file, proof_id: ingested.proof.id, obligation_id: obligation.id, authority: ingested.authority, discharges: ingested.discharges, replayed: ingested.replayed, result });
+		rotatable.push(record);
+	}
 
-		if (processedDir !== null) {
-			try {
-				await mkdir(processedDir, { recursive: true });
-				await rename(file, join(processedDir, name));
-				outcome.rotated.push(file);
-			} catch {
-				/* the proof is stored; a file that cannot be rotated is replayed harmlessly next time */
-			}
+	if (processedDir === null) return outcome;
+	for (const record of rotatable) {
+		// Keep anything that still gates an observation left in the inbox: a
+		// refused observation must be refused again on the next read, which
+		// needs the record that refused it to still be there. The capture bound
+		// is deliberately not applied — a later capture may move it.
+		const stillGates = remaining.some((earlier) => earlier.session_id === record.value.session_id && ms(record.value.ended_at) > ms(earlier.ended_at));
+		if (stillGates) continue;
+		try {
+			await mkdir(processedDir, { recursive: true });
+			await rename(record.file, join(processedDir, record.name));
+			outcome.rotated.push(record.file);
+		} catch {
+			/* the proof is stored; a file that cannot be rotated is replayed harmlessly next time */
 		}
 	}
 	return outcome;

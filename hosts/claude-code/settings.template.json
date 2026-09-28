@@ -1,10 +1,16 @@
 {
   "permissions": {
     "deny": [
-      "Write(./.codecarto/engineering/**)",
-      "Edit(./.codecarto/engineering/**)",
+      "Write({{PROJECT_DIR}}/.codecarto/**)",
+      "Edit({{PROJECT_DIR}}/.codecarto/**)",
+      "Write(./.codecarto/**)",
+      "Edit(./.codecarto/**)",
       "Write({{HOOK_DIR}}/**)",
-      "Edit({{HOOK_DIR}}/**)"
+      "Edit({{HOOK_DIR}}/**)",
+      "Write({{NODE}})",
+      "Edit({{NODE}})",
+      "Write({{SETTINGS_FILE}})",
+      "Edit({{SETTINGS_FILE}})"
     ]
   },
   "sandbox": {
@@ -13,6 +19,7 @@
     "failIfUnavailable": true,
     "filesystem": {
       "denyWrite": [
+        "{{PROJECT_DIR}}/.codecarto",
         "{{PROJECT_DIR}}/.codecarto/engineering",
         "{{HOOK_DIR}}",
         "{{NODE}}",
@@ -23,7 +30,7 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
@@ -34,7 +41,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
