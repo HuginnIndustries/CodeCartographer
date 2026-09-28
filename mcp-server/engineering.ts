@@ -53,6 +53,7 @@ import {
 	ingestProof,
 	newRecordId,
 	openStore,
+	readStoredInputDigests,
 	recordReview,
 	requestAcceptance,
 	startAttempt,
@@ -431,7 +432,33 @@ async function updateChange(store: EngineeringStore, args: ChangeArgs, textResul
 	} catch (error) {
 		throw asCallerError(error);
 	}
-	return textResult(`Updated change ${changeId} to revision ${put.revision}.`, { change_id: changeId, revision: put.revision });
+	// `brief.md` is a projection of the change record; once `plan` has
+	// written it, an edit to the record rewrites it so the stored brief is
+	// the one the record describes. An attempt started from the earlier
+	// brief now carries an input digest the stored file no longer has, and
+	// the gate refuses it (`input-stale`): the person would otherwise be
+	// shown the current title and accept work begun under another one.
+	const rewrote = await rewriteBriefIfStored(store, next as ChangeRecord);
+	return textResult(`Updated change ${changeId} to revision ${put.revision}.${rewrote ? " brief.md was regenerated; an attempt started from the earlier brief will be refused by the gate as input-stale." : ""}`, { change_id: changeId, revision: put.revision, ...(rewrote ? { brief_rewritten: true } : {}) });
+}
+
+/** Regenerate `brief.md` from the record when the planner already wrote one. Returns whether it did. */
+async function rewriteBriefIfStored(store: EngineeringStore, record: ChangeRecord): Promise<boolean> {
+	const stored = await readStoredInputDigests(store, record.id);
+	if (stored.ok === false) return false;
+	const brief = buildChangeBrief({
+		title: record.title,
+		mode: record.mode,
+		requested_outcome: record.requested_outcome,
+		baseline: { vcs: "git", description: record.baseline.description },
+		scope: record.scope,
+		preserved_contracts: record.preserved_contracts,
+		acceptance_scenarios: record.acceptance_scenarios,
+		references: record.references,
+	});
+	if (!brief.ok || !brief.markdown) return false;
+	await writeArtifact(store, record.id, "brief.md", brief.markdown);
+	return true;
 }
 
 async function showChange(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown) {
@@ -507,22 +534,35 @@ async function planChange(store: EngineeringStore, args: ChangeArgs, textResult:
 	const planned = { ...record, revision: record.revision + 1, state: "planned" as const, acceptance_scenarios: scenarios, updated_at: now };
 	const validChange = validateRecordOfKind("change", planned);
 	if (validChange.ok === false) invalid(`the planned change is invalid: ${validChange.errors.map((e) => `${e.path} ${e.message}`).join("; ")}`);
+	// The change's compare-and-swap goes FIRST. Two planners racing on the
+	// same revision used to each write their slices and then one of them
+	// lost the CAS — leaving the loser's slices on disk beside the winner's,
+	// so the store held two slice sets for one plan. With the CAS first the
+	// loser writes nothing. The cost is a crash window between the CAS and
+	// the slice writes (a `planned` change with no slices, which `plan`
+	// then refuses to re-plan); that is an operator matter and is stated in
+	// docs/engineering/attempt-lifecycle.md § Limits.
 	try {
+		await store.put(planned as never, { ifRevision: record.revision });
 		await writeArtifact(store, changeId, "brief.md", brief.markdown);
 		await writeArtifact(store, changeId, "plan.md", planMarkdown);
 		for (const slice of slices) await store.put(slice);
-		await store.put(planned as never, { ifRevision: record.revision });
 	} catch (error) {
 		throw asCallerError(error);
 	}
-	const digestText = (text: string) => `sha256:${createHash("sha256").update(text).digest("hex")}`;
+	// The digests reported are read back from the files just written, through
+	// the same reader start_attempt and the gate use — what the caller gets is
+	// what the record will be compared against, not a digest of the in-memory
+	// text that might differ from what landed on disk.
+	const stored = await readStoredInputDigests(store, changeId);
+	if (stored.ok === false) throw new ProtocolError(ProtocolErrorCode.InternalError, `plan wrote brief.md and plan.md for ${changeId} but cannot read ${stored.missing.join(", ")} back`);
 	return textResult(`Planned change ${changeId} (revision ${planned.revision}, ${slices.length} slice(s)).\n\n${brief.markdown}`, {
 		change_id: changeId,
 		revision: planned.revision,
 		state: planned.state,
 		slice_ids: slices.map((s) => s.id),
-		brief_digest: digestText(brief.markdown),
-		plan_digest: digestText(planMarkdown),
+		brief_digest: stored.brief_digest,
+		plan_digest: stored.plan_digest,
 		markdown: brief.markdown,
 	});
 }
@@ -599,7 +639,7 @@ async function candidateOf(store: EngineeringStore, changeId: string, attemptId:
 // ---------------------------------------------------------------------------
 
 /** Fields a caller might use to hand this surface a tree of its choosing. */
-const SNAPSHOT_SUPPLY_FIELDS = ["snapshot", "baseline_snapshot", "candidate_snapshot", "manifest", "coverage", "repository"];
+const SNAPSHOT_SUPPLY_FIELDS = ["snapshot", "baseline_snapshot", "candidate_snapshot", "tree", "capture", "candidate", "baseline", "reread", "candidate_reread", "working_tree", "manifest", "coverage", "repository", "entries", "files"];
 
 /**
  * The capture's scope: the change's and slice's declared exclusions do not
@@ -636,14 +676,28 @@ async function startAttemptAction(store: EngineeringStore, args: ChangeArgs, tex
 	const inputs = args.inputs;
 	if (typeof inputs !== "object" || inputs === null || Array.isArray(inputs)) invalid("inputs must be an object { brief_digest, plan_digest, references }");
 	const { brief_digest, plan_digest, references } = inputs as Record<string, unknown>;
-	if (typeof brief_digest !== "string" || typeof plan_digest !== "string") invalid("inputs.brief_digest and inputs.plan_digest are required digests of the brief and plan the attempt starts from");
+	// The input digests are DERIVED by this adapter from the brief.md and
+	// plan.md that `plan` wrote under the change, through the same reader the
+	// gate compares with. A caller may repeat them (a client that echoes what
+	// `plan` returned) but never choose them: a digest the adapter did not
+	// compute would let the attempt — and every review and approval bound to
+	// its input digest — name inputs nobody can find. A change with no stored
+	// artifacts (planned by an older path) is refused rather than trusted.
+	const derived = await readStoredInputDigests(store, changeId);
+	if (derived.ok === false) {
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `change ${changeId} has no stored ${derived.missing.join(" or ")}; start_attempt derives inputs.brief_digest and inputs.plan_digest from those files and does not accept caller-declared digests. Plan the change with slices first`);
+	}
+	const disagreeing: string[] = [];
+	if (brief_digest !== undefined && brief_digest !== derived.brief_digest) disagreeing.push(`inputs.brief_digest ${JSON.stringify(brief_digest)} (brief.md digests to ${derived.brief_digest})`);
+	if (plan_digest !== undefined && plan_digest !== derived.plan_digest) disagreeing.push(`inputs.plan_digest ${JSON.stringify(plan_digest)} (plan.md digests to ${derived.plan_digest})`);
+	if (disagreeing.length > 0) invalid(`${disagreeing.join("; ")}: the input digests are derived by this adapter from the stored brief.md and plan.md, never taken from the caller; omit them or pass the values plan returned`);
 	const baseline = await adapterCapture(cwd, "baseline");
 	let started;
 	try {
 		started = await startAttempt(store, {
 			change_id: changeId,
 			slice_id: sliceId,
-			inputs: { brief_digest, plan_digest, references: Array.isArray(references) ? (references as never) : [] },
+			inputs: { brief_digest: derived.brief_digest, plan_digest: derived.plan_digest, references: Array.isArray(references) ? (references as never) : [] },
 			baseline: baseline.source,
 			...(typeof args.parent_attempt_id === "string" ? { parent_attempt_id: args.parent_attempt_id } : {}),
 			...(typeof args.request_id === "string" ? { idempotency_key: args.request_id } : {}),
@@ -693,6 +747,9 @@ async function captureCandidateAction(store: EngineeringStore, args: ChangeArgs,
 	);
 }
 
+/** What a recorded review does not establish; stated on every record_review result and in the acceptance presentation (standardLimitations). */
+const REVIEW_LIMITATIONS = ["reviewer separation is declared by the review's author, not authenticated; a review that says declared-separate is a claim about its own context, and the adapter cannot verify who wrote it or from where"];
+
 async function recordReviewAction(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown) {
 	refuseDerivedFields(args, "record_review");
 	const changeId = requireString(args, "change_id");
@@ -706,8 +763,9 @@ async function recordReviewAction(store: EngineeringStore, args: ChangeArgs, tex
 		throw asCallerError(error);
 	}
 	return textResult(
-		`Recorded review ${recorded.review.id} of candidate ${recorded.review.candidate_snapshot_id} (${recorded.review.remaining_blockers.length} blocker(s) remaining); attempt ${attemptId} is ${recorded.attempt.outcome}${recorded.finalized ? " (finalized by this review; the candidate is now frozen)" : ""}.`,
+		`Recorded review ${recorded.review.id} of candidate ${recorded.review.candidate_snapshot_id} (${recorded.review.remaining_blockers.length} blocker(s) remaining); attempt ${attemptId} is ${recorded.attempt.outcome}${recorded.finalized ? " (finalized by this review; the candidate is now frozen)" : ""}.\n\nLimitations:\n${REVIEW_LIMITATIONS.map((l) => `- ${l}`).join("\n")}`,
 		{
+			limitations: REVIEW_LIMITATIONS,
 			change_id: changeId,
 			attempt_id: attemptId,
 			review_id: recorded.review.id,
@@ -844,12 +902,17 @@ async function requestAcceptanceAction(store: EngineeringStore, args: ChangeArgs
 	}
 	structured.request_id = result.request_id;
 	structured.expires_at = result.request.expires_at;
+	// What the person was shown as limitations is what the caller is told:
+	// among them any approval file under the attempt that was NOT counted
+	// as an acceptance (judgeApprovals), so a dropped file is disclosed
+	// rather than silently walked past.
+	structured.limitations = result.request.presentation.limitations;
 	if (result.outcome === "accepted") {
 		structured.approval_id = result.approval.id;
 		structured.classification = result.classification.class;
 		structured.classification_reasons = result.classification.reasons;
 		return textResult(
-			`Accepted through ${result.approval.receipt.channel} on ${result.approval.receipt.client.name} ${result.approval.receipt.client.version}: approval ${result.approval.id} (reads as ${result.classification.class}).`,
+			`Accepted through ${result.approval.receipt.channel} on ${result.approval.receipt.client.name} ${result.approval.receipt.client.version}: approval ${result.approval.id} (reads as ${result.classification.class}).\n\nLimitations:\n${result.request.presentation.limitations.map((l) => `- ${l}`).join("\n")}`,
 			structured,
 		);
 	}
@@ -913,7 +976,7 @@ export const ENGINEERING_TOOLS = [
 				request_id: { type: "string", description: "Caller-chosen id making create retry-safe." },
 				attempt_id: { type: "string", description: "Attempt to capture a candidate for (capture_candidate), review (record_review), evaluate (gate), ask acceptance for (request_acceptance), or ingest host observations for (ingest_observations)." },
 				slice_id: { type: "string", description: "Slice the attempt works on (start_attempt)." },
-				inputs: { type: "object", description: "{ brief_digest, plan_digest, references } the attempt starts from (start_attempt); the input digest is derived." },
+				inputs: { type: "object", description: "{ references } the attempt starts from (start_attempt). brief_digest and plan_digest are derived by the server from the stored brief.md/plan.md; if supplied they must equal what plan returned." },
 				parent_attempt_id: { type: "string", description: "The attempt this one retries or continues (start_attempt)." },
 				proof: { type: "object", description: "A proof of a check the HOST ran (record_proof)." },
 				review: { type: "object", description: "{ reviewer, objections, summary } (record_review). The candidate and input digests are bound from the stored attempt, never supplied." },

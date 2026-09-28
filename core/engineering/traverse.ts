@@ -43,9 +43,10 @@
 // "write some slices". The loop judges the WORK first and the HOST second --
 // the same ordering the acceptance gate uses, for the same reason.
 
-import type { ApprovalRecord, AttemptRecord, ChangeRecord, ProofRecord, ReviewRecord, SliceRecord } from "./types.ts";
+import type { AttemptRecord, ChangeRecord, ProofRecord, ReviewRecord, SliceRecord, StorageBoundary } from "./types.ts";
 import type { EngineeringStore } from "./store.ts";
-import { boundCandidate, listAttemptRecords } from "./lifecycle.ts";
+import { boundCandidate, judgeApprovals, listAttemptRecords } from "./lifecycle.ts";
+import { evaluateAcceptanceGate } from "./gates.ts";
 import { createHash } from "node:crypto";
 
 /** Every reason the loop can stop. A stop is always one of these, never prose. */
@@ -304,10 +305,46 @@ async function planFromRecords(
 		// An approval already recorded for the bound candidate is a decision
 		// that was made; asking again would ask a person to decide something
 		// already decided. The loop stops and names the approval.
+		// "Recorded" means judged genuine by judgeApprovals (lifecycle.ts):
+		// decision, candidate id + digest, input digest, stored request and
+		// receipt binding. A file under approvals/ that fails that judgement
+		// is not silently skipped: the loop stops for an operator, naming the
+		// file and the codes, because an approval nobody issued is either a
+		// forgery or a broken adapter, and neither is the loop's to walk past.
 		const candidate = await boundCandidate(store, latest);
-		const accepted = candidate ? await acceptedApproval(store, change.id, latest.id, candidate) : null;
+		const verdicts = candidate ? await judgeApprovals(store, latest, candidate) : [];
+		const accepted = verdicts.find((v) => v.genuine === true);
 		if (accepted) {
-			return stop("change-concluded", `approval ${accepted.id} records acceptance of candidate ${accepted.candidate_snapshot_id} (attempt ${latest.id}); conclude the change rather than asking again`, history);
+			return stop("change-concluded", `approval ${accepted.id} records acceptance of candidate ${accepted.approval.candidate_snapshot_id} (attempt ${latest.id}); conclude the change rather than asking again`, history);
+		}
+		const suspect = verdicts.filter((v) => v.genuine === false);
+		if (suspect.length > 0) {
+			return stop(
+				"blocked-needs-operator",
+				`${suspect.map((v) => `approval ${v.id} under attempt ${latest.id} is not a genuine acceptance of the bound candidate (${v.codes.join(", ")}): ${v.detail}`).join(" | ")}. An approval file that binds to no stored request is an operator matter; the loop will not conclude on it and will not ask for another decision over it`,
+				history,
+			);
+		}
+		// A finalized attempt the gate would refuse (no observed proof, an
+		// open objection, drifted inputs) must not send the host to ask a
+		// person: the request would be refused before anyone was asked, and
+		// telling the host to ask is telling it to loop on a refusal. The gate
+		// runs here without a re-read (this module sees no repository), so a
+		// stale tree is still the adapter's to find at request time.
+		const gate = await evaluateAcceptanceGate(store, {
+			change_id: change.id,
+			attempt_id: latest.id,
+			host: { can_obtain_human_decision: request.host.can_obtain_human_decision, storage: { boundary: request.host.storage.boundary as StorageBoundary, ...(request.host.storage.protection !== undefined ? { protection: request.host.storage.protection } : {}) } },
+		});
+		if (gate.state === "refused") {
+			return {
+				...stop(
+					"blocked-needs-operator",
+					`attempt ${latest.id} is needs-human-acceptance but the acceptance gate refuses it (${gate.blockers.map((b) => b.code).join(", ")}): ${gate.blockers.map((b) => `${b.detail} — ${b.remedy}`).join(" | ")}. Asking a person would be refused before anyone was asked; the remedy is a new attempt that clears the blockers`,
+					history,
+				),
+				resumed_from: resumedFrom(latest),
+			};
 		}
 		if (!request.host.can_obtain_human_decision) {
 			return stop(
@@ -366,14 +403,6 @@ async function runningStage(store: EngineeringStore, changeId: string, attempt: 
 	const blocked = reviews.find((r) => r.remaining_blockers.length > 0);
 	if (blocked) return { kind: "objections", candidate, review: blocked };
 	return { kind: "reviewed" };
-}
-
-async function acceptedApproval(store: EngineeringStore, changeId: string, attemptId: string, candidate: { id: string; digest: string }): Promise<ApprovalRecord | null> {
-	for (const id of await listAttemptRecords(store, changeId, attemptId, "approvals")) {
-		const approval = await readOne<ApprovalRecord>(store, "approval", id, { changeId, attemptId });
-		if (approval && approval.decision === "accepted" && approval.candidate_snapshot_id === candidate.id && approval.candidate_digest === candidate.digest) return approval;
-	}
-	return null;
 }
 
 /**

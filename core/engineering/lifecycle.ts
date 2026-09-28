@@ -31,15 +31,15 @@
 // in this module can mint an approval or move an attempt to `accepted`.
 // ---------------------------------------------------------------------------
 
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { computeInputDigest, computeSnapshotDigest, digestOf } from "./digest.ts";
-import { newRecordId } from "./ids.ts";
+import { computeInputDigest, computeSnapshotDigest, digestOf, digestOfBytes } from "./digest.ts";
+import { engineeringPaths, newRecordId } from "./ids.ts";
 import { candidateMayBindAcceptance } from "./snapshots.ts";
 import { StoreError, type EngineeringStore } from "./store.ts";
-import { ENGINEERING_SCHEMA_VERSION, type AttemptInputs, type AttemptRecord, type ChangeRecord, type ProofRecord, type ReviewRecord, type SliceRecord, type SnapshotRecord } from "./types.ts";
-import { deriveRemainingBlockers, validateRecordOfKind } from "./validation.ts";
+import { ENGINEERING_SCHEMA_VERSION, type AcceptanceRequest, type ApprovalRecord, type AttemptInputs, type Digest, type AttemptRecord, type ChangeRecord, type ProofRecord, type ReviewRecord, type SliceRecord, type SnapshotRecord } from "./types.ts";
+import { deriveRemainingBlockers, evaluateApprovalReceipt, validateAcceptanceRequest, validateRecordOfKind } from "./validation.ts";
 
 /** The identity fields a capture yields; the adapter fills them from its own read of the tree. */
 export type CapturedTree = Pick<SnapshotRecord, "coverage" | "manifest" | "repository" | "stability">;
@@ -117,6 +117,109 @@ export async function proofsReferencing(store: EngineeringStore, changeId: strin
 		}
 	}
 	return referencing;
+}
+
+/**
+ * The digests of the brief and plan as STORED under the change — the raw
+ * bytes of `brief.md` and `plan.md` (record-contract.md § attempt.inputs).
+ * This is the one function that turns those files into `brief_digest` /
+ * `plan_digest`: the planner reports what it wrote through it, the adapter
+ * derives an attempt's inputs through it, and the gate compares through it.
+ * A caller-declared digest is never the source. `missing` names the files
+ * that are not there (a change planned before the artifacts were written).
+ */
+export async function readStoredInputDigests(store: EngineeringStore, changeId: string): Promise<{ ok: true; brief_digest: Digest; plan_digest: Digest } | { ok: false; missing: Array<"brief.md" | "plan.md"> }> {
+	const digests: Partial<Record<"brief.md" | "plan.md", Digest>> = {};
+	const missing: Array<"brief.md" | "plan.md"> = [];
+	for (const [name, relative] of [["brief.md", engineeringPaths.brief(changeId)], ["plan.md", engineeringPaths.plan(changeId)]] as const) {
+		try {
+			digests[name] = digestOfBytes(await readFile(join(store.root, relative.replace(/^engineering\//, ""))));
+		} catch {
+			missing.push(name);
+		}
+	}
+	if (missing.length > 0) return { ok: false, missing };
+	return { ok: true, brief_digest: digests["brief.md"] as Digest, plan_digest: digests["plan.md"] as Digest };
+}
+
+/** Read the stored copy of an acceptance request; a receipt is checked against what is on disk, not an in-memory object. `null` when absent or invalid. */
+export async function readStoredRequest(store: EngineeringStore, changeId: string, attemptId: string, requestId: string): Promise<AcceptanceRequest | null> {
+	const relative = engineeringPaths.acceptanceRequest(changeId, attemptId, requestId).replace(/^engineering\//, "");
+	try {
+		const parsed = JSON.parse(await readFile(join(store.root, relative), "utf8")) as unknown;
+		const valid = validateAcceptanceRequest(parsed);
+		return valid.ok ? valid.value : null;
+	} catch {
+		return null;
+	}
+}
+
+/** One approval file under an attempt, judged against the attempt's CURRENT bound candidate. */
+export type ApprovalVerdict =
+	| { id: string; genuine: true; approval: ApprovalRecord }
+	/** `codes` are the receipt/binding error codes, or `record-unreadable` when the file will not parse or validate. */
+	| { id: string; genuine: false; approval: ApprovalRecord | null; codes: string[]; detail: string };
+
+/**
+ * THE ONE PLACE an approval on disk becomes "the candidate is accepted".
+ *
+ * A file under `approvals/` is a claim, not a decision. It is a genuine
+ * acceptance of the attempt's current candidate only when: it parses and
+ * validates as an approval; its `decision` is `accepted`; it names the bound
+ * candidate by id AND digest and the attempt's input digest; the acceptance
+ * request its receipt names is stored under this attempt; and
+ * `evaluateApprovalReceipt` binds it to that stored request with a nonce no
+ * OTHER approval has consumed. Anything less is reported with the codes that
+ * failed, so a reader can refuse to conclude on it and an operator can see
+ * why a file that looks like an approval is not one. A schema-valid approval
+ * dropped into the directory by hand (no stored request, a fixture receipt)
+ * used to conclude the change in traverse and to block a real request in the
+ * adapter; neither path ran the receipt check. Every reader now asks here.
+ *
+ * The consumed-nonce set for each approval is the nonces of the other
+ * approvals in the directory (per `ReceiptContext`: an approval's own nonce
+ * is passed nowhere), so two files replaying one receipt refuse each other
+ * and neither is genuine.
+ */
+export async function judgeApprovals(store: EngineeringStore, attempt: AttemptRecord, candidate: SnapshotRecord): Promise<ApprovalVerdict[]> {
+	const changeId = attempt.change_id;
+	const context = { changeId, attemptId: attempt.id };
+	const read: Array<{ id: string; approval: ApprovalRecord | null; detail: string }> = [];
+	for (const id of await listAttemptRecords(store, changeId, attempt.id, "approvals")) {
+		try {
+			read.push({ id, approval: (await store.get("approval", id, context)).record as ApprovalRecord, detail: "" });
+		} catch (error) {
+			read.push({ id, approval: null, detail: error instanceof Error ? error.message : String(error) });
+		}
+	}
+	const verdicts: ApprovalVerdict[] = [];
+	for (const { id, approval, detail } of read) {
+		if (approval === null) {
+			verdicts.push({ id, genuine: false, approval: null, codes: ["record-unreadable"], detail: `approval ${id} cannot be read: ${detail}` });
+			continue;
+		}
+		// Every binding — decision, candidate id and digest, input digest, the
+		// stored request, the nonce — is checked by evaluateApprovalReceipt
+		// against the stored request and the CURRENT bound candidate; nothing
+		// is re-checked here, so there is exactly one place the rule lives.
+		const codes: string[] = [];
+		const why: string[] = [];
+		const request = await readStoredRequest(store, changeId, attempt.id, approval.receipt.request_id);
+		const consumed = read.filter((other) => other.id !== id && other.approval !== null).map((other) => (other.approval as ApprovalRecord).receipt.nonce);
+		const receipt = evaluateApprovalReceipt(approval, { request: request ?? undefined, consumed_nonces: consumed, attempt, candidate });
+		if (receipt.ok === false) {
+			for (const error of receipt.errors) {
+				codes.push(error.code);
+				why.push(`${error.code} at ${error.path}: ${error.message}`);
+			}
+		} else if (!receipt.accepted) {
+			codes.push("invalid-value");
+			why.push(`decision is ${approval.decision}, not accepted`);
+		}
+		if (codes.length === 0) verdicts.push({ id, genuine: true, approval });
+		else verdicts.push({ id, genuine: false, approval, codes: [...new Set(codes)], detail: `approval ${id} is not a genuine acceptance of candidate ${candidate.id}: ${[...new Set(why)].join("; ")}` });
+	}
+	return verdicts;
 }
 
 function snapshotRecord(args: { changeId: string; attemptId: string; role: "baseline" | "candidate"; source: SnapshotSource; capturedAt: string }): SnapshotRecord {

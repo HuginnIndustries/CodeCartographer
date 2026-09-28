@@ -213,6 +213,16 @@ export async function readWorkingTree(root: string, candidate: SnapshotRecord): 
 }
 
 /**
+ * @internal Test seam only: runs between the two walks of a capture so a
+ * test can move the tree at exactly the moment stability is judged. No MCP
+ * argument and no caller in this package reaches it; `stripInternal` keeps it
+ * out of the published declarations.
+ */
+export interface CaptureSeams {
+	between_walks?: () => Promise<void> | void;
+}
+
+/**
  * Capture the working tree at `root` as a snapshot identity, by the adapter.
  *
  * `excluded` is the scope the capture is taken under — the host-declared
@@ -225,8 +235,18 @@ export async function readWorkingTree(root: string, candidate: SnapshotRecord): 
  * same settled tree yields the same digest.
  */
 export async function captureWorkingTree(root: string, excluded: readonly CoverageExclusion[] = []): Promise<WorkingTreeCapture> {
+	return captureWorkingTreeWithSeams(root, excluded);
+}
+
+/**
+ * @internal The capture with its test seam. Not part of the published
+ * surface (`stripInternal`); the adapter calls `captureWorkingTree`, which
+ * passes no seam, and no MCP argument reaches this.
+ */
+export async function captureWorkingTreeWithSeams(root: string, excluded: readonly CoverageExclusion[] = [], seams?: CaptureSeams): Promise<WorkingTreeCapture> {
 	const scope: CoverageExclusion[] = [...ALWAYS_EXCLUDED, ...excluded];
 	const first = await observe(root, scope);
+	if (seams?.between_walks) await seams.between_walks();
 	const second = await observe(root, scope);
 	const moved = JSON.stringify(first) !== JSON.stringify(second);
 	const head = await readGitHead(root);

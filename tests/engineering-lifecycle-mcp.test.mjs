@@ -17,7 +17,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -27,8 +27,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LAUNCHER = join(REPO_ROOT, "tests/helpers/acceptance-server.mjs");
 const execFileAsync = promisify(execFile);
 const engineering = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/index.ts`).href);
-const { openStore, checkCandidateFreshness, planTraverseStep, ENGINEERING_SCHEMA_VERSION } = engineering;
-const { readWorkingTree, captureWorkingTree } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/working-tree.ts`).href);
+const { openStore, checkCandidateFreshness, planTraverseStep, captureCandidate, judgeApprovals, readStoredInputDigests, requestAcceptance, ENGINEERING_SCHEMA_VERSION } = engineering;
+const { readWorkingTree, captureWorkingTree, captureWorkingTreeWithSeams } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/working-tree.ts`).href);
 const { handleChangeForTest: handleChange, handleInit } = await import(pathToFileURL(`${REPO_ROOT}/mcp-server/server.ts`).href);
 const { ProtocolError } = await import("@modelcontextprotocol/server");
 
@@ -315,6 +315,283 @@ test("the store pins a running attempt's identity and compare-and-swaps on the b
 		await assert.rejects(() => store.put({ ...running, outcome: "accepted", candidate_snapshot_id: "snp_000000000000000000000bad", ended_at: running.started_at }, { ifCandidate: null }), /not an allowed transition/);
 		await assert.rejects(() => store.put({ ...running, failure_summary: "x" }, { ifCandidate: "snp_000000000000000000000bad" }), /expected candidate/);
 		await assert.rejects(() => store.put({ ...running, failure_summary: "x" }), /pass ifCandidate/);
+	});
+});
+
+// ---------------------------------------------------------------- review drivers (D1-D4)
+
+/** A schema-valid approval that nobody minted: the fixture's receipt (a request id and nonce that exist nowhere under this attempt) re-pointed at the bound candidate. */
+async function forgeApproval(store, changeId, sliceId, attemptId, candidate, inputDigest, id, overrides = {}) {
+	const fixture = JSON.parse(await readFile(join(REPO_ROOT, "tests", "fixtures", "engineering", "v1", "valid", "approval.json"), "utf8"));
+	const now = new Date().toISOString();
+	const forged = { ...fixture, id, change_id: changeId, slice_id: sliceId, attempt_id: attemptId, candidate_snapshot_id: candidate.id, candidate_digest: candidate.digest, input_digest: inputDigest, decision: "accepted", created_at: now, decided_at: now, ...overrides };
+	const dir = join(store.root, "changes", changeId, "attempts", attemptId, "approvals");
+	await mkdir(dir, { recursive: true });
+	await writeFile(join(dir, `${id}.json`), `${JSON.stringify(forged, null, "\t")}\n`);
+	return forged;
+}
+
+/** Drive the loop to needs-human-acceptance with an observed proof and a clean review; returns the bound candidate. */
+async function finalizeCleanly(cwd, store, changeId, attemptId) {
+	await writeFile(join(cwd, "count.js"), "export const count = (items) => items.filter(Boolean).length;\n");
+	const captured = (await handleChange({ cwd, action: "capture_candidate", change_id: changeId, attempt_id: attemptId })).structuredContent;
+	await observedProofThroughHostEntry(store, changeId, attemptId, captured.candidate_snapshot_id);
+	const reviewed = (await handleChange({ cwd, action: "record_review", change_id: changeId, attempt_id: attemptId, review: REVIEW })).structuredContent;
+	assert.equal(reviewed.finalized, true);
+	return { candidate: (await store.get("snapshot", captured.candidate_snapshot_id, { changeId, attemptId })).record, inputDigest: reviewed.input_digest };
+}
+
+const approvalsOnDisk = async (store, changeId, attemptId) => (await readdir(join(store.root, "changes", changeId, "attempts", attemptId, "approvals"))).filter((n) => n.endsWith(".json")).map((n) => n.slice(0, -5)).sort();
+
+test("D1: a schema-valid forged approval (no stored request) never concludes the change: traverse stops for an operator naming it; request_acceptance proceeds, discloses it, and mints exactly one genuine approval; then traverse concludes naming the GENUINE one", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const { changeId, sliceId, attemptId } = await planAndStart(cwd, head);
+		const { candidate, inputDigest } = await finalizeCleanly(cwd, store, changeId, attemptId);
+		const forgedId = `apr_${"d".repeat(24)}`;
+		await forgeApproval(store, changeId, sliceId, attemptId, candidate, inputDigest, forgedId);
+
+		const verdicts = await judgeApprovals(store, (await store.get("attempt", attemptId, { changeId })).record, candidate);
+		assert.equal(verdicts.length, 1);
+		assert.equal(verdicts[0].genuine, false);
+		assert.ok(verdicts[0].codes.includes("receipt-unknown-request"), JSON.stringify(verdicts[0]));
+
+		const blocked = await traverse(store, changeId);
+		assert.equal(blocked.action, "stop");
+		assert.equal(blocked.stop_reason, "blocked-needs-operator", blocked.rationale);
+		assert.match(blocked.rationale, new RegExp(forgedId));
+		assert.match(blocked.rationale, /receipt-unknown-request/);
+		assert.equal((await handleChange({ cwd, action: "gate", change_id: changeId, attempt_id: attemptId })).structuredContent.state, "needs-human-acceptance");
+
+		// The dropped file cannot deny service. In-process first (the stdio launcher below runs from dist/, so this is what pins the source): with no
+		// channel the adapter still issues a request rather than refusing already-accepted, and the presentation it stores discloses the ignored file.
+		const noChannel = await requestAcceptance(store, { change_id: changeId, attempt_id: attemptId, capabilities: { human_acceptance: "none", label: "mcp-server", verified_integration: true, storage_boundary: "none", assurance_policy: "verified", tool_result_path: "none" }, presenter: { elicit: async () => { throw new Error("never presented"); } }, current_storage: { boundary: "none" }, reread: async (c) => { const r = await readWorkingTree(cwd, c); return r.ok ? { ok: true, reread: r.reread, limitations: r.limitations } : { ok: false, reason: r.reason }; } });
+		assert.equal(noChannel.outcome, "needs-human-acceptance", JSON.stringify(noChannel));
+		assert.ok(noChannel.request_id, "a request was issued despite the forged file");
+		assert.ok(noChannel.request.presentation.limitations.some((l) => l.includes(`approval ${forgedId} under this attempt is not a genuine acceptance`) && /receipt-unknown-request/.test(l)), JSON.stringify(noChannel.request.presentation.limitations));
+		// Then through the real server: the real request goes to the person, and what they are shown names the file.
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: { action: "accept", content: { decision: "accept" } } }) }, async ({ send, elicitations }) => {
+			const reply = await send("tools/call", { name: "codecarto_change", arguments: { cwd, action: "request_acceptance", change_id: changeId, attempt_id: attemptId } });
+			assert.ok(!reply.error, JSON.stringify(reply.error));
+			const out = reply.result.structuredContent;
+			assert.equal(out.outcome, "accepted", JSON.stringify(out));
+			assert.equal(elicitations.length, 1);
+			assert.match(elicitations[0].message, new RegExp(`approval ${forgedId} under this attempt is not a genuine acceptance`));
+			assert.match(elicitations[0].message, /receipt-unknown-request/);
+			assert.match(JSON.stringify(out), new RegExp(`approval ${forgedId} under this attempt is not a genuine acceptance`), "the result discloses the ignored approval by id");
+		});
+		const ids = await approvalsOnDisk(store, changeId, attemptId);
+		assert.equal(ids.length, 2, "the forged file is left in place (an operator matter), plus the one genuine approval");
+		const after = await judgeApprovals(store, (await store.get("attempt", attemptId, { changeId })).record, candidate);
+		const genuine = after.filter((v) => v.genuine);
+		assert.equal(genuine.length, 1, "exactly one genuine approval per candidate");
+		assert.notEqual(genuine[0].id, forgedId);
+		const concluded = await traverse(store, changeId);
+		assert.equal(concluded.action, "stop");
+		assert.equal(concluded.stop_reason, "change-concluded");
+		assert.match(concluded.rationale, new RegExp(genuine[0].id));
+		assert.doesNotMatch(concluded.rationale, new RegExp(forgedId));
+		// A second request is refused as already-accepted by the GENUINE one, not the forged one.
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: { action: "accept", content: { decision: "accept" } } }) }, async ({ send, elicitations }) => {
+			const reply = await send("tools/call", { name: "codecarto_change", arguments: { cwd, action: "request_acceptance", change_id: changeId, attempt_id: attemptId } });
+			const text = JSON.stringify(reply);
+			assert.match(text, new RegExp(`already-accepted: approval ${genuine[0].id}`), text);
+			assert.equal(elicitations.length, 0);
+		});
+		assert.equal((await approvalsOnDisk(store, changeId, attemptId)).length, 2, "nothing further was minted");
+
+		// The genuine approval is genuine for the bound candidate ONLY: judged against another snapshot of the attempt (the baseline, standing in for a superseded candidate) it is not.
+		const attempt = (await store.get("attempt", attemptId, { changeId })).record;
+		const baseline = (await store.get("snapshot", attempt.baseline_snapshot_id, { changeId, attemptId })).record;
+		const against = await judgeApprovals(store, attempt, { ...baseline, role: "candidate" });
+		assert.ok(against.every((v) => v.genuine === false), JSON.stringify(against));
+		assert.ok(against.find((v) => v.id === genuine[0].id).codes.includes("receipt-mismatch"));
+	});
+});
+
+test("D1: a forged approval whose decision is rejected, or that names another candidate's id or digest, is not genuine even with every other field right; and a genuine record's nonce cannot be replayed", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const { changeId, sliceId, attemptId } = await planAndStart(cwd, head);
+		const { candidate, inputDigest } = await finalizeCleanly(cwd, store, changeId, attemptId);
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: { action: "accept", content: { decision: "accept" } } }) }, async ({ send }) => {
+			const reply = await send("tools/call", { name: "codecarto_change", arguments: { cwd, action: "request_acceptance", change_id: changeId, attempt_id: attemptId } });
+			assert.equal(reply.result.structuredContent.outcome, "accepted");
+		});
+		const attempt = (await store.get("attempt", attemptId, { changeId })).record;
+		const [genuineId] = await approvalsOnDisk(store, changeId, attemptId);
+		const genuine = JSON.parse(await readFile(join(store.root, "changes", changeId, "attempts", attemptId, "approvals", `${genuineId}.json`), "utf8"));
+		// A REJECTED decision with a fully valid receipt (the genuine file, decision flipped, standing alone) is a decision, not an acceptance.
+		const rejectedId = `apr_${"9".repeat(24)}`;
+		await forgeApproval(store, changeId, sliceId, attemptId, candidate, inputDigest, rejectedId, { ...genuine, id: rejectedId, decision: "rejected" });
+		await rm(join(store.root, "changes", changeId, "attempts", attemptId, "approvals", `${genuineId}.json`));
+		const alone = await judgeApprovals(store, attempt, candidate);
+		assert.equal(alone.length, 1);
+		assert.equal(alone[0].genuine, false, "a rejected decision is never genuine acceptance");
+		assert.ok(alone[0].codes.includes("invalid-value") && /rejected/.test(alone[0].detail), JSON.stringify(alone[0]));
+		assert.equal((await traverse(store, changeId)).stop_reason, "blocked-needs-operator");
+		await rm(join(store.root, "changes", changeId, "attempts", attemptId, "approvals", `${rejectedId}.json`));
+		await writeFile(join(store.root, "changes", changeId, "attempts", attemptId, "approvals", `${genuineId}.json`), `${JSON.stringify(genuine, null, "\t")}\n`);
+		assert.equal((await traverse(store, changeId)).stop_reason, "change-concluded");
+		// Copies of the genuine record with one binding wrong each: same stored request, same receipt.
+		const wrong = {
+			[`apr_${"1".repeat(24)}`]: { decision: "rejected" },
+			[`apr_${"2".repeat(24)}`]: { candidate_digest: sha("other bytes") },
+			[`apr_${"3".repeat(24)}`]: { candidate_snapshot_id: attempt.baseline_snapshot_id },
+			[`apr_${"4".repeat(24)}`]: { input_digest: sha("other inputs") },
+		};
+		for (const [id, patch] of Object.entries(wrong)) await forgeApproval(store, changeId, sliceId, attemptId, candidate, inputDigest, id, { ...genuine, id, ...patch });
+		const verdicts = await judgeApprovals(store, attempt, candidate);
+		for (const id of Object.keys(wrong)) {
+			const v = verdicts.find((x) => x.id === id);
+			assert.equal(v.genuine, false, id);
+			assert.ok(v.codes.some((c) => c === "receipt-mismatch" || c === "invalid-value" || c === "receipt-replayed"), `${id}: ${v.codes}`);
+		}
+		// The genuine record itself now shares its nonce with four replays; per the receipt contract a nonce bound elsewhere is a replay, so NOTHING is genuine and traverse stops for an operator rather than concluding.
+		assert.ok(verdicts.every((v) => v.genuine === false), JSON.stringify(verdicts.map((v) => [v.id, v.genuine, v.codes])));
+		const step = await traverse(store, changeId);
+		assert.equal(step.stop_reason, "blocked-needs-operator", step.rationale);
+	});
+});
+
+test("D2: start_attempt derives brief_digest/plan_digest from the stored brief.md/plan.md; caller values that differ are refused naming both; omitted values are filled; the gate refuses an attempt whose inputs drifted after start", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const created = (await handleChange({ cwd, action: "create", title: "Count widgets", outcome: "count() counts", baseline_commit: head })).structuredContent;
+		await assert.rejects(
+			() => handleChange({ cwd, action: "start_attempt", change_id: created.change_id, slice_id: "slc_000000000000000000000bad", inputs: { references: [] } }),
+			(e) => e instanceof ProtocolError && /no stored brief\.md or plan\.md/.test(e.message) && /does not accept caller-declared digests/.test(e.message),
+			"a change with no stored artifacts is refused, not trusted",
+		);
+		const planned = (await handleChange({ cwd, action: "plan", change_id: created.change_id, revision: created.revision, acceptance_scenarios: SCENARIOS, slices: [SLICE] })).structuredContent;
+		const stored = await readStoredInputDigests(store, created.change_id);
+		assert.equal(stored.ok, true);
+		assert.equal(planned.brief_digest, stored.brief_digest, "plan reports the digest of the bytes it stored");
+		assert.equal(planned.plan_digest, stored.plan_digest);
+		const bogus = { brief_digest: `sha256:${"a".repeat(64)}`, plan_digest: `sha256:${"b".repeat(64)}`, references: [] };
+		await assert.rejects(
+			() => handleChange({ cwd, action: "start_attempt", change_id: created.change_id, slice_id: planned.slice_ids[0], inputs: bogus }),
+			(e) => e instanceof ProtocolError && e.message.includes(`inputs.brief_digest "${bogus.brief_digest}"`) && e.message.includes(`inputs.plan_digest "${bogus.plan_digest}"`) && e.message.includes(stored.brief_digest) && e.message.includes(stored.plan_digest),
+		);
+		await assert.rejects(() => handleChange({ cwd, action: "start_attempt", change_id: created.change_id, slice_id: planned.slice_ids[0], inputs: { brief_digest: planned.brief_digest, plan_digest: "not even a digest", references: [] } }), /inputs\.plan_digest "not even a digest"/);
+		assert.deepEqual(await readdir(join(store.root, "changes", created.change_id)).then((n) => n.filter((x) => x === "attempts")), [], "no attempt was written by the refused calls");
+		// Omitted: the adapter computes them, and they equal what plan returned.
+		const started = (await handleChange({ cwd, action: "start_attempt", change_id: created.change_id, slice_id: planned.slice_ids[0], inputs: { references: [] } })).structuredContent;
+		const attempt = (await store.get("attempt", started.attempt_id, { changeId: created.change_id })).record;
+		assert.equal(attempt.inputs.brief_digest, planned.brief_digest);
+		assert.equal(attempt.inputs.plan_digest, planned.plan_digest);
+		// Happy path unchanged: echoing plan's values is accepted too.
+		const echoed = (await handleChange({ cwd, action: "start_attempt", change_id: created.change_id, slice_id: planned.slice_ids[0], inputs: { brief_digest: planned.brief_digest, plan_digest: planned.plan_digest, references: [] }, parent_attempt_id: started.attempt_id })).structuredContent;
+		assert.equal(echoed.outcome, "running");
+		assert.equal(echoed.input_digest, started.input_digest);
+
+		// Drift: update the title after the attempt started. brief.md is regenerated; the attempt keeps the digest it started from; the gate refuses it by name.
+		await finalizeCleanly(cwd, store, created.change_id, echoed.attempt_id);
+		const before = (await handleChange({ cwd, action: "gate", change_id: created.change_id, attempt_id: echoed.attempt_id })).structuredContent;
+		assert.equal(before.state, "needs-human-acceptance", JSON.stringify(before.blockers));
+		const change = (await store.get("change", created.change_id)).record;
+		const updated = (await handleChange({ cwd, action: "update", change_id: created.change_id, revision: change.revision, title: "Renamed after start" })).structuredContent;
+		assert.equal(updated.brief_rewritten, true);
+		const now = await readStoredInputDigests(store, created.change_id);
+		assert.notEqual(now.brief_digest, planned.brief_digest, "the stored brief moved");
+		assert.equal(now.plan_digest, planned.plan_digest, "the plan did not");
+		const after = (await handleChange({ cwd, action: "gate", change_id: created.change_id, attempt_id: echoed.attempt_id })).structuredContent;
+		assert.equal(after.state, "refused");
+		const stale = after.blockers.filter((b) => b.code === "input-stale");
+		assert.equal(stale.length, 1, JSON.stringify(after.blockers));
+		assert.match(stale[0].detail, /brief_digest/);
+		assert.ok(stale[0].detail.includes(planned.brief_digest) && stale[0].detail.includes(now.brief_digest), stale[0].detail);
+		assert.doesNotMatch(stale[0].detail, /plan_digest/);
+		// And the loop does not send the host to ask a person for work the gate refuses.
+		const step = await traverse(store, created.change_id);
+		assert.equal(step.action, "stop");
+		assert.equal(step.stop_reason, "blocked-needs-operator", step.rationale);
+		assert.match(step.rationale, /input-stale/);
+	});
+});
+
+test("D3: a clean review does not finalize when the reviewer is same-context, or the candidate is unstable or caller-attested; only a declared-separate review of an adapter-attested stable candidate does", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const { changeId, attemptId } = await planAndStart(cwd, head);
+		const captured = (await handleChange({ cwd, action: "capture_candidate", change_id: changeId, attempt_id: attemptId })).structuredContent;
+		assert.equal(captured.stability, "stable");
+		const sameContext = (await handleChange({ cwd, action: "record_review", change_id: changeId, attempt_id: attemptId, review: { ...REVIEW, reviewer: { context: "same-session", separation: "same-context", label: "the author" } } })).structuredContent;
+		assert.equal(sameContext.finalized, false, "a same-context review is a review, not a finalization");
+		assert.equal(sameContext.outcome, "running");
+		assert.deepEqual(sameContext.remaining_blockers, []);
+		assert.equal((await store.get("attempt", attemptId, { changeId })).record.outcome, "running");
+
+		// An UNSTABLE candidate, captured by the adapter's own walker while the tree moved between its two walks (the test seam), bound through core.
+		const moving = await captureWorkingTreeWithSeams(cwd, [], { between_walks: async () => writeFile(join(cwd, "count.js"), `export const count = () => ${Date.now()};\n`) });
+		assert.equal(moving.ok, true);
+		assert.equal(moving.capture.stability, "unstable", "the walker saw the tree move");
+		assert.ok(moving.limitations.some((l) => /recorded unstable/.test(l)));
+		const { digest: _d, ...tree } = moving.capture;
+		const unstable = await captureCandidate(store, { change_id: changeId, attempt_id: attemptId, candidate: { attested_by: "adapter", collector: "host-observed", tree } });
+		assert.equal(unstable.snapshot.stability, "unstable");
+		const onUnstable = (await handleChange({ cwd, action: "record_review", change_id: changeId, attempt_id: attemptId, review: REVIEW })).structuredContent;
+		assert.equal(onUnstable.finalized, false, "a clean separate review of an unstable candidate does not finalize");
+		assert.equal(onUnstable.candidate_snapshot_id, unstable.snapshot.id);
+		assert.equal((await store.get("attempt", attemptId, { changeId })).record.outcome, "running");
+		const gateUnstable = (await handleChange({ cwd, action: "gate", change_id: changeId, attempt_id: attemptId })).structuredContent;
+		assert.ok(gateUnstable.blockers.some((b) => b.code === "proof-stale" && b.detail.includes(unstable.snapshot.id) && /moving/.test(b.detail)), JSON.stringify(gateUnstable.blockers));
+
+		// A CALLER-attested candidate (the core path an adapter that cannot read the tree would use).
+		const settled = await captureWorkingTree(cwd);
+		const { digest: _d2, ...settledTree } = settled.capture;
+		const callerBound = await captureCandidate(store, { change_id: changeId, attempt_id: attemptId, candidate: { attested_by: "caller", collector: "host-observed", tree: settledTree } });
+		assert.equal(callerBound.snapshot.attested_by, "caller");
+		const onCaller = (await handleChange({ cwd, action: "record_review", change_id: changeId, attempt_id: attemptId, review: REVIEW })).structuredContent;
+		assert.equal(onCaller.finalized, false, "a clean separate review of a caller-attested candidate does not finalize");
+		assert.equal((await store.get("attempt", attemptId, { changeId })).record.outcome, "running");
+		assert.ok((await handleChange({ cwd, action: "gate", change_id: changeId, attempt_id: attemptId })).structuredContent.state === "refused");
+
+		// Only the adapter's own stable capture with a declared-separate clean review finalizes.
+		const again = (await handleChange({ cwd, action: "capture_candidate", change_id: changeId, attempt_id: attemptId })).structuredContent;
+		assert.equal(again.stability, "stable");
+		const clean = (await handleChange({ cwd, action: "record_review", change_id: changeId, attempt_id: attemptId, review: REVIEW })).structuredContent;
+		assert.equal(clean.finalized, true);
+		assert.equal(clean.outcome, "needs-human-acceptance");
+	});
+});
+
+test("D3: plan writes once, from draft, under compare-and-swap: a missing or stale revision is refused, a planned change cannot be re-planned, and two racing planners leave exactly one slice set", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const created = (await handleChange({ cwd, action: "create", title: "Count widgets", outcome: "count() counts", baseline_commit: head })).structuredContent;
+		const write = (extra) => handleChange({ cwd, action: "plan", change_id: created.change_id, acceptance_scenarios: SCENARIOS, slices: [SLICE], ...extra });
+		await assert.rejects(() => write({}), (e) => e instanceof ProtocolError && /plan requires the revision you last read/.test(e.message));
+		await assert.rejects(() => write({ revision: created.revision + 1 }), (e) => e instanceof ProtocolError && /plan requires the revision you last read/.test(e.message));
+		await assert.rejects(() => write({ revision: "1" }), /plan requires the revision/);
+		assert.equal((await store.get("change", created.change_id)).record.state, "draft", "a refused plan wrote nothing");
+		await assert.rejects(() => readdir(join(store.root, "changes", created.change_id, "slices")), /ENOENT/);
+		const race = await Promise.allSettled([write({ revision: created.revision }), write({ revision: created.revision })]);
+		const won = race.filter((r) => r.status === "fulfilled");
+		assert.equal(won.length, 1, JSON.stringify(race.map((r) => r.status === "rejected" ? r.reason.message : "ok")));
+		const slices = await readdir(join(store.root, "changes", created.change_id, "slices"));
+		assert.equal(slices.length, 1, "the loser's slices were not written");
+		assert.deepEqual(slices, won[0].value.structuredContent.slice_ids);
+		const planned = (await store.get("change", created.change_id)).record;
+		assert.equal(planned.state, "planned");
+		await assert.rejects(() => write({ revision: planned.revision }), (e) => e instanceof ProtocolError && /is planned; slices are planned once, from draft/.test(e.message));
+		await handleChange({ cwd, action: "start_attempt", change_id: created.change_id, slice_id: slices[0], inputs: { references: [] } });
+		const active = (await store.get("change", created.change_id)).record;
+		assert.equal(active.state, "active");
+		await assert.rejects(() => write({ revision: active.revision }), /is active; slices are planned once, from draft/);
+		assert.equal((await readdir(join(store.root, "changes", created.change_id, "slices"))).length, 1);
+	});
+});
+
+test("D4: every snapshot-shaped argument is refused by name on both capture actions, and record_review discloses that reviewer separation is declared, not authenticated", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const { changeId, sliceId, attemptId } = await planAndStart(cwd, head);
+		const forged = { repository: { vcs: "none", dirty: false }, manifest: [], coverage: { excluded: [], uncovered_relevant_inputs: [] }, stability: "stable" };
+		for (const field of ["snapshot", "baseline_snapshot", "candidate_snapshot", "tree", "capture", "candidate", "baseline", "reread", "candidate_reread", "working_tree", "manifest", "coverage", "repository", "entries", "files"]) {
+			await assert.rejects(() => handleChange({ cwd, action: "capture_candidate", change_id: changeId, attempt_id: attemptId, [field]: forged }), (e) => e instanceof ProtocolError && e.message.includes(`${field} is not accepted by capture_candidate`), field);
+			await assert.rejects(() => handleChange({ cwd, action: "start_attempt", change_id: changeId, slice_id: sliceId, inputs: { references: [] }, [field]: forged }), (e) => e instanceof ProtocolError && e.message.includes(`${field} is not accepted by start_attempt`), field);
+		}
+		assert.equal((await store.get("attempt", attemptId, { changeId })).record.candidate_snapshot_id, undefined);
+		await handleChange({ cwd, action: "capture_candidate", change_id: changeId, attempt_id: attemptId });
+		const out = await handleChange({ cwd, action: "record_review", change_id: changeId, attempt_id: attemptId, review: REVIEW });
+		const disclosure = /reviewer separation is declared by the review's author, not authenticated/;
+		assert.match(out.content[0].text, disclosure);
+		assert.ok(out.structuredContent.limitations.some((l) => disclosure.test(l)), JSON.stringify(out.structuredContent.limitations));
 	});
 });
 

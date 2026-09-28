@@ -59,8 +59,10 @@ A caller-supplied `snapshot` / `baseline_snapshot` / `candidate_snapshot` / `man
 | running, proof names the candidate, no review of it | `request-review` (key: attempt + candidate) |
 | running, review with open/deferred blockers | `address-objections` naming the review and blockers; remedy is a new attempt |
 | running, reviewed clean, not yet finalized | `resume-attempt` |
+| `needs-human-acceptance`, gate refuses (no observed proof, open objection, `input-stale`) | `stop` / `blocked-needs-operator` naming the gate's blockers — the host is never told to ask a person for work the gate would refuse |
 | `needs-human-acceptance`, no approval | `request-human-acceptance` |
-| `needs-human-acceptance`, accepted approval for the bound candidate | `stop` / `change-concluded` naming the approval |
+| `needs-human-acceptance`, a GENUINE accepted approval for the bound candidate (`judgeApprovals`) | `stop` / `change-concluded` naming the approval |
+| `needs-human-acceptance`, an approval file that is NOT genuine (no stored request, replayed nonce, other candidate, rejected decision) | `stop` / `blocked-needs-operator` naming the file and the codes; never concluded, never silently skipped |
 | failed / blocked / budget | unchanged |
 
 `capture-candidate` was added to `TRAVERSE_ACTIONS`; the running stages above are what a host session sees between `start-attempt` and `request-human-acceptance`.
@@ -69,7 +71,22 @@ A caller-supplied `snapshot` / `baseline_snapshot` / `candidate_snapshot` / `man
 
 `VERIFIED_ACCEPTANCE_INTEGRATIONS` is `[]`; `assurance_policy` is `verified`; `cooperative` is unreachable; there is no approve/accept path; the only approval in the new test is minted by the existing `request_acceptance` adapter through the test-only registry seam. An MCP-recorded proof is still `claimed`; the end-to-end test writes its one observed proof the way E05's protected host entry would, and says so where it does it.
 
+## What an approval file is worth
+
+`judgeApprovals(store, attempt, candidate)` in `lifecycle.ts` is the one place a file under `approvals/` becomes "the candidate is accepted": it reads the stored request the receipt names and runs `evaluateApprovalReceipt` against it, the attempt, the CURRENT bound candidate, and the other approvals' nonces. `traverse.ts` concludes only on a genuine verdict; `acceptance.ts` counts only genuine approvals as `already-accepted`, so a schema-valid file dropped into the directory can neither conclude a change nor deny a real request — it is disclosed in the presentation's limitations (and the `request_acceptance` result) by id and codes, and traverse stops for an operator on it. Exactly one genuine approval per candidate still holds: a later genuine mint consumes a fresh nonce, and a replayed nonce refuses every file sharing it.
+
+## Inputs are derived, then compared
+
+`readStoredInputDigests(store, changeId)` digests the raw `brief.md`/`plan.md` bytes. `plan` reports what it stored through it; `start_attempt` derives `inputs.brief_digest`/`plan_digest` through it and refuses a caller value that differs (naming both) or a change with no stored artifacts; `update` regenerates `brief.md` when one is stored; the gate re-reads both files and refuses `input-stale` when the attempt's digests no longer match what is stored. The MCP `plan` write performs its change CAS before writing slices, so two racing planners leave one slice set.
+
 ## Limits
+
+- `judgeApprovals` judges against the CURRENT bound candidate only; an approval genuine for a superseded candidate reads as `receipt-mismatch`, which is the intended reading (old acceptance is history).
+- A non-genuine approval file is left in place and disclosed; nothing on this surface removes it.
+- `plan` write: a crash between the change CAS and the slice writes leaves a `planned` change with no slices, which `plan` refuses to re-plan; an operator matter.
+- The gate's `input-stale` compare is skipped with a limitation (not a refusal) when the change has no stored `brief.md`/`plan.md` (records seeded straight into the store); the MCP surface never starts an attempt without them.
+- Reviewer separation is declared by the review's author, not authenticated; `record_review` and the presentation say so.
+- `captureWorkingTree` has an `@internal` `seams.between_walks` hook (test only; `stripInternal` keeps it out of `dist` declarations; no MCP argument reaches it).
 
 - `repository.dirty` is always `true` on captures from a git tree (no git is run).
 - Scope is `ALWAYS_EXCLUDED` only; there is no host-declared exclusion channel on MCP yet.
