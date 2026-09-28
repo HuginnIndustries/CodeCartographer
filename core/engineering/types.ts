@@ -689,7 +689,7 @@ export const MUTATING_CHANGE_ACTIONS: readonly ChangeAction[] = ["create", "plan
  */
 export interface HostCapabilities {
 	human_acceptance: HumanAcceptanceCapability;
-	/** Display label of the host, e.g. `claude-code`. */
+	/** Label of the HOST that runs the adapter and mints the receipt, e.g. `mcp-server`; the connected client (e.g. `claude-code`) is `client`. */
 	label?: string;
 	/** The connected client as the transport reports it, e.g. `{ name: "claude-code", version: "2.1.0" }`. */
 	client?: { name: string; version?: string };

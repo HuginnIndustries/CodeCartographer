@@ -48,14 +48,21 @@ import {
 	ingestProof,
 	newRecordId,
 	openStore,
+	requestAcceptance,
 	type ChangeRecord,
+	type CurrentStorage,
 	type EngineeringStore,
+	type HostCapabilities,
+	type Presenter,
 	type ProofRecord,
+	type SnapshotRecord,
+	type VerifiedAcceptanceIntegration,
 } from "../core/engineering/index.ts";
-import { ENGINEERING_SCHEMA_VERSION } from "../core/engineering/types.ts";
+import { ENGINEERING_SCHEMA_VERSION, type AttemptRecord } from "../core/engineering/types.ts";
+import { readWorkingTree } from "./working-tree.ts";
 
 /** Every action this surface implements. Pinned so the schema and the dispatch cannot drift. */
-export const CHANGE_ACTIONS = ["create", "update", "show", "list", "plan", "record_proof", "gate", "ingest_observations"] as const;
+export const CHANGE_ACTIONS = ["create", "update", "show", "list", "plan", "record_proof", "gate", "request_acceptance", "ingest_observations"] as const;
 export type ChangeAction = (typeof CHANGE_ACTIONS)[number];
 
 /**
@@ -131,6 +138,11 @@ function asCallerError(error: unknown): unknown {
 		case "invalid-request":
 		case "stale-revision":
 			return new ProtocolError(ProtocolErrorCode.InvalidParams, message);
+		case "invalid-state":
+			// The records are not in a state this action can act on (no
+			// candidate bound, already accepted, a request in flight). The
+			// request is what is wrong, so a retry without change fails again.
+			return new ProtocolError(ProtocolErrorCode.InvalidRequest, message);
 		default:
 			return error;
 	}
@@ -208,6 +220,13 @@ export function createChangeHandler(deps: {
 	validateCwd: (cwd: unknown) => Promise<string>;
 	requireWorkspaceDir: (cwd: string) => Promise<string>;
 	textResult: (text: string, structured?: Record<string, unknown>) => unknown;
+	/**
+	 * The live session, for `request_acceptance`. Derived by the SERVER from
+	 * the transport (client capabilities and clientInfo at initialize) and
+	 * from host configuration; absent for handlers driven without a session,
+	 * in which case the host declares no channel.
+	 */
+	session?: () => AcceptanceSession | undefined;
 }) {
 	return async function handleChange(args: ChangeArgs) {
 		const action = args.action;
@@ -239,7 +258,9 @@ export function createChangeHandler(deps: {
 			case "record_proof":
 				return await recordProof(store, args, deps.textResult);
 			case "gate":
-				return await gateChange(store, args, deps.textResult);
+				return await gateChange(store, args, deps.textResult, cwd);
+			case "request_acceptance":
+				return await requestAcceptanceAction(store, args, deps.textResult, deps.session?.(), cwd);
 			case "ingest_observations":
 				return await ingestObservations(store, args, deps.textResult);
 		}
@@ -465,16 +486,38 @@ async function recordProof(store: EngineeringStore, args: ChangeArgs, textResult
 	});
 }
 
-async function gateChange(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown) {
+/**
+ * The bound candidate of an attempt, or null when the records do not resolve.
+ * The gate reports the missing record itself; this only serves the re-read.
+ */
+async function boundCandidate(store: EngineeringStore, changeId: string, attemptId: string): Promise<SnapshotRecord | null> {
+	try {
+		const attempt = (await store.get("attempt", attemptId, { changeId })).record as AttemptRecord;
+		if (!attempt.candidate_snapshot_id) return null;
+		return (await store.get("snapshot", attempt.candidate_snapshot_id, { changeId, attemptId })).record as SnapshotRecord;
+	} catch {
+		return null;
+	}
+}
+
+async function gateChange(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown, cwd: string) {
 	const changeId = requireString(args, "change_id");
 	const attemptId = typeof args.attempt_id === "string" ? args.attempt_id : undefined;
+	// The re-read is what lets the gate check freshness at all; without it the
+	// gate can only disclose that the tree was not looked at. A candidate that
+	// cannot be re-read gets no re-read, and the gate says so.
+	const candidate = attemptId ? await boundCandidate(store, changeId, attemptId) : null;
+	const reread = candidate ? await readWorkingTree(cwd, candidate) : null;
 	const outcome = await evaluateAcceptanceGate(store, {
 		change_id: changeId,
 		attempt_id: attemptId ?? "",
 		// An MCP tool call cannot obtain a human decision on its own. Saying so
 		// is the honest answer; E08 introduces the channel that can.
 		host: { can_obtain_human_decision: false, storage: { boundary: "none", protection: "unknown" } },
+		...(reread?.ok ? { candidate_reread: reread.reread } : {}),
 	});
+	if (reread && reread.ok === false) outcome.limitations.push(`the working tree could not be re-read: ${reread.reason}`);
+	if (reread?.ok) outcome.limitations.push(...reread.limitations);
 	return textResult(describeGateOutcome(outcome), {
 		change_id: changeId,
 		state: outcome.state,
@@ -483,6 +526,120 @@ async function gateChange(store: EngineeringStore, args: ChangeArgs, textResult:
 	});
 }
 
+// ---------------------------------------------------------------------------
+// request_acceptance (E08): ASK the person through the client. Never grants.
+// ---------------------------------------------------------------------------
+
+/**
+ * What the server knows about the connected session. Built by server.ts from
+ * the SDK's initialize-scoped client capabilities and clientInfo plus host
+ * configuration — never from tool arguments.
+ */
+export interface AcceptanceSession {
+	/** Whether the client declared `elicitation.form` at initialize. */
+	elicitation_form: boolean;
+	client?: { name: string; version?: string };
+	/** How this session is named in receipts. */
+	host_session?: string;
+	/** From host/user-level configuration outside the workspace; defaults to the least-trusted values. */
+	storage_boundary: HostCapabilities["storage_boundary"];
+	tool_result_path: HostCapabilities["tool_result_path"];
+	current_storage: CurrentStorage;
+	presenter: Presenter;
+	/**
+	 * @internal Test seam: the registry to consult instead of the contract's.
+	 * Reachable only through {@link buildServer}'s options in server.ts, which
+	 * bin.mjs never passes; there is no environment or config path to it.
+	 */
+	registry?: ReadonlyArray<VerifiedAcceptanceIntegration>;
+}
+
+/** The host label this adapter registers under; the registry is keyed by (host, client.name, client.version, channel). */
+export const ACCEPTANCE_HOST_LABEL = "mcp-server";
+
+/**
+ * Fields that would let a request describe its own host. The contract lists
+ * them as unknown-field on every action; they are refused here by name so a
+ * caller learns that capability is derived, not declared.
+ */
+const HOST_CAPABILITY_FIELDS = ["host", "assurance", "assurance_policy", "verified_integration", "storage", "storage_boundary", "attested_by", "tool_result_path", "current_storage", "protection", "human_acceptance", "label", "client", "capabilities", "registry", "approve", "approved", "approval", "receipt", "human_accepted"];
+
+/** HostCapabilities from the session and nothing else. `assurance_policy` is always `verified` (D5). */
+export function hostCapabilitiesFromSession(session: AcceptanceSession | undefined): HostCapabilities {
+	return {
+		human_acceptance: session?.elicitation_form ? "mcp-elicitation" : "none",
+		label: ACCEPTANCE_HOST_LABEL,
+		...(session?.client ? { client: session.client } : {}),
+		// Derived by acceptanceChannelSupported from the registry; declared true
+		// here so that function — and only that function — decides.
+		verified_integration: true,
+		storage_boundary: session?.storage_boundary ?? "none",
+		assurance_policy: "verified",
+		tool_result_path: session?.tool_result_path ?? "none",
+	};
+}
+
+async function requestAcceptanceAction(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown, session: AcceptanceSession | undefined, cwd: string) {
+	refuseDerivedFields(args, "request_acceptance");
+	for (const field of HOST_CAPABILITY_FIELDS) {
+		if (args[field] !== undefined) invalid(`unknown field ${field}: host capabilities and decisions are derived from the session and the client, never from a request`);
+	}
+	const changeId = requireString(args, "change_id");
+	const attemptId = requireString(args, "attempt_id");
+	const capabilities = hostCapabilitiesFromSession(session);
+	let result;
+	try {
+		result = await requestAcceptance(store, {
+			change_id: changeId,
+			attempt_id: attemptId,
+			capabilities,
+			host_session: session?.host_session,
+			presenter: session?.presenter ?? { elicit: async () => ({ threw: "no session: nothing can be presented" }) },
+			current_storage: session?.current_storage ?? { boundary: "none" },
+			registry: session?.registry,
+			// The adapter is the only party that can see the repository, so
+			// the fresh re-read the gate compares against is taken HERE.
+			reread: (candidate) => readWorkingTree(cwd, candidate),
+		});
+	} catch (error) {
+		throw asCallerError(error);
+	}
+	const structured: Record<string, unknown> = {
+		change_id: changeId,
+		attempt_id: attemptId,
+		outcome: result.outcome,
+		assurance: result.assurance,
+	};
+	if (result.request === undefined) {
+		// The gate refused or the tree could not be re-read: no request was
+		// issued and nobody was asked. The blockers are the whole answer.
+		structured.reason = result.reason;
+		if (result.gate) {
+			structured.gate_state = result.gate.state;
+			structured.blockers = result.gate.blockers;
+			structured.limitations = result.gate.limitations;
+		}
+		return textResult(`${result.outcome}: ${displayText(result.reason.split("\n")[0])} (no request issued; nothing presented).\n\n${result.gate ? describeGateOutcome(result.gate) : ""}`, structured);
+	}
+	structured.request_id = result.request_id;
+	structured.expires_at = result.request.expires_at;
+	if (result.outcome === "accepted") {
+		structured.approval_id = result.approval.id;
+		structured.classification = result.classification.class;
+		structured.classification_reasons = result.classification.reasons;
+		return textResult(
+			`Accepted through ${result.approval.receipt.channel} on ${result.approval.receipt.client.name} ${result.approval.receipt.client.version}: approval ${result.approval.id} (reads as ${result.classification.class}).`,
+			structured,
+		);
+	}
+	structured.reason = result.reason;
+	if ("elicitation" in result) structured.elicitation = result.elicitation;
+	return textResult(`${result.outcome}: ${displayText(result.reason)} (request ${result.request_id} stored; nothing minted).`, structured);
+}
+
+// ---------------------------------------------------------------------------
+// ingest_observations (E05): read the hook's inbox into proofs. Never protected here.
+// ---------------------------------------------------------------------------
 
 /**
  * Ingest the host's hook-written observations for one attempt (E05, #409).
@@ -519,7 +676,7 @@ export const ENGINEERING_TOOLS = [
 	{
 		name: "codecarto_change",
 		description:
-			"EXPERIMENTAL. Record and inspect an engineering change: its brief, its plan, proofs of checks a host ran, and the acceptance gate. This surface records what a host did — it never runs anything, and it cannot approve work.",
+			"EXPERIMENTAL. Record and inspect an engineering change: its brief, its plan, proofs of checks a host ran, and the acceptance gate. request_acceptance ASKS the person through the client's own elicitation form; it never grants. This surface records what a host did — it never runs anything, and it cannot approve work.",
 		inputSchema: {
 			type: "object" as const,
 			properties: {
@@ -530,7 +687,7 @@ export const ENGINEERING_TOOLS = [
 				outcome: { type: "string", description: "The outcome being requested (create)." },
 				revision: { type: "number", description: "Compare-and-swap revision the caller last read (update)." },
 				request_id: { type: "string", description: "Caller-chosen id making create retry-safe." },
-				attempt_id: { type: "string", description: "Attempt to evaluate (gate) or to ingest host observations for (ingest_observations)." },
+				attempt_id: { type: "string", description: "Attempt to evaluate (gate), to ask acceptance for (request_acceptance), or to ingest host observations for (ingest_observations)." },
 				proof: { type: "object", description: "A proof of a check the HOST ran (record_proof)." },
 				mode: { type: "string", enum: ["fix", "feature", "refactor", "migration", "investigation"], description: "Change mode (create); defaults to feature." },
 				baseline_commit: { type: "string", description: "Full commit hash the change is based on (create). Without it the baseline is recorded as having no VCS, because HEAD alone never identifies a candidate." },

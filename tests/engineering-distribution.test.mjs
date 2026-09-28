@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -324,4 +324,47 @@ test("a developer's real engineering record in the checkout does not travel into
 			assert.deepEqual(entries, [], "the pack root copy carried an engineering record from its source checkout");
 		}, sourceRoot);
 	});
+});
+
+test("the published declarations compile for a consumer with skipLibCheck off: no @internal member is referenced by a public signature", async () => {
+	// `stripInternal` removes an `@internal` interface from the .d.ts but
+	// leaves any PUBLIC signature that names it dangling (TS2304 in the
+	// consumer). Consumers with `skipLibCheck: false` see that as a broken
+	// package. The repo's own tsc, not npx, so the check runs offline.
+	//
+	// The consumer lives under node_modules/.cache (gitignored scratch, not
+	// the live .codecarto/) and imports dist by a RELATIVE specifier. An
+	// absolute one is not portable: on Windows pathToFileURL(...).pathname
+	// is "/D:/a/...", which tsc cannot resolve, and the runner's temp dir is
+	// on a different drive from the checkout, so no relative path from there
+	// exists either.
+	const cacheRoot = join(REPO_ROOT, "node_modules", ".cache");
+	await mkdir(cacheRoot, { recursive: true });
+	const dir = await mkdtemp(join(cacheRoot, "codecarto-dts-"));
+	try {
+		const tsc = join(REPO_ROOT, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc");
+		const consumer = join(dir, "use.ts");
+		const dist = relative(dir, join(REPO_ROOT, "dist")).split(sep).join("/");
+		await writeFile(consumer, [
+			`import { buildServer } from "${dist}/mcp-server/server.js";`,
+			`import { openStore, requestAcceptance } from "${dist}/core/index.js";`,
+			`const server = buildServer();`,
+			`void server; void openStore; void requestAcceptance;`,
+			``,
+		].join("\n"));
+		await writeFile(join(dir, "tsconfig.json"), JSON.stringify({
+			compilerOptions: { noEmit: true, skipLibCheck: false, module: "NodeNext", moduleResolution: "NodeNext", target: "ES2022", strict: true, types: ["node"], typeRoots: [join(REPO_ROOT, "node_modules", "@types")] },
+			files: [consumer],
+		}));
+		const run = await execFileAsync(tsc, ["-p", join(dir, "tsconfig.json")], { cwd: REPO_ROOT, shell: process.platform === "win32" }).then(
+			({ stdout, stderr }) => ({ code: 0, out: `${stdout}${stderr}` }),
+			(error) => ({ code: error.code ?? 1, out: `${error.stdout ?? ""}${error.stderr ?? ""}` }),
+		);
+		// Errors inside the SDK's own declarations are not this package's to
+		// fix; only diagnostics that name a file under dist/ are ours.
+		const ours = run.out.split("\n").filter((line) => /dist\/(core|mcp-server)\/.*error TS/.test(line) || /use\.ts.*error TS/.test(line));
+		assert.deepEqual(ours, [], `the published declarations do not compile for a consumer:\n${run.out}`);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
