@@ -188,10 +188,15 @@ test("a new waiter takes a number larger than every ticket it can see, so a same
 		// A live holder with ticket number 5 and a token that sorts after anything random.
 		const holder = join(dir, `status.yaml.lock.t.000000000000005-${process.pid}-zzzz`);
 		await writeFile(holder, `${process.pid}\n${new Date().toISOString()}\nzzzz\n`, "utf8");
-		const b = acquireLock(lockPath, { timeoutMs: 400 });
-		await wait(100);
-		const [mine] = (await tickets(dir)).filter((n) => !n.endsWith("-zzzz"));
-		assert.match(mine, /^status\.yaml\.lock\.t\.000000000000006-/, "one more than the largest ticket on the floor, not the clock");
+		// The waiter's timeout is generous and the ticket is polled for, not
+		// sampled after a fixed sleep: on a loaded Windows runner the waiter had
+		// not written its ticket 100 ms in, so `mine` was undefined (#447 CI).
+		const b = acquireLock(lockPath, { timeoutMs: 3000 });
+		let mine;
+		for (const started = Date.now(); mine === undefined && Date.now() - started < 2500; await wait(20)) {
+			[mine] = (await tickets(dir)).filter((n) => !n.endsWith("-zzzz"));
+		}
+		assert.match(mine ?? "(no ticket written within 2.5 s)", /^status\.yaml\.lock\.t\.000000000000006-/, "one more than the largest ticket on the floor, not the clock");
 		await assert.rejects(b, /Timed out waiting for lock/, "and it waits behind the holder");
 		await rm(holder);
 		const c = await acquireLock(lockPath);

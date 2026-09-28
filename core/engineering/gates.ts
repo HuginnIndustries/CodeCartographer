@@ -41,6 +41,7 @@ import type {
 	StorageBoundary,
 } from "./types.ts";
 import type { EngineeringStore } from "./store.ts";
+import { boundCandidate, readStoredInputDigests } from "./lifecycle.ts";
 
 /**
  * Stated on every outcome, without exception.
@@ -87,7 +88,8 @@ export interface GateBlocker {
 		| "attempt-not-ready"
 		| "record-unreadable"
 		| "review-not-independent"
-		| "proof-scenario-uncovered";
+		| "proof-scenario-uncovered"
+		| "input-stale";
 	/** What is wrong, in the reader's terms. Free text from records is neutralized. */
 	detail: string;
 	/** What would clear it. A gate that refuses without saying what to fix gets routed around. */
@@ -244,8 +246,8 @@ export async function evaluateAcceptanceGate(store: EngineeringStore, request: G
 					: "an attempt must reach ready-for-review or needs-human-acceptance before acceptance may be offered",
 		});
 	}
-	const candidateId = attempt.candidate_snapshot_id;
-	const candidate = candidateId ? await readRecord<SnapshotRecord>(store, "snapshot", candidateId, { changeId: request.change_id, attemptId: attempt.id }) : null;
+	// One resolution of "the attempt's candidate" for every reader (lifecycle.ts).
+	const candidate = await boundCandidate(store, attempt);
 
 	// An attempt with no candidate has nothing to accept: acceptance binds to
 	// specific bytes, and there are none.
@@ -281,6 +283,33 @@ export async function evaluateAcceptanceGate(store: EngineeringStore, request: G
 			limitations.push(
 				"the adapter supplied no re-read of the working tree, so nothing here shows the tree still matches the candidate; the proofs describe the bytes captured at snapshot time",
 			);
+		}
+	}
+
+	// ---- the inputs the attempt started from must still be the stored ones ----
+	// `attempt.inputs` is pinned at start and every review and approval binds
+	// to its digest; but `brief.md`/`plan.md` can be rewritten afterwards (an
+	// `update` of the title regenerates the brief). A person shown the current
+	// brief would then be accepting work started from a different one. The
+	// same reader that derived the digests at start re-reads the files here;
+	// an attempt started from bytes that are no longer stored is refused. A
+	// change with no stored artifacts at all (records seeded straight into the
+	// store, or planned before the MCP plan wrote them) has nothing to compare
+	// against: that is disclosed as a limitation rather than refused, because
+	// the MCP surface never starts an attempt without the files and refusing
+	// here would turn every store-seeded record into a gate failure without
+	// saying what a person could do about it.
+	const storedInputs = await readStoredInputDigests(store, request.change_id);
+	if (storedInputs.ok === false) {
+		limitations.push(`the change has no stored ${storedInputs.missing.join(" or ")}, so attempt ${attempt.id}'s input digests could not be compared against the stored inputs; nothing here shows the brief and plan the attempt started from are the ones on disk`);
+	} else {
+		const drifted = (["brief_digest", "plan_digest"] as const).filter((field) => attempt.inputs[field] !== storedInputs[field]);
+		if (drifted.length > 0) {
+			blockers.push({
+				code: "input-stale",
+				detail: `${drifted.map((field) => `${field} of attempt ${attempt.id} is ${safeText(attempt.inputs[field])} but the stored ${field === "brief_digest" ? "brief.md" : "plan.md"} digests to ${safeText(storedInputs[field])}`).join("; ")}`,
+				remedy: "the brief or plan changed after the attempt started; start a new attempt from the current inputs (parent_attempt_id naming this one) rather than accepting work against inputs that are no longer stored",
+			});
 		}
 	}
 

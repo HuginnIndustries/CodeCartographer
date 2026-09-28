@@ -132,7 +132,7 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	}
 	const dir = join(REPO_ROOT, "core", "engineering");
 	const files = (await readdir(dir)).filter((n) => n.endsWith(".ts")).sort();
-	assert.deepEqual(files, ["acceptance.ts", "digest.ts", "gates.ts", "host-observations.ts", "ids.ts", "index.ts", "lift.ts", "planning.ts", "proofs.ts", "snapshots.ts", "store.ts", "traverse.ts", "types.ts", "validation.ts"]);
+	assert.deepEqual(files, ["acceptance.ts", "digest.ts", "gates.ts", "host-observations.ts", "ids.ts", "index.ts", "lifecycle.ts", "lift.ts", "planning.ts", "proofs.ts", "snapshots.ts", "store.ts", "traverse.ts", "types.ts", "validation.ts"]);
 	// snapshots (E03) sits beside validation: both consume types/ids/digest and
 	// neither imports the other. store (E02) sits above both: it is the one
 	// file here that is ALLOWED to touch the filesystem, because persisting
@@ -164,7 +164,14 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	// record store, and only `node:fs` -- never a child process, never the
 	// environment, so the attestation it derives comes from host capabilities
 	// passed in, not from anything it could discover on its own.
-	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, lift: 2, store: 3, proofs: 4, gates: 4, acceptance: 5, "host-observations": 5, traverse: 5, index: 6 };
+	// lifecycle (#409) sits ABOVE the store, beside proofs: it starts an
+	// attempt, binds its candidate, and records a review, all in terms of
+	// persisted state, and it owns the ONE resolution of "the attempt's
+	// candidate" (`boundCandidate`) that gates, acceptance, host-observations
+	// and traverse all read through. It enumerates an attempt's proofs and
+	// reviews with `node:fs`, never a child process; the tree it records is
+	// handed to it by the adapter, already read.
+	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, lift: 2, store: 3, proofs: 4, lifecycle: 4, gates: 5, acceptance: 6, "host-observations": 6, traverse: 6, index: 7 };
 	// Everything except the store must stay pure. Splitting the rule rather
 	// than dropping it: a validator that gained a `node:fs` import would
 	// still fail, which is the property this test was written for.
@@ -177,7 +184,7 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	// reviews. Note gates reaches fs through a STATIC import on purpose — a
 	// dynamic `await import("node:fs/promises")` would slip past this regex
 	// entirely, which is evasion rather than compliance.
-	const IMPURE = ["index.ts", "store.ts", "proofs.ts", "gates.ts", "acceptance.ts", "host-observations.ts"];
+	const IMPURE = ["index.ts", "store.ts", "proofs.ts", "lifecycle.ts", "gates.ts", "acceptance.ts", "host-observations.ts"];
 	const PURE = files.filter((f) => !IMPURE.includes(f));
 	for (const file of files) {
 		const source = await readFile(join(dir, file), "utf8");
@@ -188,7 +195,7 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 				const dep = target.slice(2, -3);
 				assert.ok(layer[dep] < layer[name], `${file} imports ${target}, which is not below it`);
 				assert.notEqual(dep, "index", `${file} imports the barrel`);
-			} else if (name === "store" || name === "proofs" || name === "gates" || name === "acceptance" || name === "host-observations") {
+			} else if (name === "store" || name === "proofs" || name === "lifecycle" || name === "gates" || name === "acceptance" || name === "host-observations") {
 				// The store may reach the filesystem and the shared primitives it
 				// would otherwise reimplement: atomic write, transient-error
 				// retry, and the workspace lock. host-observations additionally

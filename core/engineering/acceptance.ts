@@ -45,6 +45,7 @@ import { describeGateOutcome, evaluateAcceptanceGate, type GateOutcome } from ".
 import { engineeringPaths, newNonce, newRecordId } from "./ids.ts";
 import type { EngineeringStore } from "./store.ts";
 import { StoreError } from "./store.ts";
+import { boundCandidate, judgeApprovals, readStoredRequest } from "./lifecycle.ts";
 import {
 	ACCEPTANCE_REQUEST_MAX_TTL_MS,
 	ENGINEERING_SCHEMA_VERSION,
@@ -214,18 +215,6 @@ async function persistRequest(store: EngineeringStore, request: AcceptanceReques
 	await atomicWriteFile(absolute, `${JSON.stringify(request, null, "\t")}\n`);
 }
 
-/** Read the stored copy of a request; the receipt is checked against what is on disk, not the in-memory object. */
-export async function readStoredRequest(store: EngineeringStore, changeId: string, attemptId: string, requestId: string): Promise<AcceptanceRequest | null> {
-	const relative = engineeringPaths.acceptanceRequest(changeId, attemptId, requestId).replace(/^engineering\//, "");
-	try {
-		const parsed = JSON.parse(await readFile(join(store.root, relative), "utf8")) as unknown;
-		const valid = validateAcceptanceRequest(parsed);
-		return valid.ok ? valid.value : null;
-	} catch {
-		return null;
-	}
-}
-
 /**
  * Ask the host for a decision on an attempt's bound candidate.
  *
@@ -249,7 +238,8 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 	if (attempt.outcome !== "ready-for-review" && attempt.outcome !== "needs-human-acceptance") {
 		throw new StoreError("invalid-state", `attempt ${attempt.id} is ${attempt.outcome}; acceptance can be asked for only from ready-for-review or needs-human-acceptance`);
 	}
-	const candidate = await readRecord<SnapshotRecord>(store, "snapshot", attempt.candidate_snapshot_id, { changeId: change.id, attemptId: attempt.id });
+	const candidate = await boundCandidate(store, attempt);
+	if (!candidate) throw new StoreError("invalid-state", `attempt ${attempt.id} names candidate ${attempt.candidate_snapshot_id} but it cannot be read; nothing is asked for a candidate the adapter cannot see`);
 	const context = { changeId: change.id, attemptId: attempt.id };
 	const proofs: ProofRecord[] = [];
 	for (const id of await listIds(store, change.id, attempt.id, "proofs")) proofs.push(await readRecord<ProofRecord>(store, "proof", id, context));
@@ -309,14 +299,23 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 	}
 	try {
 	// The approvals are read INSIDE the marker so a concurrent winner's mint
-	// is visible here. An accepted approval already bound to this candidate's
-	// digest decides the question; asking again would mint a duplicate.
-	const otherApprovals: ApprovalRecord[] = [];
-	for (const id of await listIds(store, change.id, attempt.id, "approvals")) otherApprovals.push(await readRecord<ApprovalRecord>(store, "approval", id, context));
-	const alreadyAccepted = otherApprovals.find((a) => a.decision === "accepted" && a.candidate_digest === candidate.digest && a.candidate_snapshot_id === candidate.id);
+	// is visible here. A GENUINE accepted approval (judgeApprovals: decision,
+	// candidate id + digest, input digest, stored request, receipt binding)
+	// already bound to this candidate decides the question; asking again
+	// would mint a duplicate. A file that merely looks like an approval does
+	// NOT decide it — otherwise anyone who can drop a schema-valid file into
+	// approvals/ could deny the real request — but it is not ignored either:
+	// it is disclosed to the person in the presentation's limitations and in
+	// this result, because an unexplained approval file is an operator
+	// matter. Its nonce still counts as consumed below, so a later genuine
+	// mint can never share a receipt with it.
+	const verdicts = await judgeApprovals(store, attempt, candidate);
+	const otherApprovals: ApprovalRecord[] = verdicts.map((v) => v.approval).filter((a): a is ApprovalRecord => a !== null);
+	const alreadyAccepted = verdicts.find((v) => v.genuine === true);
 	if (alreadyAccepted) {
 		throw new StoreError("invalid-state", `already-accepted: approval ${alreadyAccepted.id} already binds an accepted decision to candidate ${candidate.id} (${candidate.digest}); soliciting a second approval asks a human to decide something already decided`);
 	}
+	const ignoredApprovals = verdicts.filter((v) => v.genuine === false).map((v) => `approval ${v.id} under this attempt is not a genuine acceptance and was not counted (${v.codes.join(", ")}): ${v.detail}`);
 
 	const request = buildAcceptanceRequest({
 		id: newRecordId("acceptance-request"),
@@ -331,7 +330,7 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 		reviews,
 		assurance,
 		storage_boundary: capabilities.storage_boundary,
-		limitations: [...rereadLimitations],
+		limitations: [...rereadLimitations, ...ignoredApprovals],
 	});
 	await persistRequest(store, request);
 	const base = { assurance, request_id: request.id, request };

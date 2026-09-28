@@ -61,6 +61,7 @@ const GUARDED_FILES = [
 	"tests/broadside-repo-collection.test.mjs",
 	"tests/broadside.test.mjs",
 	"tests/engineering-acceptance-adapter.test.mjs",
+	"tests/engineering-lifecycle-mcp.test.mjs",
 	"tests/library.test.mjs",
 	"tests/mcp-uncovered-handlers.test.mjs",
 	"tests/pi-broadside.test.mjs",

@@ -43,8 +43,10 @@
 // "write some slices". The loop judges the WORK first and the HOST second --
 // the same ordering the acceptance gate uses, for the same reason.
 
-import type { AttemptRecord, ChangeRecord, SliceRecord } from "./types.ts";
+import type { AttemptRecord, ChangeRecord, ProofRecord, ReviewRecord, SliceRecord, StorageBoundary } from "./types.ts";
 import type { EngineeringStore } from "./store.ts";
+import { boundCandidate, judgeApprovals, listAttemptRecords } from "./lifecycle.ts";
+import { evaluateAcceptanceGate } from "./gates.ts";
 import { createHash } from "node:crypto";
 
 /** Every reason the loop can stop. A stop is always one of these, never prose. */
@@ -65,6 +67,7 @@ export const TRAVERSE_ACTIONS = [
 	"plan-slices",
 	"start-attempt",
 	"resume-attempt",
+	"capture-candidate",
 	"record-observations",
 	"request-review",
 	"address-objections",
@@ -191,11 +194,56 @@ async function planFromRecords(
 	const latest = attempts.at(-1);
 
 	// An attempt already running is RESUMED. Starting a second one because an
-	// acknowledgement was lost is how a host runs a migration twice.
+	// acknowledgement was lost is how a host runs a migration twice. WHERE it
+	// is resumed is read from the records under it: the bound candidate, the
+	// proofs naming that candidate, and the reviews of it. Each stage is
+	// keyed on the record that ends it, so a host re-asking after a lost
+	// acknowledgement sees the same key.
 	if (latest?.outcome === "running") {
+		const stage = await runningStage(store, change.id, latest);
+		if (stage.kind === "no-candidate") {
+			return {
+				action: "resume-attempt",
+				rationale: `attempt ${latest.id} is running with no candidate bound; resume the work, then capture the candidate that records the tree the checks will run against`,
+				bounds: { limits: [`wall clock ${bounds.max_wall_clock_ms} ms`, "no new attempt record", "ends with capture-candidate"] },
+				resumed_from: resumedFrom(latest),
+				history,
+				idempotency_key: keyFor("resume-attempt", change.id, latest.id),
+			} as TraverseStep;
+		}
+		if (stage.kind === "unproved") {
+			return {
+				action: "record-observations",
+				rationale: `attempt ${latest.id} has candidate ${stage.candidate.id} bound and no proof names it; run the slice's checks against that tree and record what was observed`,
+				bounds: { limits: [`wall clock ${bounds.max_wall_clock_ms} ms`, "checks named by the slice's proof obligations only", "a proof must name the bound candidate"] },
+				resumed_from: resumedFrom(latest),
+				history,
+				idempotency_key: keyFor("record-observations", change.id, latest.id, stage.candidate.id),
+			} as TraverseStep;
+		}
+		if (stage.kind === "unreviewed") {
+			return {
+				action: "request-review",
+				rationale: `attempt ${latest.id} has proofs against candidate ${stage.candidate.id} and no review of those bytes; a review of these exact bytes is required before acceptance can be offered`,
+				bounds: { limits: ["review only; no further execution", "one review per candidate"] },
+				resumed_from: resumedFrom(latest),
+				history,
+				idempotency_key: keyFor("request-review", change.id, latest.id, stage.candidate.id),
+			} as TraverseStep;
+		}
+		if (stage.kind === "objections") {
+			return {
+				action: "address-objections",
+				rationale: `review ${stage.review.id} of candidate ${stage.candidate.id} leaves blockers open: ${stage.review.remaining_blockers.join(", ")}. The candidate is pinned by its proofs; address them in a new attempt (parent_attempt_id: ${latest.id})`,
+				bounds: { limits: ["a new attempt, never a rewrite of this one", `attempts remaining ${bounds.max_attempts - attempts.filter((a) => a.outcome === "failed").length}`] },
+				resumed_from: resumedFrom(latest),
+				history,
+				idempotency_key: keyFor("address-objections", change.id, latest.id, stage.review.id),
+			} as TraverseStep;
+		}
 		return {
 			action: "resume-attempt",
-			rationale: `attempt ${latest.id} is already running; resume it rather than starting another, which would repeat whatever it already did`,
+			rationale: `attempt ${latest.id} is running and reviewed clean but not finalized; resume it so the lifecycle can finalize it, rather than starting another`,
 			bounds: { limits: [`wall clock ${bounds.max_wall_clock_ms} ms`, "no new attempt record"] },
 			resumed_from: resumedFrom(latest),
 			history,
@@ -254,6 +302,50 @@ async function planFromRecords(
 	}
 
 	if (latest?.outcome === "needs-human-acceptance") {
+		// An approval already recorded for the bound candidate is a decision
+		// that was made; asking again would ask a person to decide something
+		// already decided. The loop stops and names the approval.
+		// "Recorded" means judged genuine by judgeApprovals (lifecycle.ts):
+		// decision, candidate id + digest, input digest, stored request and
+		// receipt binding. A file under approvals/ that fails that judgement
+		// is not silently skipped: the loop stops for an operator, naming the
+		// file and the codes, because an approval nobody issued is either a
+		// forgery or a broken adapter, and neither is the loop's to walk past.
+		const candidate = await boundCandidate(store, latest);
+		const verdicts = candidate ? await judgeApprovals(store, latest, candidate) : [];
+		const accepted = verdicts.find((v) => v.genuine === true);
+		if (accepted) {
+			return stop("change-concluded", `approval ${accepted.id} records acceptance of candidate ${accepted.approval.candidate_snapshot_id} (attempt ${latest.id}); conclude the change rather than asking again`, history);
+		}
+		const suspect = verdicts.filter((v) => v.genuine === false);
+		if (suspect.length > 0) {
+			return stop(
+				"blocked-needs-operator",
+				`${suspect.map((v) => `approval ${v.id} under attempt ${latest.id} is not a genuine acceptance of the bound candidate (${v.codes.join(", ")}): ${v.detail}`).join(" | ")}. An approval file that binds to no stored request is an operator matter; the loop will not conclude on it and will not ask for another decision over it`,
+				history,
+			);
+		}
+		// A finalized attempt the gate would refuse (no observed proof, an
+		// open objection, drifted inputs) must not send the host to ask a
+		// person: the request would be refused before anyone was asked, and
+		// telling the host to ask is telling it to loop on a refusal. The gate
+		// runs here without a re-read (this module sees no repository), so a
+		// stale tree is still the adapter's to find at request time.
+		const gate = await evaluateAcceptanceGate(store, {
+			change_id: change.id,
+			attempt_id: latest.id,
+			host: { can_obtain_human_decision: request.host.can_obtain_human_decision, storage: { boundary: request.host.storage.boundary as StorageBoundary, ...(request.host.storage.protection !== undefined ? { protection: request.host.storage.protection } : {}) } },
+		});
+		if (gate.state === "refused") {
+			return {
+				...stop(
+					"blocked-needs-operator",
+					`attempt ${latest.id} is needs-human-acceptance but the acceptance gate refuses it (${gate.blockers.map((b) => b.code).join(", ")}): ${gate.blockers.map((b) => `${b.detail} — ${b.remedy}`).join(" | ")}. Asking a person would be refused before anyone was asked; the remedy is a new attempt that clears the blockers`,
+					history,
+				),
+				resumed_from: resumedFrom(latest),
+			};
+		}
 		if (!request.host.can_obtain_human_decision) {
 			return stop(
 				"host-cannot-obtain-human-decision",
@@ -282,6 +374,35 @@ async function planFromRecords(
 		history,
 		idempotency_key: keyFor("start-attempt", change.id, sliceIdentity(slices)),
 	};
+}
+
+type RunningStage =
+	| { kind: "no-candidate" }
+	| { kind: "unproved"; candidate: { id: string } }
+	| { kind: "unreviewed"; candidate: { id: string } }
+	| { kind: "objections"; candidate: { id: string }; review: ReviewRecord }
+	| { kind: "reviewed" };
+
+/** Where a running attempt is, read from the records under it and nothing else. */
+async function runningStage(store: EngineeringStore, changeId: string, attempt: AttemptRecord): Promise<RunningStage> {
+	const candidate = await boundCandidate(store, attempt);
+	if (!candidate) return { kind: "no-candidate" };
+	const context = { changeId, attemptId: attempt.id };
+	let proved = false;
+	for (const id of await listAttemptRecords(store, changeId, attempt.id, "proofs")) {
+		const proof = await readOne<ProofRecord>(store, "proof", id, context);
+		if (proof && proof.snapshot_id === candidate.id) proved = true;
+	}
+	if (!proved) return { kind: "unproved", candidate };
+	const reviews: ReviewRecord[] = [];
+	for (const id of await listAttemptRecords(store, changeId, attempt.id, "reviews")) {
+		const review = await readOne<ReviewRecord>(store, "review", id, context);
+		if (review && review.candidate_snapshot_id === candidate.id && review.candidate_digest === candidate.digest) reviews.push(review);
+	}
+	if (reviews.length === 0) return { kind: "unreviewed", candidate };
+	const blocked = reviews.find((r) => r.remaining_blockers.length > 0);
+	if (blocked) return { kind: "objections", candidate, review: blocked };
+	return { kind: "reviewed" };
 }
 
 /**

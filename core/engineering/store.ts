@@ -16,10 +16,17 @@
 //   - **Two storage classes, because the contract has two.** `change.json`
 //     and `slice.json` are versioned mutable projections: they carry an
 //     integer `revision` and are replaced under compare-and-swap on it.
-//     Everything under `attempts/` is **create-only** — a snapshot, proof,
-//     review or approval is an observation of something that happened, and
-//     editing one would be rewriting history rather than recording it. A
-//     correction is a new record naming the one it supersedes.
+//     Everything under `attempts/` is **create-only once finalized** — a
+//     snapshot, proof, review or approval is an observation of something that
+//     happened, and editing one would be rewriting history rather than
+//     recording it. A correction is a new record naming the one it
+//     supersedes. The one exception the contract makes is the attempt
+//     record itself WHILE `running`: `capture-candidate` binds
+//     `candidate_snapshot_id` onto it and the lifecycle finalizes its
+//     outcome. Those updates are compare-and-swapped on the bound candidate
+//     (`ifCandidate`), pinned on every identity field, and checked against
+//     the attempt transition table; once the stored outcome has left
+//     `running` the record is history and no write reaches it.
 //   - **Replays are free; collisions are loud.** The same idempotency key
 //     with the same payload returns the original outcome and writes nothing.
 //     The same key with a *different* payload is `idempotency-conflict` —
@@ -46,7 +53,15 @@ import { atomicWriteFile } from "../utils.ts";
 import { digestOf } from "./digest.ts";
 import { ENGINEERING_NAMESPACE, engineeringPaths, isRecordId } from "./ids.ts";
 import type { EngineeringRecord, EngineeringErrorCode, RecordKind } from "./types.ts";
-import { validateRecordOfKind } from "./validation.ts";
+import { isAllowedTransition, validateRecordOfKind } from "./validation.ts";
+
+/**
+ * Attempt fields fixed at `start-attempt`. A lifecycle update (capture the
+ * candidate, finalize the outcome) may not move any of them: an attempt whose
+ * inputs or baseline changed is a different attempt, and the contract says a
+ * correction is a NEW record naming the one it supersedes.
+ */
+const ATTEMPT_IDENTITY_FIELDS = ["id", "change_id", "slice_id", "inputs", "baseline_snapshot_id", "started_at", "created_at", "parent_attempt_id", "supersedes_attempt_id"] as const;
 
 /**
  * The kinds the contract calls versioned mutable projections. Everything
@@ -71,6 +86,13 @@ export interface PutOptions {
 	ifRevision?: number;
 	/** Makes a repeated request a no-op instead of a second write. */
 	idempotencyKey?: string;
+	/**
+	 * Attempts only: the `candidate_snapshot_id` the caller last read (`null`
+	 * for none). A lifecycle update over a `running` attempt is refused with
+	 * `stale-revision` when the stored candidate differs — the attempt has no
+	 * `revision` field, so the bound candidate is its compare-and-swap token.
+	 */
+	ifCandidate?: string | null;
 }
 
 export interface PutOutcome {
@@ -314,9 +336,35 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 			try {
 			const current = await readFile(absolute, "utf8").catch(() => null);
 			if (current !== null) {
-				// Create-only kinds: an observation already on disk is not
-				// replaceable at all, whatever revision the caller offers.
-				if (!mutable) {
+				// An attempt is create-only ONCE FINALIZED (contract § Ownership
+				// and layout: "create-only once finalized"). While its outcome
+				// is `running` it is the one open projection under attempts/:
+				// capture-candidate binds `candidate_snapshot_id` onto it and
+				// the lifecycle finalizes it. Only the lifecycle fields may
+				// move; identity fields (id, change, slice, inputs, baseline,
+				// started_at, created_at) are pinned, and once the stored
+				// outcome has left `running` the record is history.
+				const previousAttempt = record.kind === "attempt" ? (JSON.parse(current) as Record<string, unknown>) : null;
+				if (previousAttempt !== null && previousAttempt.outcome === "running") {
+					const previous = previousAttempt;
+					if (options.ifCandidate === undefined) {
+						throw new StoreError("invalid-state", `attempt ${record.id} is running; pass ifCandidate (the bound candidate you last read, or null) to update it`, absolute);
+					}
+					if ((previous.candidate_snapshot_id ?? null) !== options.ifCandidate) {
+						throw new StoreError("stale-revision", `attempt ${record.id}: expected candidate ${String(options.ifCandidate)} but the stored attempt binds ${String(previous.candidate_snapshot_id ?? null)}`, absolute);
+					}
+					const next = stored as unknown as Record<string, unknown>;
+					for (const field of ATTEMPT_IDENTITY_FIELDS) {
+						if (digestOf(previous[field] ?? null) !== digestOf(next[field] ?? null)) {
+							throw new StoreError("invalid-value", `attempt ${record.id}: ${field} is fixed at start and cannot be rewritten by a lifecycle update`, absolute);
+						}
+					}
+					const from = "running";
+					const to = String(next.outcome);
+					if (to !== from && !isAllowedTransition("attempt", from, to)) {
+						throw new StoreError("invalid-transition", `attempt ${record.id}: ${from} -> ${to} is not an allowed transition`, absolute);
+					}
+				} else if (!mutable) {
 					throw new StoreError(
 						"invalid-state",
 						`${record.kind} ${record.id} is already published and observations are immutable; record a new one that supersedes it`,
@@ -324,7 +372,9 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 					);
 				}
 				const currentRevision = revisionOf(JSON.parse(current));
-				if (options.ifRevision === undefined) {
+				if (previousAttempt !== null) {
+					// Serialized by the change lock and CAS'd on ifCandidate above; attempts carry no revision.
+				} else if (options.ifRevision === undefined) {
 					throw new StoreError("invalid-state", `${record.kind} ${record.id} already exists; pass ifRevision to replace it`, absolute);
 				}
 				if (options.ifRevision !== currentRevision) {
@@ -337,7 +387,7 @@ export async function openStore(workspaceDir: string): Promise<EngineeringStore>
 				// intervening updates — passes its check and overwrites work
 				// it never saw, with no error reported to anyone.
 				const proposed = revisionOf(stored);
-				if (typeof proposed !== "number" || proposed <= (currentRevision ?? 0)) {
+				if (previousAttempt === null && (typeof proposed !== "number" || proposed <= (currentRevision ?? 0))) {
 					throw new StoreError("invalid-value", `a replacement must advance revision past ${currentRevision}, got ${proposed}`, absolute);
 				}
 			} else if (options.ifRevision !== undefined) {

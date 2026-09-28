@@ -37,18 +37,27 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import { ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
 
 import {
+	boundCandidate,
 	buildChangeBrief,
+	captureCandidate,
 	describeGateOutcome,
+	engineeringPaths,
 	evaluateAcceptanceGate,
 	ingestHostObservations,
 	ingestProof,
 	newRecordId,
 	openStore,
+	readStoredInputDigests,
+	recordReview,
 	requestAcceptance,
+	startAttempt,
+	validateRecordOfKind,
 	type ChangeRecord,
 	type CurrentStorage,
 	type EngineeringStore,
@@ -58,11 +67,12 @@ import {
 	type SnapshotRecord,
 	type VerifiedAcceptanceIntegration,
 } from "../core/engineering/index.ts";
-import { ENGINEERING_SCHEMA_VERSION, type AttemptRecord } from "../core/engineering/types.ts";
-import { readWorkingTree } from "./working-tree.ts";
+import { ENGINEERING_SCHEMA_VERSION, type AttemptRecord, type CoverageExclusion } from "../core/engineering/types.ts";
+import { atomicWriteFile } from "../core/utils.ts";
+import { captureWorkingTree, readWorkingTree } from "./working-tree.ts";
 
 /** Every action this surface implements. Pinned so the schema and the dispatch cannot drift. */
-export const CHANGE_ACTIONS = ["create", "update", "show", "list", "plan", "record_proof", "gate", "request_acceptance", "ingest_observations"] as const;
+export const CHANGE_ACTIONS = ["create", "update", "show", "list", "plan", "start_attempt", "capture_candidate", "record_proof", "record_review", "gate", "request_acceptance", "ingest_observations"] as const;
 export type ChangeAction = (typeof CHANGE_ACTIONS)[number];
 
 /**
@@ -137,6 +147,10 @@ function asCallerError(error: unknown): unknown {
 		case "invalid-value":
 		case "invalid-request":
 		case "stale-revision":
+		case "unknown-field":
+		case "missing-field":
+		case "cross-change-reference":
+		case "not-found":
 			return new ProtocolError(ProtocolErrorCode.InvalidParams, message);
 		case "invalid-state":
 			// The records are not in a state this action can act on (no
@@ -183,10 +197,20 @@ function requireString(args: Record<string, unknown>, field: string): string {
 /** States after which a change's approved presentation must not move. */
 const TERMINAL_CHANGE_STATES = new Set(["accepted", "abandoned"]);
 
-const DERIVED_FIELDS = ["state", "decision", "authority", "discharges", "revision_token", "approved_by", "accepted_at"];
+const DERIVED_FIELDS = ["state", "decision", "authority", "discharges", "revision_token", "approved_by", "accepted_at", "attested_by"];
+
+/**
+ * Fields the LIFECYCLE actions derive from the tree or the stored records.
+ * `outcome` is a create argument (the requested outcome) but an attempt's
+ * `outcome` is a lifecycle conclusion; it is refused only where the second
+ * meaning applies.
+ */
+const LIFECYCLE_ACTIONS = new Set(["start_attempt", "capture_candidate", "record_review"]);
+const LIFECYCLE_DERIVED_FIELDS = ["outcome", "stability", "digest", "candidate_snapshot_id", "candidate_digest", "input_digest", "baseline_snapshot_id", "collector", "ended_at", "started_at"];
 
 function refuseDerivedFields(args: Record<string, unknown>, where: string): void {
-	for (const field of DERIVED_FIELDS) {
+	const fields = LIFECYCLE_ACTIONS.has(where) ? [...DERIVED_FIELDS, ...LIFECYCLE_DERIVED_FIELDS] : DERIVED_FIELDS;
+	for (const field of fields) {
 		if (field === "state" && where === "update") {
 			// `state` is refused for update too, but with a specific message:
 			// it is the field an agent would reach for to mark its own work
@@ -255,8 +279,14 @@ export function createChangeHandler(deps: {
 				return await listChanges(store, deps.textResult);
 			case "plan":
 				return await planChange(store, args, deps.textResult);
+			case "start_attempt":
+				return await startAttemptAction(store, args, deps.textResult, cwd);
+			case "capture_candidate":
+				return await captureCandidateAction(store, args, deps.textResult, cwd);
 			case "record_proof":
 				return await recordProof(store, args, deps.textResult);
+			case "record_review":
+				return await recordReviewAction(store, args, deps.textResult);
 			case "gate":
 				return await gateChange(store, args, deps.textResult, cwd);
 			case "request_acceptance":
@@ -402,7 +432,33 @@ async function updateChange(store: EngineeringStore, args: ChangeArgs, textResul
 	} catch (error) {
 		throw asCallerError(error);
 	}
-	return textResult(`Updated change ${changeId} to revision ${put.revision}.`, { change_id: changeId, revision: put.revision });
+	// `brief.md` is a projection of the change record; once `plan` has
+	// written it, an edit to the record rewrites it so the stored brief is
+	// the one the record describes. An attempt started from the earlier
+	// brief now carries an input digest the stored file no longer has, and
+	// the gate refuses it (`input-stale`): the person would otherwise be
+	// shown the current title and accept work begun under another one.
+	const rewrote = await rewriteBriefIfStored(store, next as ChangeRecord);
+	return textResult(`Updated change ${changeId} to revision ${put.revision}.${rewrote ? " brief.md was regenerated; an attempt started from the earlier brief will be refused by the gate as input-stale." : ""}`, { change_id: changeId, revision: put.revision, ...(rewrote ? { brief_rewritten: true } : {}) });
+}
+
+/** Regenerate `brief.md` from the record when the planner already wrote one. Returns whether it did. */
+async function rewriteBriefIfStored(store: EngineeringStore, record: ChangeRecord): Promise<boolean> {
+	const stored = await readStoredInputDigests(store, record.id);
+	if (stored.ok === false) return false;
+	const brief = buildChangeBrief({
+		title: record.title,
+		mode: record.mode,
+		requested_outcome: record.requested_outcome,
+		baseline: { vcs: "git", description: record.baseline.description },
+		scope: record.scope,
+		preserved_contracts: record.preserved_contracts,
+		acceptance_scenarios: record.acceptance_scenarios,
+		references: record.references,
+	});
+	if (!brief.ok || !brief.markdown) return false;
+	await writeArtifact(store, record.id, "brief.md", brief.markdown);
+	return true;
 }
 
 async function showChange(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown) {
@@ -424,10 +480,24 @@ async function listChanges(store: EngineeringStore, textResult: (t: string, s?: 
 	return textResult(changes.length === 0 ? "No changes recorded." : lines.join("\n"), { changes: changes.map((c) => c.id) });
 }
 
+/**
+ * Build the brief and, when `slices` are supplied, record the plan.
+ *
+ * Without `slices` this is the read-only preview it always was. With them,
+ * the change moves `draft` -> `planned` under compare-and-swap on `revision`,
+ * carrying the caller's `acceptance_scenarios`, and each slice is stored
+ * `pending`; `start_attempt` activates the change and the slice it works on.
+ * The brief is written to `brief.md` and the plan to `plan.md` so their
+ * digests — returned here — can be the attempt's inputs. Slices are
+ * validated by the same schema as a stored slice record; a slice whose
+ * obligation names `agent-claimed` as its minimum is refused there.
+ */
 async function planChange(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown) {
+	refuseDerivedFields(args, "plan");
 	const changeId = requireString(args, "change_id");
 	const found = await store.get("change", changeId);
 	const record = found.record as ChangeRecord;
+	const scenarios = Array.isArray(args.acceptance_scenarios) ? (args.acceptance_scenarios as ChangeRecord["acceptance_scenarios"]) : record.acceptance_scenarios;
 	const brief = buildChangeBrief({
 		title: record.title,
 		mode: record.mode,
@@ -435,7 +505,7 @@ async function planChange(store: EngineeringStore, args: ChangeArgs, textResult:
 		baseline: { vcs: "git", description: record.baseline.description },
 		scope: record.scope,
 		preserved_contracts: record.preserved_contracts,
-		acceptance_scenarios: record.acceptance_scenarios,
+		acceptance_scenarios: scenarios,
 		references: record.references,
 	});
 	if (!brief.ok || !brief.markdown) {
@@ -444,7 +514,65 @@ async function planChange(store: EngineeringStore, args: ChangeArgs, textResult:
 			`this change cannot be planned yet: ${(brief.errors ?? []).map((e) => e.message).join("; ") || "the brief could not be built"}`,
 		);
 	}
-	return textResult(brief.markdown, { change_id: changeId, markdown: brief.markdown });
+	if (args.slices === undefined) return textResult(brief.markdown, { change_id: changeId, markdown: brief.markdown });
+
+	if (!Array.isArray(args.slices) || args.slices.length === 0) invalid("slices must be a non-empty array of { title, deliverable, scenario_ids, proof_obligations, permitted_scope, depends_on? }");
+	if (typeof args.revision !== "number" || args.revision !== record.revision) {
+		invalid(`plan requires the revision you last read (change ${changeId} is at revision ${record.revision}) so a concurrent planner's slices are not overwritten silently`);
+	}
+	if (record.state !== "draft") throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `change ${changeId} is ${record.state}; slices are planned once, from draft`);
+	const now = new Date().toISOString();
+	const slices = (args.slices as Record<string, unknown>[]).map((input) => {
+		if (typeof input !== "object" || input === null) invalid("each slice must be an object");
+		for (const field of ["id", "state", "revision", "change_id", "block_reason"]) if (input[field] !== undefined) invalid(`slices[].${field} is derived and cannot be supplied`);
+		const slice = { schema_version: ENGINEERING_SCHEMA_VERSION, kind: "slice" as const, id: newRecordId("slice"), created_at: now, updated_at: now, change_id: changeId, revision: 1, state: "pending" as const, depends_on: [], ...input };
+		const valid = validateRecordOfKind("slice", slice);
+		if (valid.ok === false) invalid(`slice ${JSON.stringify(input.title)} is invalid: ${valid.errors.map((e) => `${e.path} ${e.message}`).join("; ")}`);
+		return valid.value;
+	});
+	const planMarkdown = typeof args.plan_markdown === "string" ? args.plan_markdown : `# Plan\n\n${slices.map((s) => `- ${s.id}: ${s.title}`).join("\n")}\n`;
+	const planned = { ...record, revision: record.revision + 1, state: "planned" as const, acceptance_scenarios: scenarios, updated_at: now };
+	const validChange = validateRecordOfKind("change", planned);
+	if (validChange.ok === false) invalid(`the planned change is invalid: ${validChange.errors.map((e) => `${e.path} ${e.message}`).join("; ")}`);
+	// The change's compare-and-swap goes FIRST. Two planners racing on the
+	// same revision used to each write their slices and then one of them
+	// lost the CAS — leaving the loser's slices on disk beside the winner's,
+	// so the store held two slice sets for one plan. With the CAS first the
+	// loser writes nothing. The cost is a crash window between the CAS and
+	// the slice writes (a `planned` change with no slices, which `plan`
+	// then refuses to re-plan); that is an operator matter and is stated in
+	// docs/engineering/attempt-lifecycle.md § Limits.
+	try {
+		await store.put(planned as never, { ifRevision: record.revision });
+		await writeArtifact(store, changeId, "brief.md", brief.markdown);
+		await writeArtifact(store, changeId, "plan.md", planMarkdown);
+		for (const slice of slices) await store.put(slice);
+	} catch (error) {
+		throw asCallerError(error);
+	}
+	// The digests reported are read back from the files just written, through
+	// the same reader start_attempt and the gate use — what the caller gets is
+	// what the record will be compared against, not a digest of the in-memory
+	// text that might differ from what landed on disk.
+	const stored = await readStoredInputDigests(store, changeId);
+	if (stored.ok === false) throw new ProtocolError(ProtocolErrorCode.InternalError, `plan wrote brief.md and plan.md for ${changeId} but cannot read ${stored.missing.join(", ")} back`);
+	return textResult(`Planned change ${changeId} (revision ${planned.revision}, ${slices.length} slice(s)).\n\n${brief.markdown}`, {
+		change_id: changeId,
+		revision: planned.revision,
+		state: planned.state,
+		slice_ids: slices.map((s) => s.id),
+		brief_digest: stored.brief_digest,
+		plan_digest: stored.plan_digest,
+		markdown: brief.markdown,
+	});
+}
+
+/** `brief.md` / `plan.md` under the change, through the store's own namespace root. */
+async function writeArtifact(store: EngineeringStore, changeId: string, name: "brief.md" | "plan.md", text: string): Promise<void> {
+	const relative = (name === "brief.md" ? engineeringPaths.brief(changeId) : engineeringPaths.plan(changeId)).replace(/^engineering\//, "");
+	const absolute = join(store.root, relative);
+	await mkdir(dirname(absolute), { recursive: true });
+	await atomicWriteFile(absolute, text);
 }
 
 /**
@@ -489,15 +617,166 @@ async function recordProof(store: EngineeringStore, args: ChangeArgs, textResult
 /**
  * The bound candidate of an attempt, or null when the records do not resolve.
  * The gate reports the missing record itself; this only serves the re-read.
+ * Resolved through the core's one definition (lifecycle.ts), so this surface
+ * re-reads exactly the candidate the gate and the acceptance path judge.
  */
-async function boundCandidate(store: EngineeringStore, changeId: string, attemptId: string): Promise<SnapshotRecord | null> {
+async function candidateOf(store: EngineeringStore, changeId: string, attemptId: string): Promise<SnapshotRecord | null> {
 	try {
 		const attempt = (await store.get("attempt", attemptId, { changeId })).record as AttemptRecord;
-		if (!attempt.candidate_snapshot_id) return null;
-		return (await store.get("snapshot", attempt.candidate_snapshot_id, { changeId, attemptId })).record as SnapshotRecord;
+		return await boundCandidate(store, attempt);
 	} catch {
 		return null;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// start_attempt / capture_candidate / record_review: the attempt lifecycle.
+// The adapter captures every snapshot itself from the server's cwd, through
+// the SAME walker the acceptance re-read uses (working-tree.ts). A caller-
+// supplied `snapshot` is refused when the adapter can read the tree: the
+// contract says it is ignored there, and refusing rather than silently
+// ignoring tells the caller its bytes did not become the record.
+// ---------------------------------------------------------------------------
+
+/** Fields a caller might use to hand this surface a tree of its choosing. */
+const SNAPSHOT_SUPPLY_FIELDS = ["snapshot", "baseline_snapshot", "candidate_snapshot", "tree", "capture", "candidate", "baseline", "reread", "candidate_reread", "working_tree", "manifest", "coverage", "repository", "entries", "files"];
+
+/**
+ * The capture's scope: the change's and slice's declared exclusions do not
+ * exist yet as record fields (a slice's `permitted_scope` says where edits
+ * may land, not what the identity omits), so the scope is exactly
+ * `ALWAYS_EXCLUDED` plus the exclusions the host configured — none on this
+ * surface today. Stated here so the origin of coverage is one line.
+ */
+function captureScope(): CoverageExclusion[] {
+	return [];
+}
+
+async function adapterCapture(cwd: string, role: "baseline" | "candidate") {
+	const read = await captureWorkingTree(cwd, captureScope());
+	if (read.ok === false) throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `the ${role} could not be captured from ${cwd}: ${read.reason}`);
+	const { digest: _digest, ...tree } = read.capture;
+	void _digest;
+	return { source: { attested_by: "adapter" as const, collector: "host-observed" as const, tree }, limitations: read.limitations };
+}
+
+function refuseSuppliedSnapshot(args: Record<string, unknown>, action: string): void {
+	for (const field of SNAPSHOT_SUPPLY_FIELDS) {
+		if (args[field] !== undefined) {
+			invalid(`${field} is not accepted by ${action}: this adapter reads the working tree itself and attests the snapshot; a caller-supplied tree would be recorded caller-attested and could never bind an acceptance, so it is refused rather than silently ignored`);
+		}
+	}
+}
+
+async function startAttemptAction(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown, cwd: string) {
+	refuseDerivedFields(args, "start_attempt");
+	refuseSuppliedSnapshot(args, "start_attempt");
+	const changeId = requireString(args, "change_id");
+	const sliceId = requireString(args, "slice_id");
+	const inputs = args.inputs;
+	if (typeof inputs !== "object" || inputs === null || Array.isArray(inputs)) invalid("inputs must be an object { brief_digest, plan_digest, references }");
+	const { brief_digest, plan_digest, references } = inputs as Record<string, unknown>;
+	// The input digests are DERIVED by this adapter from the brief.md and
+	// plan.md that `plan` wrote under the change, through the same reader the
+	// gate compares with. A caller may repeat them (a client that echoes what
+	// `plan` returned) but never choose them: a digest the adapter did not
+	// compute would let the attempt — and every review and approval bound to
+	// its input digest — name inputs nobody can find. A change with no stored
+	// artifacts (planned by an older path) is refused rather than trusted.
+	const derived = await readStoredInputDigests(store, changeId);
+	if (derived.ok === false) {
+		throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `change ${changeId} has no stored ${derived.missing.join(" or ")}; start_attempt derives inputs.brief_digest and inputs.plan_digest from those files and does not accept caller-declared digests. Plan the change with slices first`);
+	}
+	const disagreeing: string[] = [];
+	if (brief_digest !== undefined && brief_digest !== derived.brief_digest) disagreeing.push(`inputs.brief_digest ${JSON.stringify(brief_digest)} (brief.md digests to ${derived.brief_digest})`);
+	if (plan_digest !== undefined && plan_digest !== derived.plan_digest) disagreeing.push(`inputs.plan_digest ${JSON.stringify(plan_digest)} (plan.md digests to ${derived.plan_digest})`);
+	if (disagreeing.length > 0) invalid(`${disagreeing.join("; ")}: the input digests are derived by this adapter from the stored brief.md and plan.md, never taken from the caller; omit them or pass the values plan returned`);
+	const baseline = await adapterCapture(cwd, "baseline");
+	let started;
+	try {
+		started = await startAttempt(store, {
+			change_id: changeId,
+			slice_id: sliceId,
+			inputs: { brief_digest: derived.brief_digest, plan_digest: derived.plan_digest, references: Array.isArray(references) ? (references as never) : [] },
+			baseline: baseline.source,
+			...(typeof args.parent_attempt_id === "string" ? { parent_attempt_id: args.parent_attempt_id } : {}),
+			...(typeof args.request_id === "string" ? { idempotency_key: args.request_id } : {}),
+		});
+	} catch (error) {
+		throw asCallerError(error);
+	}
+	return textResult(`Started attempt ${started.attempt.id} on slice ${sliceId}; baseline ${started.snapshot.id} captured by the adapter (${started.snapshot.manifest.length} entries, ${started.snapshot.stability}).`, {
+		change_id: changeId,
+		slice_id: sliceId,
+		attempt_id: started.attempt.id,
+		outcome: started.attempt.outcome,
+		baseline_snapshot_id: started.snapshot.id,
+		baseline_digest: started.snapshot.digest,
+		attested_by: started.snapshot.attested_by,
+		stability: started.snapshot.stability,
+		input_digest: started.attempt.inputs.digest,
+		limitations: baseline.limitations,
+	});
+}
+
+async function captureCandidateAction(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown, cwd: string) {
+	refuseDerivedFields(args, "capture_candidate");
+	refuseSuppliedSnapshot(args, "capture_candidate");
+	const changeId = requireString(args, "change_id");
+	const attemptId = requireString(args, "attempt_id");
+	const candidate = await adapterCapture(cwd, "candidate");
+	let captured;
+	try {
+		captured = await captureCandidate(store, { change_id: changeId, attempt_id: attemptId, candidate: candidate.source, ...(typeof args.request_id === "string" ? { idempotency_key: args.request_id } : {}) });
+	} catch (error) {
+		throw asCallerError(error);
+	}
+	return textResult(
+		`Captured candidate ${captured.snapshot.id} for attempt ${attemptId} (${captured.snapshot.manifest.length} entries, ${captured.snapshot.stability}, attested by the adapter)${captured.superseded_candidate_id ? `; replaces unproved candidate ${captured.superseded_candidate_id}` : ""}. The attempt stays ${captured.attempt.outcome}.`,
+		{
+			change_id: changeId,
+			attempt_id: attemptId,
+			outcome: captured.attempt.outcome,
+			candidate_snapshot_id: captured.snapshot.id,
+			candidate_digest: captured.snapshot.digest,
+			attested_by: captured.snapshot.attested_by,
+			stability: captured.snapshot.stability,
+			...(captured.superseded_candidate_id ? { superseded_candidate_id: captured.superseded_candidate_id } : {}),
+			limitations: candidate.limitations,
+		},
+	);
+}
+
+/** What a recorded review does not establish; stated on every record_review result and in the acceptance presentation (standardLimitations). */
+const REVIEW_LIMITATIONS = ["reviewer separation is declared by the review's author, not authenticated; a review that says declared-separate is a claim about its own context, and the adapter cannot verify who wrote it or from where"];
+
+async function recordReviewAction(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown) {
+	refuseDerivedFields(args, "record_review");
+	const changeId = requireString(args, "change_id");
+	const attemptId = requireString(args, "attempt_id");
+	const review = args.review;
+	if (typeof review !== "object" || review === null || Array.isArray(review)) invalid("review must be an object { reviewer, objections, summary }");
+	let recorded;
+	try {
+		recorded = await recordReview(store, { change_id: changeId, attempt_id: attemptId, review: review as Record<string, unknown>, ...(typeof args.request_id === "string" ? { idempotency_key: args.request_id } : {}) });
+	} catch (error) {
+		throw asCallerError(error);
+	}
+	return textResult(
+		`Recorded review ${recorded.review.id} of candidate ${recorded.review.candidate_snapshot_id} (${recorded.review.remaining_blockers.length} blocker(s) remaining); attempt ${attemptId} is ${recorded.attempt.outcome}${recorded.finalized ? " (finalized by this review; the candidate is now frozen)" : ""}.\n\nLimitations:\n${REVIEW_LIMITATIONS.map((l) => `- ${l}`).join("\n")}`,
+		{
+			limitations: REVIEW_LIMITATIONS,
+			change_id: changeId,
+			attempt_id: attemptId,
+			review_id: recorded.review.id,
+			candidate_snapshot_id: recorded.review.candidate_snapshot_id,
+			candidate_digest: recorded.review.candidate_digest,
+			input_digest: recorded.review.input_digest,
+			remaining_blockers: recorded.review.remaining_blockers,
+			outcome: recorded.attempt.outcome,
+			finalized: recorded.finalized,
+		},
+	);
 }
 
 async function gateChange(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown, cwd: string) {
@@ -506,7 +785,7 @@ async function gateChange(store: EngineeringStore, args: ChangeArgs, textResult:
 	// The re-read is what lets the gate check freshness at all; without it the
 	// gate can only disclose that the tree was not looked at. A candidate that
 	// cannot be re-read gets no re-read, and the gate says so.
-	const candidate = attemptId ? await boundCandidate(store, changeId, attemptId) : null;
+	const candidate = attemptId ? await candidateOf(store, changeId, attemptId) : null;
 	const reread = candidate ? await readWorkingTree(cwd, candidate) : null;
 	const outcome = await evaluateAcceptanceGate(store, {
 		change_id: changeId,
@@ -623,12 +902,17 @@ async function requestAcceptanceAction(store: EngineeringStore, args: ChangeArgs
 	}
 	structured.request_id = result.request_id;
 	structured.expires_at = result.request.expires_at;
+	// What the person was shown as limitations is what the caller is told:
+	// among them any approval file under the attempt that was NOT counted
+	// as an acceptance (judgeApprovals), so a dropped file is disclosed
+	// rather than silently walked past.
+	structured.limitations = result.request.presentation.limitations;
 	if (result.outcome === "accepted") {
 		structured.approval_id = result.approval.id;
 		structured.classification = result.classification.class;
 		structured.classification_reasons = result.classification.reasons;
 		return textResult(
-			`Accepted through ${result.approval.receipt.channel} on ${result.approval.receipt.client.name} ${result.approval.receipt.client.version}: approval ${result.approval.id} (reads as ${result.classification.class}).`,
+			`Accepted through ${result.approval.receipt.channel} on ${result.approval.receipt.client.name} ${result.approval.receipt.client.version}: approval ${result.approval.id} (reads as ${result.classification.class}).\n\nLimitations:\n${result.request.presentation.limitations.map((l) => `- ${l}`).join("\n")}`,
 			structured,
 		);
 	}
@@ -676,7 +960,7 @@ export const ENGINEERING_TOOLS = [
 	{
 		name: "codecarto_change",
 		description:
-			"EXPERIMENTAL. Record and inspect an engineering change: its brief, its plan, proofs of checks a host ran, and the acceptance gate. request_acceptance ASKS the person through the client's own elicitation form; it never grants. This surface records what a host did — it never runs anything, and it cannot approve work.",
+			"EXPERIMENTAL. Record and inspect an engineering change: its brief, its plan, the attempt lifecycle (start_attempt captures the baseline, capture_candidate the candidate — both read from the workspace by this server, never supplied by the caller), proofs of checks a host ran, a review bound to the captured candidate (record_review), and the acceptance gate. request_acceptance ASKS the person through the client's own elicitation form; it never grants. This surface records what a host did — it never runs anything, and it cannot approve work.",
 		inputSchema: {
 			type: "object" as const,
 			properties: {
@@ -685,10 +969,17 @@ export const ENGINEERING_TOOLS = [
 				change_id: { type: "string", description: "Change record id, for actions that address one." },
 				title: { type: "string", description: "Short change title (create)." },
 				outcome: { type: "string", description: "The outcome being requested (create)." },
-				revision: { type: "number", description: "Compare-and-swap revision the caller last read (update)." },
+				revision: { type: "number", description: "Compare-and-swap revision the caller last read (update, plan with slices)." },
+				acceptance_scenarios: { type: "array", description: "[{ id, kind: behavior|preserved|non-functional, description }] (plan with slices)." },
+				slices: { type: "array", description: "Slices to record (plan): [{ title, deliverable, scenario_ids, proof_obligations: [{ id, scenario_id, check_kind, description, minimum_collector }], permitted_scope: { paths }, depends_on? }]. Omit for a read-only brief." },
+				plan_markdown: { type: "string", description: "The plan text stored as plan.md (plan with slices); a listing of the slices when omitted." },
 				request_id: { type: "string", description: "Caller-chosen id making create retry-safe." },
-				attempt_id: { type: "string", description: "Attempt to evaluate (gate), to ask acceptance for (request_acceptance), or to ingest host observations for (ingest_observations)." },
+				attempt_id: { type: "string", description: "Attempt to capture a candidate for (capture_candidate), review (record_review), evaluate (gate), ask acceptance for (request_acceptance), or ingest host observations for (ingest_observations)." },
+				slice_id: { type: "string", description: "Slice the attempt works on (start_attempt)." },
+				inputs: { type: "object", description: "{ references } the attempt starts from (start_attempt). brief_digest and plan_digest are derived by the server from the stored brief.md/plan.md; if supplied they must equal what plan returned." },
+				parent_attempt_id: { type: "string", description: "The attempt this one retries or continues (start_attempt)." },
 				proof: { type: "object", description: "A proof of a check the HOST ran (record_proof)." },
+				review: { type: "object", description: "{ reviewer, objections, summary } (record_review). The candidate and input digests are bound from the stored attempt, never supplied." },
 				mode: { type: "string", enum: ["fix", "feature", "refactor", "migration", "investigation"], description: "Change mode (create); defaults to feature." },
 				baseline_commit: { type: "string", description: "Full commit hash the change is based on (create). Without it the baseline is recorded as having no VCS, because HEAD alone never identifies a candidate." },
 			},
