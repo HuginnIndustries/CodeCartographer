@@ -56,7 +56,8 @@ import { join, resolve } from "node:path";
 import { ingestProof, type IngestError } from "./proofs.ts";
 import { attestationForHostObservation, isTimestamp } from "./validation.ts";
 import { ENGINEERING_SCHEMA_VERSION } from "./types.ts";
-import type { AssurancePolicy, AttemptRecord, HostCapabilities, ProofRecord, SliceRecord, SnapshotRecord } from "./types.ts";
+import type { AssurancePolicy, AttemptRecord, HostCapabilities, ProofRecord, SliceRecord } from "./types.ts";
+import { boundCandidate } from "./lifecycle.ts";
 import type { EngineeringStore } from "./store.ts";
 
 export const HOST_OBSERVATION_SCHEMA = "codecarto.host-observation/1";
@@ -314,15 +315,8 @@ export async function ingestHostObservations(store: EngineeringStore, options: I
 	const attemptCreatedMs = ms(attempt.created_at);
 	// The capture instant of the CURRENT candidate bounds the activity window.
 	// No candidate, or one that cannot be read: the bound is open (refuse more).
-	let capturedAtMs: number | undefined;
-	if (attempt.candidate_snapshot_id !== undefined) {
-		try {
-			const snapshot = (await store.get("snapshot", attempt.candidate_snapshot_id, { changeId: options.changeId, attemptId: attempt.id })).record as SnapshotRecord;
-			capturedAtMs = ms(snapshot.captured_at);
-		} catch {
-			capturedAtMs = undefined;
-		}
-	}
+	const candidate = await boundCandidate(store, attempt);
+	const capturedAtMs: number | undefined = candidate ? ms(candidate.captured_at) : undefined;
 	const workspaceRoot = await realpathOrNull(options.workspaceRoot ?? resolve(store.root, "..", ".."));
 
 	// Pass 1: read and classify every file. Activity entries and observations

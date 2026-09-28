@@ -41,6 +41,7 @@ import type {
 	StorageBoundary,
 } from "./types.ts";
 import type { EngineeringStore } from "./store.ts";
+import { boundCandidate } from "./lifecycle.ts";
 
 /**
  * Stated on every outcome, without exception.
@@ -244,8 +245,8 @@ export async function evaluateAcceptanceGate(store: EngineeringStore, request: G
 					: "an attempt must reach ready-for-review or needs-human-acceptance before acceptance may be offered",
 		});
 	}
-	const candidateId = attempt.candidate_snapshot_id;
-	const candidate = candidateId ? await readRecord<SnapshotRecord>(store, "snapshot", candidateId, { changeId: request.change_id, attemptId: attempt.id }) : null;
+	// One resolution of "the attempt's candidate" for every reader (lifecycle.ts).
+	const candidate = await boundCandidate(store, attempt);
 
 	// An attempt with no candidate has nothing to accept: acceptance binds to
 	// specific bytes, and there are none.

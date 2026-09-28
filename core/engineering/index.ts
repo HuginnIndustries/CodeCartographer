@@ -25,3 +25,4 @@ export * from "./traverse.ts";
 export * from "./lift.ts";
 export * from "./acceptance.ts";
 export * from "./host-observations.ts";
+export * from "./lifecycle.ts";

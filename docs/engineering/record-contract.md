@@ -27,7 +27,7 @@ engineering/
       artifacts/<artifact-id>
 ```
 
-`change.json` and `slice.json` are versioned mutable projections updated with compare-and-swap on `revision`. Everything under `attempts/` is create-only once finalized; a corrected observation is a new record that names the one it supersedes. There is no global registry: a store enumerates `changes/` and reports a corrupt directory explicitly without hiding the others. Distribution isolation of this namespace (template copy, npm files, ignore rules) is E02.
+`change.json` and `slice.json` are versioned mutable projections updated with compare-and-swap on `revision`. Everything under `attempts/` is create-only once finalized; a corrected observation is a new record that names the one it supersedes. "Once finalized" is load-bearing for `attempt.json` alone: while its `outcome` is `running` it is the one open projection under `attempts/` — `capture-candidate` binds `candidate_snapshot_id` onto it and the lifecycle sets its final `outcome` — written under compare-and-swap on the bound candidate, with every identity field (`inputs`, `slice_id`, `baseline_snapshot_id`, `started_at`, …) pinned and the transition table enforced; once the stored `outcome` has left `running` no write reaches it (see [attempt-lifecycle](attempt-lifecycle.md)). Snapshots, proofs, reviews and approvals are create-only from the first byte. There is no global registry: a store enumerates `changes/` and reports a corrupt directory explicitly without hiding the others. Distribution isolation of this namespace (template copy, npm files, ignore rules) is E02.
 
 ## Grammar
 

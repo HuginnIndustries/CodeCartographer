@@ -45,6 +45,7 @@ import { describeGateOutcome, evaluateAcceptanceGate, type GateOutcome } from ".
 import { engineeringPaths, newNonce, newRecordId } from "./ids.ts";
 import type { EngineeringStore } from "./store.ts";
 import { StoreError } from "./store.ts";
+import { boundCandidate } from "./lifecycle.ts";
 import {
 	ACCEPTANCE_REQUEST_MAX_TTL_MS,
 	ENGINEERING_SCHEMA_VERSION,
@@ -249,7 +250,8 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 	if (attempt.outcome !== "ready-for-review" && attempt.outcome !== "needs-human-acceptance") {
 		throw new StoreError("invalid-state", `attempt ${attempt.id} is ${attempt.outcome}; acceptance can be asked for only from ready-for-review or needs-human-acceptance`);
 	}
-	const candidate = await readRecord<SnapshotRecord>(store, "snapshot", attempt.candidate_snapshot_id, { changeId: change.id, attemptId: attempt.id });
+	const candidate = await boundCandidate(store, attempt);
+	if (!candidate) throw new StoreError("invalid-state", `attempt ${attempt.id} names candidate ${attempt.candidate_snapshot_id} but it cannot be read; nothing is asked for a candidate the adapter cannot see`);
 	const context = { changeId: change.id, attemptId: attempt.id };
 	const proofs: ProofRecord[] = [];
 	for (const id of await listIds(store, change.id, attempt.id, "proofs")) proofs.push(await readRecord<ProofRecord>(store, "proof", id, context));

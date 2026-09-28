@@ -1,10 +1,17 @@
-// Re-reading the working tree for the acceptance path.
+// Reading the working tree: one walker for capture AND re-read.
 //
 // The contract's receipt path (docs/engineering/record-contract.md, step 1)
 // requires the adapter to re-read the tree at acceptance time and compare it
 // to the bound candidate with `checkCandidateFreshness`. Only the adapter can
 // do that read — core sees the record store, never the repository — so this
 // module is the one place on the MCP surface that walks the workspace.
+//
+// The SAME walker (`observe`) captures the baseline (`start_attempt`) and the
+// candidate (`capture_candidate`). That is parity by construction: a re-read
+// that used a different traversal, exclusion match, or hashing than the
+// capture could report STALE on an untouched tree (or FRESH on an edited one)
+// for reasons that have nothing to do with the bytes. Before this module
+// owned capture, the re-read was only ever proven against itself.
 //
 // It OBSERVES and never executes: no git process, no spawn. HEAD is resolved
 // by reading `.git/HEAD` (and the ref or packed-refs it points at); a `.git`
@@ -24,12 +31,17 @@ import { createHash } from "node:crypto";
 import { lstat, readdir, readFile, readlink } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 
-import { collectSnapshot, patternCovers, type ObservedEntry } from "../core/engineering/snapshots.ts";
+import { ALWAYS_EXCLUDED, collectSnapshot, patternCovers, type ObservedEntry } from "../core/engineering/snapshots.ts";
 import type { CoverageExclusion, SnapshotRecord } from "../core/engineering/types.ts";
 
 export type CandidateReread = Pick<SnapshotRecord, "coverage" | "manifest" | "repository">;
 
 export type WorkingTreeRead = { ok: true; reread: CandidateReread; limitations: string[] } | { ok: false; reason: string };
+
+/** What a capture yields: the identity fields a snapshot record carries, plus stability. */
+export type WorkingTreeCapture =
+	| { ok: true; capture: CandidateReread & { stability: "stable" | "unstable"; digest: string }; limitations: string[] }
+	| { ok: false; reason: string };
 
 const VCS_METADATA = new Set([".git"]);
 const SHA = /^[0-9a-f]{40}$/;
@@ -116,11 +128,12 @@ async function readGitHead(root: string): Promise<string | undefined> {
 }
 
 /**
- * Walk `root` and fingerprint every path the candidate's scope covers.
- * Unreadable entries are reported as such (they become uncovered inputs in
- * collectSnapshot), never skipped.
+ * Walk `root` and fingerprint every path the scope covers. Unreadable
+ * entries are reported as such (they become uncovered inputs in
+ * collectSnapshot), never skipped. This is THE walker: capture and re-read
+ * both go through it, so the two can only disagree about bytes.
  */
-async function observe(root: string, excluded: readonly CoverageExclusion[]): Promise<ObservedEntry[]> {
+export async function observe(root: string, excluded: readonly CoverageExclusion[]): Promise<ObservedEntry[]> {
 	const entries: ObservedEntry[] = [];
 	const covered = (path: string) => excluded.some((rule) => patternCovers(rule.pattern, path));
 	async function walk(dir: string): Promise<void> {
@@ -197,4 +210,41 @@ export async function readWorkingTree(root: string, candidate: SnapshotRecord): 
 	});
 	if (collected.ok === false) return { ok: false, reason: `the working tree could not be re-read in the candidate's scope: ${collected.errors.map((e) => `${e.path} ${e.message}`).join("; ")}` };
 	return { ok: true, reread: { coverage: collected.value.coverage, manifest: collected.value.manifest, repository: collected.value.repository }, limitations };
+}
+
+/**
+ * Capture the working tree at `root` as a snapshot identity, by the adapter.
+ *
+ * `excluded` is the scope the capture is taken under — the host-declared
+ * exclusions on top of `ALWAYS_EXCLUDED`, which is always applied (the
+ * engineering namespace would otherwise self-invalidate on every record
+ * write). Stability is observed, not declared: the tree is walked twice and
+ * the two passes must agree entry for entry; a tree that moved between them
+ * is `unstable`, and the contract says an unstable candidate cannot bind an
+ * acceptance. `stability` stays outside the digest, so a re-capture of the
+ * same settled tree yields the same digest.
+ */
+export async function captureWorkingTree(root: string, excluded: readonly CoverageExclusion[] = []): Promise<WorkingTreeCapture> {
+	const scope: CoverageExclusion[] = [...ALWAYS_EXCLUDED, ...excluded];
+	const first = await observe(root, scope);
+	const second = await observe(root, scope);
+	const moved = JSON.stringify(first) !== JSON.stringify(second);
+	const head = await readGitHead(root);
+	// `dirty` cannot be observed without running git, which this surface
+	// never does. A capture from a git tree therefore records `dirty: true`
+	// — "not shown to equal HEAD" — rather than a clean bit nobody checked.
+	const repository: CandidateReread["repository"] = head ? { vcs: "git", head, dirty: true } : { vcs: "none", dirty: true };
+	const limitations = [
+		head
+			? "the capture observed file bytes and HEAD by reading the repository directly; repository.dirty is recorded true because the adapter runs no git and cannot show the tree equals HEAD"
+			: "no readable git HEAD under the workspace; the capture is recorded with vcs none",
+	];
+	const collected = collectSnapshot({ entries: second, repository, excluded: scope, moved_during_capture: moved });
+	if (collected.ok === false) return { ok: false, reason: `the working tree could not be captured: ${collected.errors.map((e) => `${e.path} ${e.message}`).join("; ")}` };
+	if (moved) limitations.push("the tree changed between two passes of the capture; the snapshot is recorded unstable and cannot bind an acceptance");
+	return {
+		ok: true,
+		capture: { coverage: collected.value.coverage, manifest: collected.value.manifest, repository: collected.value.repository, stability: collected.value.stability, digest: collected.value.digest },
+		limitations,
+	};
 }
