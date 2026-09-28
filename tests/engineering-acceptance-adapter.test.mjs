@@ -913,6 +913,9 @@ test("(t) readWorkingTree in a git worktree: `.git` is a gitdir: file; HEAD reso
 
 		// Malformed `.git` files refuse with a clear reason, and nothing is followed.
 		for (const [label, content] of [["no gitdir line", "hello\n"], ["empty gitdir", "gitdir: \n"], ["gitdir naming a missing dir", "gitdir: ../nowhere\n"], ["gitdir naming a file", "gitdir: ../main/a.txt\n"]]) {
+			// Git for Windows marks a worktree's `.git` file hidden (core.hideDotFiles),
+			// and overwriting a hidden file in place is EPERM there: replace it instead.
+			await rm(join(wt, ".git"), { force: true });
 			await writeFile(join(wt, ".git"), content);
 			const bad = await readWorkingTree(wt, candidate);
 			assert.equal(bad.ok, false, label);
