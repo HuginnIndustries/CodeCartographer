@@ -922,3 +922,43 @@ test("(t) readWorkingTree in a git worktree: `.git` is a gitdir: file; HEAD reso
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+
+test("(u) readWorkingTree's HEAD reader: every malformed HEAD, ref or gitdir is refused, and each refusal has a well-formed twin that is accepted", { skip: process.platform === "win32" && "builds symlinks and backslash file names; POSIX only" }, async () => {
+	// Each refused case plants a file the reader COULD resolve to a valid sha if the guard
+	// were missing, so a loosened guard turns a refusal into an OK and fails here.
+	const GOOD = "a".repeat(40);
+	const OTHER = "b".repeat(40);
+	const dir = await mkdtemp(join(tmpdir(), "codecarto-wt-head-"));
+	try {
+		const cases = [
+			// [label, expect ok?, expected head, setup(root)]
+			["40-hex HEAD", true, GOOD, async (root) => { await mkdir(join(root, ".git")); await writeFile(join(root, ".git", "HEAD"), `${GOOD}\n`); }],
+			["39-hex HEAD", false, undefined, async (root) => { await mkdir(join(root, ".git")); await writeFile(join(root, ".git", "HEAD"), `${GOOD.slice(1)}\n`); }],
+			["uppercase HEAD", false, undefined, async (root) => { await mkdir(join(root, ".git")); await writeFile(join(root, ".git", "HEAD"), `${"A".repeat(40)}\n`); }],
+			["sha-256 HEAD (64 hex; object format not modelled)", false, undefined, async (root) => { await mkdir(join(root, ".git")); await writeFile(join(root, ".git", "HEAD"), `${"a".repeat(64)}\n`); }],
+			["loose ref", true, OTHER, async (root) => { await mkdir(join(root, ".git", "refs", "heads"), { recursive: true }); await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/x\n"); await writeFile(join(root, ".git", "refs", "heads", "x"), `${OTHER}\n`); }],
+			["ref climbing out with ..", false, undefined, async (root) => { await mkdir(join(root, ".git")); await writeFile(join(root, ".git", "HEAD"), "ref: ../outside\n"); await writeFile(join(root, "outside"), `${OTHER}\n`); }],
+			["ref with an empty segment", false, undefined, async (root) => { await mkdir(join(root, ".git", "refs", "heads"), { recursive: true }); await writeFile(join(root, ".git", "HEAD"), "ref: refs//heads/x\n"); await writeFile(join(root, ".git", "refs", "heads", "x"), `${OTHER}\n`); }],
+			["ref with backslashes", false, undefined, async (root) => { await mkdir(join(root, ".git")); await writeFile(join(root, ".git", "HEAD"), "ref: refs\\heads\\x\n"); await writeFile(join(root, ".git", "refs\\heads\\x"), `${OTHER}\n`); }],
+			["gitdir file naming a real directory", true, GOOD, async (root) => { await mkdir(join(root, "gd")); await writeFile(join(root, "gd", "HEAD"), `${GOOD}\n`); await writeFile(join(root, ".git"), "gitdir: gd\n"); }],
+			["gitdir file naming a symlink to a directory", false, undefined, async (root) => { await mkdir(join(root, "gd")); await writeFile(join(root, "gd", "HEAD"), `${GOOD}\n`); await symlink(join(root, "gd"), join(root, "gd-link")); await writeFile(join(root, ".git"), "gitdir: gd-link\n"); }],
+		];
+		let n = 0;
+		for (const [label, expectOk, expectedHead, setup] of cases) {
+			const root = join(dir, String(n++));
+			await mkdir(root);
+			await writeFile(join(root, "a.txt"), "a\n");
+			await setup(root);
+			const result = await readWorkingTree(root, SNAPSHOT);
+			if (expectOk) {
+				assert.equal(result.ok, true, `${label}: ${result.ok ? "" : result.reason}`);
+				assert.equal(result.reread.repository.head, expectedHead, label);
+			} else {
+				assert.equal(result.ok, false, `${label}: accepted with head ${result.ok ? result.reread.repository.head : ""}`);
+				assert.match(result.reason, /no HEAD could be read/, label);
+			}
+		}
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
