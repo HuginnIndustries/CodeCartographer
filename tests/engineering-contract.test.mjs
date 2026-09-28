@@ -132,7 +132,7 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	}
 	const dir = join(REPO_ROOT, "core", "engineering");
 	const files = (await readdir(dir)).filter((n) => n.endsWith(".ts")).sort();
-	assert.deepEqual(files, ["acceptance.ts", "digest.ts", "gates.ts", "ids.ts", "index.ts", "lift.ts", "planning.ts", "proofs.ts", "snapshots.ts", "store.ts", "traverse.ts", "types.ts", "validation.ts"]);
+	assert.deepEqual(files, ["acceptance.ts", "digest.ts", "gates.ts", "host-observations.ts", "ids.ts", "index.ts", "lift.ts", "planning.ts", "proofs.ts", "snapshots.ts", "store.ts", "traverse.ts", "types.ts", "validation.ts"]);
 	// snapshots (E03) sits beside validation: both consume types/ids/digest and
 	// neither imports the other. store (E02) sits above both: it is the one
 	// file here that is ALLOWED to touch the filesystem, because persisting
@@ -158,7 +158,13 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	// passed. It imports no child process and no network; the client is
 	// reached only through the Presenter its caller hands it, and the tree
 	// only through the reread callback the adapter hands it.
-	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, lift: 2, store: 3, proofs: 4, gates: 4, acceptance: 5, traverse: 5, index: 6 };
+	// host-observations (E05 ingestion, #409) sits ABOVE proofs: it reads the
+	// protected inbox the hook writes and hands each observation to
+	// `ingestProof`. It is the one reader that may open files outside the
+	// record store, and only `node:fs` -- never a child process, never the
+	// environment, so the attestation it derives comes from host capabilities
+	// passed in, not from anything it could discover on its own.
+	const layer = { types: 0, ids: 1, digest: 1, validation: 2, snapshots: 2, planning: 2, lift: 2, store: 3, proofs: 4, gates: 4, acceptance: 5, "host-observations": 5, traverse: 5, index: 6 };
 	// Everything except the store must stay pure. Splitting the rule rather
 	// than dropping it: a validator that gained a `node:fs` import would
 	// still fail, which is the property this test was written for.
@@ -171,7 +177,7 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 	// reviews. Note gates reaches fs through a STATIC import on purpose — a
 	// dynamic `await import("node:fs/promises")` would slip past this regex
 	// entirely, which is evasion rather than compliance.
-	const IMPURE = ["index.ts", "store.ts", "proofs.ts", "gates.ts", "acceptance.ts"];
+	const IMPURE = ["index.ts", "store.ts", "proofs.ts", "gates.ts", "acceptance.ts", "host-observations.ts"];
 	const PURE = files.filter((f) => !IMPURE.includes(f));
 	for (const file of files) {
 		const source = await readFile(join(dir, file), "utf8");
@@ -182,13 +188,15 @@ test("core/index.ts re-exports the engineering contract, and nothing in core/eng
 				const dep = target.slice(2, -3);
 				assert.ok(layer[dep] < layer[name], `${file} imports ${target}, which is not below it`);
 				assert.notEqual(dep, "index", `${file} imports the barrel`);
-			} else if (name === "store" || name === "proofs" || name === "gates" || name === "acceptance") {
+			} else if (name === "store" || name === "proofs" || name === "gates" || name === "acceptance" || name === "host-observations") {
 				// The store may reach the filesystem and the shared primitives it
 				// would otherwise reimplement: atomic write, transient-error
-				// retry, and the workspace lock.
+				// retry, and the workspace lock. host-observations additionally
+				// needs `node:fs` for O_EXCL/O_NOFOLLOW flags and `node:crypto`
+				// to digest what it read.
 				assert.ok(
-					["node:fs/promises", "node:path", "../utils.ts", "../status.ts"].includes(target),
-					`${file} imports ${target}; the store and proofs may only use fs, path, and the shared write/lock primitives`,
+					["node:fs/promises", "node:fs", "node:path", "node:crypto", "../utils.ts", "../status.ts"].includes(target),
+					`${file} imports ${target}; the store, proofs, gates, acceptance and host-observations may only use node:fs(/promises), node:path, node:crypto, and the shared write/lock primitives`,
 				);
 			} else if (name !== "index") {
 				// The only Node modules the contract may touch: hashing and

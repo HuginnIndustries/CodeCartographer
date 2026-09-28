@@ -24,3 +24,4 @@ export * from "./gates.ts";
 export * from "./traverse.ts";
 export * from "./lift.ts";
 export * from "./acceptance.ts";
+export * from "./host-observations.ts";
