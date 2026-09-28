@@ -10,6 +10,7 @@
 // Every case asserts CONTENT: what was stored, what was sent to the client,
 // and what the result said — not merely a state name.
 
+import "./helpers/git-environment-isolation.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
@@ -860,7 +861,16 @@ test("(t) readWorkingTree in a git worktree: `.git` is a gitdir: file; HEAD reso
 		const main = join(dir, "main");
 		const wt = join(dir, "wt");
 		await mkdir(main);
-		const git = (...args) => execFileAsync("git", args, { cwd: main, env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+		// Every git call in this fixture, including the ones run inside the
+		// worktree, goes through the same environment. On Windows a checkout
+		// run outside it picks up the runner's system core.autocrlf=true and
+		// rewrites a.txt with CRLF, which a byte-exact re-read rightly calls
+		// STALE. The isolation import at the top of the file removes the
+		// system and global config for the whole process; the identity is
+		// set here.
+		const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+		const gitAt = (cwd, ...args) => execFileAsync("git", args, { cwd, env: gitEnv });
+		const git = (...args) => gitAt(main, ...args);
 		await git("init", "-q", "-b", "main");
 		await writeFile(join(main, "a.txt"), "a\n");
 		await git("add", "a.txt");
@@ -887,14 +897,14 @@ test("(t) readWorkingTree in a git worktree: `.git` is a gitdir: file; HEAD reso
 		assert.equal(checkCandidateFreshness(candidate, untouched.reread).ok, true, "an untouched worktree is FRESH");
 
 		// Switch the worktree's branch: HEAD moves (and here the bytes too).
-		await execFileAsync("git", ["checkout", "-q", "--detach", second], { cwd: wt });
+		await gitAt(wt, "checkout", "-q", "--detach", second);
 		const switched = await readWorkingTree(wt, candidate);
 		assert.equal(switched.ok, true);
 		assert.equal(switched.reread.repository.head, second);
 		assert.equal(checkCandidateFreshness(candidate, switched.reread).ok, false, "a switched worktree is STALE");
 
 		// A branch ref that lives only in packed-refs of the COMMON dir still resolves.
-		await execFileAsync("git", ["checkout", "-q", "feature"], { cwd: wt });
+		await gitAt(wt, "checkout", "-q", "feature");
 		await git("pack-refs", "--all");
 		const packed = await readWorkingTree(wt, candidate);
 		assert.equal(packed.ok, true, packed.ok ? "" : packed.reason);

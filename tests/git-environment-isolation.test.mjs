@@ -56,10 +56,11 @@ const INJECTED = {
 	GIT_CONFIG_VALUE_0: "git@github.com:",
 };
 
-/** The seven files that build Git fixtures and carry the guard. */
+/** The eight files that build Git fixtures and carry the guard. */
 const GUARDED_FILES = [
 	"tests/broadside-repo-collection.test.mjs",
 	"tests/broadside.test.mjs",
+	"tests/engineering-acceptance-adapter.test.mjs",
 	"tests/library.test.mjs",
 	"tests/mcp-uncovered-handlers.test.mjs",
 	"tests/pi-broadside.test.mjs",
@@ -365,7 +366,7 @@ test("GIT_EDITOR is set to a no-op: an interactive-capable fixture command canno
 
 test("every guarded file imports the isolation helper first", async () => {
 	// One passing file is insufficient (B01-A3): assert the boundary is
-	// applied at all seven sites, and that it is genuinely FIRST — the defect
+	// applied at all eight sites, and that it is genuinely FIRST — the defect
 	// in broadside-repo-collection.test.mjs was position, not absence.
 	const { readFile } = await import("node:fs/promises");
 	for (const relative of GUARDED_FILES) {
