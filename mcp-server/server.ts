@@ -13,7 +13,7 @@
 // Tools that produce phase or skill text return it inline as the tool result;
 // the host decides how to surface it (display, feed to the agent, etc.).
 
-import { type ListToolsResult, ProtocolError, ProtocolErrorCode, Server } from "@modelcontextprotocol/server";
+import { type ListToolsResult, ProtocolError, ProtocolErrorCode, SdkError, SdkErrorCode, Server } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { cp, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
@@ -107,7 +107,8 @@ import {
 	writeLibraryConfig,
 	writeDashboard,
 } from "../core/index.ts";
-import { createChangeHandler, ENGINEERING_TOOLS } from "./engineering.ts";
+import { createChangeHandler, ENGINEERING_TOOLS, type AcceptanceSession } from "./engineering.ts";
+import type { VerifiedAcceptanceIntegration } from "../core/engineering/types.ts";
 import { applyAmendment } from "../core/amendment.ts";
 import { appendUsageRun } from "../core/usage.ts";
 import { initLibrary } from "../core/library.ts";
@@ -1942,6 +1943,14 @@ const TOOLS = [
 	},
 ] as const;
 
+/**
+ * The session the acceptance adapter reads. Set by {@link buildServer} once
+ * the SDK has the client's initialize-scoped capabilities and clientInfo;
+ * handlers driven without a server (tests, in-process callers) see none and
+ * the host declares no channel.
+ */
+let acceptanceSession: AcceptanceSession | undefined;
+
 const handleChange = createChangeHandler({
 	validateCwd,
 	requireWorkspaceDir: async (cwd: string) => {
@@ -1951,6 +1960,7 @@ const handleChange = createChangeHandler({
 		return join(cwd, ".codecarto");
 	},
 	textResult,
+	session: () => acceptanceSession,
 });
 
 /** The registered handler, exported so tests drive the instance a client reaches. */
@@ -2004,7 +2014,18 @@ export async function handleGuide(args: { topic?: string }) {
 // 2026-07-28-era responses; a 2025-era response never carries them.
 const TOOLS_LIST_CACHE_HINT = { ttlMs: 24 * 60 * 60 * 1000, cacheScope: "public" as const };
 
-export function buildServer() {
+/**
+ * @internal Options for tests only. `acceptanceRegistry` substitutes the
+ * contract's `VERIFIED_ACCEPTANCE_INTEGRATIONS` so the SUPPORTED elicitation
+ * path can be exercised against a scripted client; bin.mjs calls
+ * {@link startStdioServer}, which never passes it, and no environment
+ * variable or config file reaches it.
+ */
+export interface BuildServerOptions {
+	acceptanceRegistry?: ReadonlyArray<VerifiedAcceptanceIntegration>;
+}
+
+export function buildServer(options: BuildServerOptions = {}) {
 	const server = new Server(
 		{ name: "codecartographer", version: PACKAGE_VERSION },
 		{
@@ -2012,6 +2033,39 @@ export function buildServer() {
 			cacheHints: { "tools/list": TOOLS_LIST_CACHE_HINT },
 		},
 	);
+
+	// The acceptance session is derived from the TRANSPORT — what the client
+	// declared at initialize — and from host configuration. No mechanism for
+	// host/user-level configuration exists yet, so storage_boundary,
+	// tool_result_path and current_storage default to the least-trusted values
+	// and every acceptance reads as cooperative (D3).
+	acceptanceSession = {
+		get elicitation_form() {
+			const caps = server.getClientCapabilities() as { elicitation?: { form?: unknown } } | undefined;
+			return caps?.elicitation?.form !== undefined;
+		},
+		get client() {
+			const info = server.getClientVersion();
+			return info ? { name: info.name, version: info.version } : undefined;
+		},
+		host_session: `stdio session ${process.pid}`,
+		storage_boundary: "none",
+		tool_result_path: "none",
+		current_storage: { boundary: "none" },
+		presenter: {
+			async elicit(form, { timeoutMs }) {
+				try {
+					const result = await server.elicitInput({ mode: "form", message: form.message, requestedSchema: form.requestedSchema as never }, { timeout: timeoutMs });
+					return { action: result.action, content: result.content };
+				} catch (error) {
+					const code = (error as { code?: unknown } | null)?.code;
+					const timedOut = error instanceof SdkError && error.code === SdkErrorCode.RequestTimeout;
+					return { threw: error instanceof Error ? error.message : String(error), code: timedOut ? -32001 : typeof code === "number" ? code : undefined };
+				}
+			},
+		},
+		registry: options.acceptanceRegistry,
+	};
 
 	// The engineering surface is appended rather than interleaved: it is
 	// experimental, and a host diffing the inventory should see exactly one
