@@ -103,6 +103,12 @@ every write.
 
 The hook always exits 0: an observer must not block the host.
 
+**POSIX only.** The hook refuses any namespace that is not an absolute POSIX path and
+needs `O_NOFOLLOW`, which Windows does not provide, so on Windows it records nothing.
+The reader runs there, but without `O_NOFOLLOW` only its `lstat` check guards against
+an inbox symlink. The Windows CI job skips the hook tests and the reader's `O_NOFOLLOW`
+test for this reason.
+
 ## What the reader trusts
 
 `ingestHostObservations(store, { capabilities, changeId, attemptId })`:

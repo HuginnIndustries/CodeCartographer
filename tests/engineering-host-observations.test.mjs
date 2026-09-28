@@ -9,8 +9,15 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile, lstat, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+// The hook is POSIX-only by design: it refuses any namespace that is not an
+// absolute POSIX path and needs O_NOFOLLOW, which Windows does not have, so on
+// Windows it records nothing. Its tests are skipped there rather than bent to
+// pass. The reader's O_NOFOLLOW guard is POSIX-only for the same reason; on
+// Windows only its lstat check stands between an inbox symlink and a read.
+const POSIX_ONLY = process.platform === "win32" && "POSIX-only: the hook refuses non-POSIX namespaces and O_NOFOLLOW does not exist on Windows";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const engineering = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/index.ts`).href);
@@ -147,7 +154,7 @@ test("malformed, wrong-schema, symlinked, directory, oversized and non-.json ent
 		await drop(inbox, "1.status", "wrote");
 		const out = await ingest(store, PROTECTED);
 		assert.equal(out.ingested.length, 0);
-		const reasons = Object.fromEntries(out.skipped.map((s) => [s.file.split("/").pop(), s.reason]));
+		const reasons = Object.fromEntries(out.skipped.map((s) => [basename(s.file), s.reason]));
 		assert.deepEqual(reasons, {
 			"bad-json.json": "not-json",
 			"wrong-schema.json": "invalid-observation",
@@ -316,7 +323,7 @@ test("A2: an observation recorded outside the workspace root is refused (observa
 			assert.match(s.message, new RegExp(`not the workspace root ${JSON.stringify(JSON.stringify(root)).slice(1, -1)}`));
 		}
 		// realpaths are compared: a symlink to the root is the root
-		await symlink(root, join(dirname(root), `${root.split("/").pop()}-alias`));
+		await symlink(root, join(dirname(root), `${basename(root)}-alias`));
 		try {
 			await drop(inbox, "alias.json", observation({ tool_use_id: "toolu_alias", cwd: `${root}-alias` }));
 			const again = await ingest(store, PROTECTED);
@@ -418,7 +425,7 @@ test("A3: rotation keeps a gating record while the observation it refuses is sti
 		await drop(inbox, "edit.json", activity());
 		await drop(inbox, "unrelated-edit.json", activity({ tool_use_id: "toolu_u", session_id: "sess-9" }));
 		const out = await ingest(store, PROTECTED);
-		assert.deepEqual(out.rotated.map((f) => f.split("/").pop()), ["unrelated-edit.json"]);
+		assert.deepEqual(out.rotated.map((f) => basename(f)), ["unrelated-edit.json"]);
 		assert.deepEqual((await readdir(inbox)).sort(), ["edit.json", "processed", "run.json"]);
 	});
 });
@@ -448,7 +455,7 @@ test("an activity-shaped inbox file with unknown fields is skipped and left in p
 	});
 });
 
-test("reader O_NOFOLLOW: with an lstat that lies about a symlink, the open still refuses to follow it", async () => {
+test("reader O_NOFOLLOW: with an lstat that lies about a symlink, the open still refuses to follow it", { skip: POSIX_ONLY }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "codecarto-nofollow-"));
 	try {
 		await writeFile(join(root, "target.json"), JSON.stringify(observation()));
@@ -497,7 +504,7 @@ async function listAll(dir) {
 	return out.sort();
 }
 
-test("hook: one synthetic payload -> exactly one new inbox file, a status log, nothing else, nothing outside", async () => {
+test("hook: one synthetic payload -> exactly one new inbox file, a status log, nothing else, nothing outside", { skip: POSIX_ONLY }, async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "codecarto-hook-")));
 	try {
 		const ns = join(root, "ns");
@@ -532,7 +539,7 @@ test("hook: one synthetic payload -> exactly one new inbox file, a status log, n
 	}
 });
 
-test("hook: O_EXCL — a pre-created target (file or symlink) is never overwritten or written through", async () => {
+test("hook: O_EXCL — a pre-created target (file or symlink) is never overwritten or written through", { skip: POSIX_ONLY }, async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "codecarto-hook-excl-")));
 	try {
 		const ns = join(root, "ns");
@@ -572,7 +579,7 @@ test("hook: O_EXCL — a pre-created target (file or symlink) is never overwritt
 	}
 });
 
-test("hook + reader end to end: hook output ingests as a host-tool-result proof under protected capabilities", async () => {
+test("hook + reader end to end: hook output ingests as a host-tool-result proof under protected capabilities", { skip: POSIX_ONLY }, async () => {
 	await withWorkspace(async ({ store }) => {
 		const r = runHook(store.root, { ...PAYLOAD, cwd: WORKSPACE, tool_input: { command: TEST_CMD } });
 		assert.equal(r.status, 0);
@@ -584,7 +591,7 @@ test("hook + reader end to end: hook output ingests as a host-tool-result proof 
 	});
 });
 
-test("hook B: a symlinked ANCESTOR of the namespace -> nothing written anywhere, one stderr line, exit 0", async () => {
+test("hook B: a symlinked ANCESTOR of the namespace -> nothing written anywhere, one stderr line, exit 0", { skip: POSIX_ONLY }, async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "codecarto-hook-ancestor-")));
 	try {
 		await mkdir(join(root, "attacker", "engineering"), { recursive: true });
@@ -614,7 +621,7 @@ test("hook B: a symlinked ANCESTOR of the namespace -> nothing written anywhere,
 	}
 });
 
-test("hook B: a symlinked hook-logs (or inbox) directory under a real namespace -> refused, target untouched", async () => {
+test("hook B: a symlinked hook-logs (or inbox) directory under a real namespace -> refused, target untouched", { skip: POSIX_ONLY }, async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "codecarto-hook-logs-")));
 	try {
 		const ns = join(root, "ns");
@@ -639,7 +646,7 @@ test("hook B: a symlinked hook-logs (or inbox) directory under a real namespace 
 	}
 });
 
-test("hook A3: Edit/Write/MultiEdit/NotebookEdit -> an activity entry with nothing from tool_input; other tools are refused", async () => {
+test("hook A3: Edit/Write/MultiEdit/NotebookEdit -> an activity entry with nothing from tool_input; other tools are refused", { skip: POSIX_ONLY }, async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "codecarto-hook-activity-")));
 	try {
 		const ns = join(root, "ns");
@@ -675,7 +682,7 @@ test("hook A3: Edit/Write/MultiEdit/NotebookEdit -> an activity entry with nothi
 	}
 });
 
-test("hook + reader end to end (A3): a check run, then an Edit, then the capture -> the reader refuses the check naming the Edit", async () => {
+test("hook + reader end to end (A3): a check run, then an Edit, then the capture -> the reader refuses the check naming the Edit", { skip: POSIX_ONLY }, async () => {
 	await withWorkspace(async ({ store, inbox }) => {
 		// Both hook writes happen "now" (after the fixture capture at 10:22:00),
 		// so the hook records are re-stamped onto the fixture timeline.
