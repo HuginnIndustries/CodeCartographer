@@ -44,6 +44,7 @@ import {
 	buildChangeBrief,
 	describeGateOutcome,
 	evaluateAcceptanceGate,
+	ingestHostObservations,
 	ingestProof,
 	newRecordId,
 	openStore,
@@ -54,7 +55,7 @@ import {
 import { ENGINEERING_SCHEMA_VERSION } from "../core/engineering/types.ts";
 
 /** Every action this surface implements. Pinned so the schema and the dispatch cannot drift. */
-export const CHANGE_ACTIONS = ["create", "update", "show", "list", "plan", "record_proof", "gate"] as const;
+export const CHANGE_ACTIONS = ["create", "update", "show", "list", "plan", "record_proof", "gate", "ingest_observations"] as const;
 export type ChangeAction = (typeof CHANGE_ACTIONS)[number];
 
 /**
@@ -239,6 +240,8 @@ export function createChangeHandler(deps: {
 				return await recordProof(store, args, deps.textResult);
 			case "gate":
 				return await gateChange(store, args, deps.textResult);
+			case "ingest_observations":
+				return await ingestObservations(store, args, deps.textResult);
 		}
 	};
 }
@@ -480,6 +483,37 @@ async function gateChange(store: EngineeringStore, args: ChangeArgs, textResult:
 	});
 }
 
+
+/**
+ * Ingest the host's hook-written observations for one attempt (E05, #409).
+ *
+ * `tool_result_path` is host configuration outside the workspace. No such
+ * configuration channel reaches this MCP server yet, so this surface passes
+ * `unprotected`: every proof it ingests is attested `caller`, is `claimed`,
+ * and discharges nothing under `verified`. That is stated in the result. A
+ * request field could not change it — a model cannot raise its own
+ * capability — so none is read.
+ */
+const MCP_TOOL_RESULT_PATH = "unprotected" as const;
+
+async function ingestObservations(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown) {
+	const changeId = requireString(args, "change_id");
+	const attemptId = requireString(args, "attempt_id");
+	if (Object.hasOwn(args, "tool_result_path") || Object.hasOwn(args, "capabilities")) {
+		invalid("tool_result_path is host configuration, not a request field");
+	}
+	const outcome = await ingestHostObservations(store, { changeId, attemptId, capabilities: { tool_result_path: MCP_TOOL_RESULT_PATH, label: "claude-code" } });
+	const summary = `Ingested ${outcome.ingested.length} observation(s) as ${outcome.attested_by} (attested by this surface as caller-reported: no protected tool-result path is configured for MCP, so nothing here discharges under verified); skipped ${outcome.skipped.length}.`;
+	return textResult(summary, {
+		change_id: changeId,
+		attempt_id: attemptId,
+		attested_by: outcome.attested_by,
+		ingested: outcome.ingested,
+		skipped: outcome.skipped.map((s) => ({ file: s.file, reason: s.reason, message: s.message })),
+		rotated: outcome.rotated,
+	});
+}
+
 /** The advertised tool. One entry, one discriminator, marked experimental. */
 export const ENGINEERING_TOOLS = [
 	{
@@ -496,7 +530,7 @@ export const ENGINEERING_TOOLS = [
 				outcome: { type: "string", description: "The outcome being requested (create)." },
 				revision: { type: "number", description: "Compare-and-swap revision the caller last read (update)." },
 				request_id: { type: "string", description: "Caller-chosen id making create retry-safe." },
-				attempt_id: { type: "string", description: "Attempt to evaluate (gate)." },
+				attempt_id: { type: "string", description: "Attempt to evaluate (gate) or to ingest host observations for (ingest_observations)." },
 				proof: { type: "object", description: "A proof of a check the HOST ran (record_proof)." },
 				mode: { type: "string", enum: ["fix", "feature", "refactor", "migration", "investigation"], description: "Change mode (create); defaults to feature." },
 				baseline_commit: { type: "string", description: "Full commit hash the change is based on (create). Without it the baseline is recorded as having no VCS, because HEAD alone never identifies a candidate." },

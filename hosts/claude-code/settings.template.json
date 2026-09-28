@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "deny": [
+      "Write(./.codecarto/engineering/**)",
+      "Edit(./.codecarto/engineering/**)",
+      "Write({{HOOK_DIR}}/**)",
+      "Edit({{HOOK_DIR}}/**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "denyWrite": [
+        "{{PROJECT_DIR}}/.codecarto/engineering",
+        "{{HOOK_DIR}}",
+        "{{NODE}}",
+        "{{SETTINGS_FILE}}"
+      ]
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{NODE}} {{HOOK_DIR}}/observe.mjs {{PROJECT_DIR}}/.codecarto/engineering"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{NODE}} {{HOOK_DIR}}/observe.mjs {{PROJECT_DIR}}/.codecarto/engineering"
+          }
+        ]
+      }
+    ]
+  }
+}

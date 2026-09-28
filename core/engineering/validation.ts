@@ -583,6 +583,7 @@ const OBLIGATION_SHAPE: Shape = {
 	scenario_id: req(localId),
 	check_kind: req(oneOf(CHECK_KINDS)),
 	description: req(nonEmptyString),
+	command: opt(nonEmptyString),
 	minimum_collector: req(oneOf(OBSERVED_COLLECTORS)),
 };
 
