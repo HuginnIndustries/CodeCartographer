@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -331,10 +331,20 @@ test("the published declarations compile for a consumer with skipLibCheck off: n
 	// leaves any PUBLIC signature that names it dangling (TS2304 in the
 	// consumer). Consumers with `skipLibCheck: false` see that as a broken
 	// package. The repo's own tsc, not npx, so the check runs offline.
-	await withTempDir(async (dir) => {
+	//
+	// The consumer lives under node_modules/.cache (gitignored scratch, not
+	// the live .codecarto/) and imports dist by a RELATIVE specifier. An
+	// absolute one is not portable: on Windows pathToFileURL(...).pathname
+	// is "/D:/a/...", which tsc cannot resolve, and the runner's temp dir is
+	// on a different drive from the checkout, so no relative path from there
+	// exists either.
+	const cacheRoot = join(REPO_ROOT, "node_modules", ".cache");
+	await mkdir(cacheRoot, { recursive: true });
+	const dir = await mkdtemp(join(cacheRoot, "codecarto-dts-"));
+	try {
 		const tsc = join(REPO_ROOT, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc");
 		const consumer = join(dir, "use.ts");
-		const dist = pathToFileURL(join(REPO_ROOT, "dist")).pathname;
+		const dist = relative(dir, join(REPO_ROOT, "dist")).split(sep).join("/");
 		await writeFile(consumer, [
 			`import { buildServer } from "${dist}/mcp-server/server.js";`,
 			`import { openStore, requestAcceptance } from "${dist}/core/index.js";`,
@@ -354,5 +364,7 @@ test("the published declarations compile for a consumer with skipLibCheck off: n
 		// fix; only diagnostics that name a file under dist/ are ours.
 		const ours = run.out.split("\n").filter((line) => /dist\/(core|mcp-server)\/.*error TS/.test(line) || /use\.ts.*error TS/.test(line));
 		assert.deepEqual(ours, [], `the published declarations do not compile for a consumer:\n${run.out}`);
-	});
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
