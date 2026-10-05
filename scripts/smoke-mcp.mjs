@@ -8,6 +8,7 @@
 
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { smokeProfile } from "./smoke-profile.mjs";
 import assert from "node:assert/strict";
 import { execFile as execFileCb } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -40,12 +41,15 @@ const TARBALL = argv.tarball ? resolve(argv.tarball) : null;
 const VERSION = TARBALL ? null : (argv.version ?? repoPkg.version);
 const INSTALL_SPEC = TARBALL ?? `codecartographer-pi@${VERSION}`;
 const INSTALL_LABEL = TARBALL ? `tarball ${TARBALL}` : `codecartographer-pi@${VERSION}`;
+const profile = smokeProfile({ version: VERSION, tarball: Boolean(TARBALL) });
 
 let smokeRoot;
 let keepTmp = argv["keep-tmp"];
 const stderrChunks = [];
+const clients = [];
 
 async function cleanup() {
+	await Promise.allSettled(clients.map((client) => client.close()));
 	if (!smokeRoot) return;
 	if (keepTmp) {
 		console.error(`# preserving harness at ${smokeRoot}`);
@@ -79,7 +83,7 @@ async function setupFixture() {
 	await execFile(
 		"npm",
 		["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", pkgRoot, INSTALL_SPEC],
-		{ env: installEnv },
+		{ env: installEnv, timeout: 120_000 },
 	);
 
 	const binPath = join(pkgRoot, "node_modules", ".bin", "codecarto-mcp");
@@ -87,35 +91,13 @@ async function setupFixture() {
 	return { pkgRoot, target, binPath };
 }
 
-const EXPECTED_TOOLS = [
-	"codecarto_amend",
-	"codecarto_broadside",
-	"codecarto_change",
-	"codecarto_complete",
-	"codecarto_config",
-	"codecarto_dashboard",
-	"codecarto_guide",
-	"codecarto_init",
-	"codecarto_library_init",
-	"codecarto_library_list",
-	"codecarto_library_reindex",
-	"codecarto_list_skills",
-	"codecarto_next",
-	"codecarto_open",
-	"codecarto_phase",
-	"codecarto_publish",
-	"codecarto_refresh_scaffold",
-	"codecarto_skill",
-	"codecarto_status",
-	"codecarto_switch_pipeline",
-	"codecarto_usage",
-	"codecarto_validate",
-	"codecarto_vision",
-];
-
 async function step(name, fn) {
+	let timer;
 	try {
-		await fn();
+		await Promise.race([
+			fn(),
+			new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${name} timed out after 30s`)), 30_000); }),
+		]);
 		console.log(`ok - ${name}`);
 	} catch (err) {
 		console.log(`not ok - ${name}`);
@@ -130,6 +112,8 @@ async function step(name, fn) {
 		keepTmp = true;
 		process.exitCode = 1;
 		throw err;
+	} finally {
+		clearTimeout(timer);
 	}
 }
 
@@ -151,18 +135,16 @@ async function main() {
 	const transport = new StdioClientTransport({ command: binPath, args: [], stderr: "pipe" });
 	transport.stderr?.on("data", (c) => stderrChunks.push(c));
 	const client = new Client({ name: "codecarto-smoke", version: "0.0.0" }, { capabilities: {} });
+	clients.push(client);
 
 	await step("connect: server boots and completes initialize handshake", async () => {
-		await Promise.race([
-			client.connect(transport),
-			new Promise((_, rej) => setTimeout(() => rej(new Error("connect timeout 10s")), 10_000)),
-		]);
+		await client.connect(transport);
 	});
 
 	await step("tools/list: returns the documented workflow and library tools", async () => {
 		const { tools } = await client.listTools();
 		const names = tools.map((t) => t.name).sort();
-		assert.deepEqual(names, EXPECTED_TOOLS);
+		assert.deepEqual(names, profile.expectedTools);
 		const init = tools.find((t) => t.name === "codecarto_init");
 		assert.ok(init.inputSchema?.required?.includes("cwd"), "codecarto_init must require cwd");
 	});
@@ -225,6 +207,11 @@ async function main() {
 		);
 	});
 
+	if (!profile.checkModernProtocol) {
+		console.log(`# skipping 3 modern protocol checks: ${INSTALL_LABEL} predates SDK v2`);
+		console.log("1..9");
+		return;
+	}
 	await client.close();
 
 	// The same binary, opened in the 2026-07-28 era: the client probes with
@@ -237,19 +224,17 @@ async function main() {
 		{ name: "codecarto-smoke-2026", version: "0.0.0" },
 		{ capabilities: {}, versionNegotiation: { mode: "auto" } },
 	);
+	clients.push(modern);
 
 	await step("2026-07-28: server/discover negotiation reaches the modern era", async () => {
-		await Promise.race([
-			modern.connect(modernTransport),
-			new Promise((_, rej) => setTimeout(() => rej(new Error("connect timeout 10s")), 10_000)),
-		]);
+		await modern.connect(modernTransport);
 		assert.equal(modern.getServerVersion()?.name, "codecartographer");
 		assert.deepEqual(Object.keys(modern.getServerCapabilities() ?? {}), ["tools"]);
 	});
 
 	await step("2026-07-28: tools/list carries the same inventory and the caching hints", async () => {
 		const listed = await modern.listTools();
-		assert.deepEqual(listed.tools.map((t) => t.name).sort(), EXPECTED_TOOLS);
+		assert.deepEqual(listed.tools.map((t) => t.name).sort(), profile.expectedTools);
 		assert.equal(listed.cacheScope, "public", "the static inventory is shareable");
 		assert.ok(listed.ttlMs >= 60_000, `expected a long ttlMs, got ${listed.ttlMs}`);
 	});
