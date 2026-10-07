@@ -25,6 +25,7 @@ import {
 	appendUsageRun,
 	buildPhasePrompt,
 	buildValidationSummary,
+	checkPhaseHandoff,
 	completeValidatedPhase,
 	formatMillis,
 	formatTokenCount,
@@ -155,8 +156,24 @@ export async function runSinglePhase(
 					else if (event.successful) activity.compactions.successful++;
 					else activity.compactions.failed++;
 				},
+				// The child is still live here, so the refusal can reach the
+				// model that wrote the handoff; ctx may not be (#201), so the
+				// notice goes through notifyCtx, which tolerates a stale one.
+				onHandoffRefused: (refusal) => {
+					notifyCtx(ctx, `Phase ${phase.id} handoff would be refused by completion; giving the sub-agent one repair turn. ${refusal}`, "warning");
+				},
 			},
-			{ sessionName: `CodeCartographer phase: ${phase.id}`, primaryOutput: phase.primary_output },
+			{
+				sessionName: `CodeCartographer phase: ${phase.id}`,
+				primaryOutput: phase.primary_output,
+				// The same gates completion runs, on the same status, writing
+				// nothing — so a handoff that would strand the phase is caught
+				// while the session that wrote it can still fix it (#454).
+				checkHandoff: async () => {
+					const check = await checkPhaseHandoff(state.cwd, phase.id);
+					return "error" in check ? check.error : null;
+				},
+			},
 			options.signal,
 		);
 

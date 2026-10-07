@@ -10,7 +10,7 @@ import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promise
 import { basename, join } from "node:path";
 
 import { describeStuckPipeline, resolvePipelineOutcome } from "./pipeline.ts";
-import { buildTerminalNextActions, ensureArray, normalizeStatus } from "./status.ts";
+import { assertIdList, assertTextList, buildTerminalNextActions, ensureClosureArray, ensureIdArray, ensureTextArray, normalizeStatus } from "./status.ts";
 import type { WorkspaceState } from "./types.ts";
 import { dateOnly, newlineIfUnterminated, pathExists } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
@@ -94,11 +94,21 @@ export async function loadAmendmentFile(name: string, workspaceDir: string): Pro
 			throw new Error(`Invalid amendment: ${field} must be an array`);
 		}
 	}
+	// Refuse, rather than filter, entries normalization would drop (#453).
+	// A closure may be a bare id or `{ id, evidence }` — the shape the phase
+	// handoff's open_question_closures takes — and the evidence a mapping
+	// carries is kept as a note so the amendment closeout records it.
+	assertIdList(raw.open_question_closures, "open_question_closures", "amendment");
+	assertIdList(raw.post_pipeline_closures, "post_pipeline_closures", "amendment");
+	assertTextList(raw.notes, "notes", "amendment");
+	const evidenceNotes = ensureClosureArray(raw.open_question_closures)
+		.filter((closure) => closure.evidence)
+		.map((closure) => `${closure.id} closed on: ${closure.evidence}`);
 	const amendment: Amendment = {
 		slug,
-		open_question_closures: ensureArray(raw.open_question_closures),
-		post_pipeline_closures: ensureArray(raw.post_pipeline_closures),
-		notes: ensureArray(raw.notes),
+		open_question_closures: ensureIdArray(raw.open_question_closures),
+		post_pipeline_closures: ensureIdArray(raw.post_pipeline_closures),
+		notes: [...ensureTextArray(raw.notes), ...evidenceNotes],
 		closeout_summary: typeof raw.closeout_summary === "string" ? raw.closeout_summary : "",
 		closeout_content: typeof raw.closeout_content === "string" ? raw.closeout_content : "",
 		schema_version: schemaVersion,

@@ -17,6 +17,8 @@ open_questions: []
 # settle the question it came from, and completion refuses such a closure while
 # the question is still open and unclosed by the same handoff.
 carry_forward: []
+# Routed carry_forward items this phase resolved, removed from every phase:
+# a bare id (- arch-CF1) or a mapping with one (- id: arch-CF1).
 carry_forward_closures: []
 # Resolved open questions: their IDs are removed from all phases. Either a bare
 # id, or an object naming the evidence that settled it:
