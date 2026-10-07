@@ -40,10 +40,13 @@ jobs:
         run: npm ci
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
-      - name: Run tests
-        run: npm test
+      # Build first, as CI does: the suite drives the shipped binary in dist/
+      # (the MCP protocol and acceptance-adapter tests), and against a tree
+      # with no dist/ 51 of them fail. v0.27.0's first tag push stopped here.
       - name: Build
         run: npm run build
+      - name: Run tests
+        run: npm test
       - name: Pack tarball for pre-publish smoke test
         id: pack
         run: |
