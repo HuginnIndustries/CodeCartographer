@@ -3,6 +3,9 @@
 schema_version: 1
 phase_id: <phase-id>
 owner_notes: []
+# open_questions / carry_forward / post_pipeline entries put their text under
+# `description` (and why it is deferred under `deferred_reason`); completion
+# reads only the fields shown in GUIDE.md and refuses text under any other key.
 open_questions: []
 # Items a specific later phase closes. Every entry needs a target_phase naming a
 # downstream phase in the active pipeline. Optional derives_from names the

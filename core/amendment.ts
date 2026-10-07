@@ -10,7 +10,7 @@ import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promise
 import { basename, join } from "node:path";
 
 import { describeStuckPipeline, resolvePipelineOutcome } from "./pipeline.ts";
-import { assertIdList, assertTextList, buildTerminalNextActions, ensureClosureArray, ensureIdArray, ensureTextArray, normalizeStatus } from "./status.ts";
+import { assertIdList, assertTextList, buildTerminalNextActions, closureRationaleNotes, ensureClosureArray, ensureIdArray, ensureTextArray, normalizeStatus } from "./status.ts";
 import type { WorkspaceState } from "./types.ts";
 import { dateOnly, newlineIfUnterminated, pathExists } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
@@ -101,9 +101,13 @@ export async function loadAmendmentFile(name: string, workspaceDir: string): Pro
 	assertIdList(raw.open_question_closures, "open_question_closures", "amendment");
 	assertIdList(raw.post_pipeline_closures, "post_pipeline_closures", "amendment");
 	assertTextList(raw.notes, "notes", "amendment");
-	const evidenceNotes = ensureClosureArray(raw.open_question_closures)
-		.filter((closure) => closure.evidence)
-		.map((closure) => `${closure.id} closed on: ${closure.evidence}`);
+	const evidenceNotes = [
+		...ensureClosureArray(raw.open_question_closures)
+			.filter((closure) => closure.evidence)
+			.map((closure) => `${closure.id} closed on: ${closure.evidence}`),
+		...closureRationaleNotes(raw.open_question_closures, ["evidence"]),
+		...closureRationaleNotes(raw.post_pipeline_closures),
+	];
 	const amendment: Amendment = {
 		slug,
 		open_question_closures: ensureIdArray(raw.open_question_closures),
@@ -211,7 +215,14 @@ export async function applyAmendment(cwd: string, name: string): Promise<Amendme
 				const closeoutFile = `${dateOnly(timestamp)}-amendment-${amendment.slug}.md`;
 				const closeoutsDir = join(lockedState.workspaceDir, "closeouts");
 				await mkdir(closeoutsDir, { recursive: true });
-				const body = amendment.closeout_content.trim() || renderAmendmentCloseout(amendment, applied, timestamp);
+				// A supplied closeout still carries the notes, the way completion
+				// appends a handoff's decisions to its supplied closeout: the
+				// template ships a non-empty closeout_content, so dropping notes
+				// whenever one is supplied lost them — closure evidence included
+				// (#453 review) — while Pi's preview promised them.
+				const supplied = amendment.closeout_content.trim();
+				const notesSection = amendment.notes.length > 0 ? `\n\n## Notes\n\n${amendment.notes.map((note) => `- ${note}`).join("\n")}` : "";
+				const body = supplied ? `${supplied}${notesSection}` : renderAmendmentCloseout(amendment, applied, timestamp);
 				await writeFile(join(closeoutsDir, closeoutFile), `${body}\n`, "utf8");
 				const summary = amendment.closeout_summary.trim()
 					|| `Amendment applied: ${applied.openQuestionsClosed.length} open question(s) and ${applied.postPipelineClosed.length} post-pipeline item(s) closed.`;

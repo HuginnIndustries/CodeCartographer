@@ -513,9 +513,17 @@ export type HandoffCheck = { ok: true; warnings: string[] } | { ok: false; error
  * output is separate (validatePhaseOutput); this judges only the handoff.
  */
 export async function checkPhaseHandoff(cwd: string, phaseId: string): Promise<HandoffCheck> {
+	// A workspace that cannot be read is not something the phase session can
+	// fix by editing its handoff, so it is not a refusal to spend the repair
+	// turn on; completion will report it on its own.
+	let state: WorkspaceState | null;
 	try {
-		const state = await getWorkspaceState(cwd);
-		if (!state) return { ok: false, error: "CodeCartographer workspace not found. Run /codecarto-init first." };
+		state = await getWorkspaceState(cwd);
+	} catch (error) {
+		return { ok: true, warnings: [`Handoff not checked: the workspace could not be read (${error instanceof Error ? error.message : String(error)}).`] };
+	}
+	if (!state) return { ok: true, warnings: ["Handoff not checked: no CodeCartographer workspace found."] };
+	try {
 		const handoff = await loadCheckedHandoff(state, phaseId);
 		return { ok: true, warnings: judgeHandoffAgainstState(state, handoff, phaseId) };
 	} catch (error) {

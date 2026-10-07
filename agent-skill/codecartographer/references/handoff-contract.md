@@ -26,7 +26,7 @@ closeout_content: |-            # optional full closeout markdown
   # Closeout — architecture
 ```
 
-Omitted arrays default to empty. A malformed collection fails completion without mutating anything. So does a malformed entry, rather than being dropped: an `owner_notes` or `decisions` entry with nested structure (an unquoted `key: value` line is read back as that text), a closure with no `id`, or an `open_questions` / `carry_forward` / `post_pipeline` entry with no `description` — the refusal names the keys it did not recognize, since only the fields shown below are read.
+Omitted arrays default to empty. A malformed collection fails completion without mutating anything. So does a malformed entry, rather than being dropped: an `owner_notes` or `decisions` entry with nested structure (an unquoted `key: value` line is read back as that text), a closure with no `id`, or an `open_questions` / `carry_forward` / `post_pipeline` entry with no `description` whose text sits under some other key — the refusal names those keys, since only the fields shown below are read. Text beside a closure's `id` (other than `evidence`) is kept as an owner note.
 
 `.codecarto/templates/phase-handoff.yaml` in the workspace is a copyable skeleton.
 

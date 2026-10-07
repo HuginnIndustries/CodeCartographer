@@ -4,7 +4,8 @@
 # handoff (open_question_closures / carry_forward_closures).
 schema_version: 1
 # Open-question ids resolved on evidence after the pipeline completed;
-# removed from every phase in workflow/status.yaml.
+# removed from every phase in workflow/status.yaml. A bare id, or
+# { id, evidence } — the evidence is recorded in the closeout's notes.
 open_question_closures: []
 # Finished post-pipeline backlog item ids; removed from status.yaml's
 # post_pipeline list (the amendment closeout records the closure).
