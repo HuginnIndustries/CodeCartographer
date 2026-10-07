@@ -44,6 +44,21 @@ const INSTALL_LABEL = TARBALL ? `tarball ${TARBALL}` : `codecartographer-pi@${VE
 let smokeRoot;
 let keepTmp = argv["keep-tmp"];
 const stderrChunks = [];
+// Every client this run opens. A failed step throws out of main() before its
+// client.close(), and an open stdio client keeps the server child — and so
+// this process — alive: the scheduled Smoke job hung for its full six hours
+// that way (#449). The finally block closes whatever is still open.
+const openClients = new Set();
+const CLOSE_TIMEOUT_MS = 5_000;
+
+async function closeOpenClients() {
+	const closing = [...openClients].map((client) => client.close().catch(() => {}));
+	openClients.clear();
+	await Promise.race([
+		Promise.allSettled(closing),
+		new Promise((done) => setTimeout(done, CLOSE_TIMEOUT_MS).unref()),
+	]);
+}
 
 async function cleanup() {
 	if (!smokeRoot) return;
@@ -151,6 +166,7 @@ async function main() {
 	const transport = new StdioClientTransport({ command: binPath, args: [], stderr: "pipe" });
 	transport.stderr?.on("data", (c) => stderrChunks.push(c));
 	const client = new Client({ name: "codecarto-smoke", version: "0.0.0" }, { capabilities: {} });
+	openClients.add(client);
 
 	await step("connect: server boots and completes initialize handshake", async () => {
 		await Promise.race([
@@ -225,6 +241,7 @@ async function main() {
 		);
 	});
 
+	openClients.delete(client);
 	await client.close();
 
 	// The same binary, opened in the 2026-07-28 era: the client probes with
@@ -237,6 +254,7 @@ async function main() {
 		{ name: "codecarto-smoke-2026", version: "0.0.0" },
 		{ capabilities: {}, versionNegotiation: { mode: "auto" } },
 	);
+	openClients.add(modern);
 
 	await step("2026-07-28: server/discover negotiation reaches the modern era", async () => {
 		await Promise.race([
@@ -264,6 +282,7 @@ async function main() {
 		});
 	});
 
+	openClients.delete(modern);
 	await modern.close();
 	console.log("1..12");
 }
@@ -276,5 +295,9 @@ try {
 	console.error(err?.stack ?? err?.message ?? err);
 	process.exitCode ||= 1;
 } finally {
+	await closeOpenClients();
 	await cleanup();
+	// Nothing after this run needs the event loop. Exiting explicitly is the
+	// backstop for a child or handle the close above did not reach (#449).
+	process.exit(process.exitCode ?? 0);
 }
