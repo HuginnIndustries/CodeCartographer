@@ -245,7 +245,7 @@ test("/codecarto-refresh-scaffold previews the exact file set, and a declined co
 			...core.SCAFFOLD_REFRESH_PROTECTED.dirs.map((dir) => `${dir}/`),
 		];
 		assert.ok(body.includes(`Never touched: ${protectedPaths.join(", ")}.`), "the preview names every protected path");
-		assert.match(body, /Never touched: workflow\/status\.yaml, workflow\/config\.yaml, .*\.gitignore, scratch\/, inputs\/, closeouts\/, broadside\/\./);
+		assert.match(body, /Never touched: workflow\/status\.yaml, workflow\/config\.yaml, .*\.gitignore, scratch\/, inputs\/, closeouts\/, broadside\/, engineering\/\./);
 
 		assert.equal(await readFile(join(codecarto, "GUIDE.md"), "utf8"), "# Stale guide from an old release\n", "declining leaves the stale file alone");
 		assert.equal(await readFile(join(codecarto, "THREAD_LOG.md"), "utf8"), threadLogBefore, "declining logs nothing");

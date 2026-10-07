@@ -88,7 +88,7 @@ async function withPackRoot(fn, sourceRoot = REPO_ROOT) {
 }
 
 
-const { copyPackagedWorkspace } = await import(pathToFileURL(`${REPO_ROOT}/core/workspace.ts`).href);
+const { copyPackagedWorkspace, listScaffoldRefreshFiles, SCAFFOLD_REFRESH_PROTECTED } = await import(pathToFileURL(`${REPO_ROOT}/core/workspace.ts`).href);
 const { ENGINEERING_NAMESPACE } = await import(pathToFileURL(`${REPO_ROOT}/core/engineering/index.ts`).href);
 
 /** Entries under the live `changes/` directory, `[]` when it does not exist. */
@@ -189,6 +189,25 @@ test("a fresh workspace inherits no engineering history from the source it was s
 		// The directory may exist as an empty scaffold; populated is a leak.
 		const contents = await readdir(leaked).catch(() => []);
 		assert.deepEqual(contents, [], "the namespace may be scaffolded empty, never populated");
+	});
+});
+
+test("scaffold refresh carries no engineering records from the template it refreshes from", async () => {
+	// Init and pack both exclude the namespace; refresh walked every directory
+	// of the packaged template except its own exclusion list, which did not
+	// name it. In a checkout install the template is the developer's working
+	// .codecarto/, so their change records, proofs and approval receipts were
+	// copied into every workspace refreshed from it. A tmp copy of the
+	// template stands in for that checkout (#437: no test writes the live one).
+	await withTempDir(async (dir) => {
+		const source = join(dir, "checkout", ".codecarto");
+		await cp(join(REPO_ROOT, ".codecarto"), source, { recursive: true });
+		await writeSyntheticHistory(join(source, ENGINEERING_NAMESPACE));
+		const files = await listScaffoldRefreshFiles(source);
+		assert.ok(files.length > 0 && files.includes("GUIDE.md"), "control: the refresh list is not empty");
+		const leaked = files.filter((file) => file === ENGINEERING_NAMESPACE || file.startsWith(`${ENGINEERING_NAMESPACE}/`));
+		assert.deepEqual(leaked, [], "scaffold refresh would copy engineering records into the target workspace");
+		assert.ok(SCAFFOLD_REFRESH_PROTECTED.dirs.includes(ENGINEERING_NAMESPACE), "the refresh preview names the namespace as protected");
 	});
 });
 

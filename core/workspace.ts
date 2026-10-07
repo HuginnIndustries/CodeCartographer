@@ -363,7 +363,9 @@ const REFRESH_EXCLUDED_TOP_LEVEL = new Set([
 ]);
 // broadside/ holds machine-local scout state (batch ids, API key config,
 // generated results) — refresh must never overwrite it.
-const REFRESH_EXCLUDED_DIRS = new Set(["scratch", "inputs", "closeouts", "broadside"]);
+// engineering/ is one project's private change history (briefs, attempts, proofs,
+// approval receipts); a checkout install's template holds the developer's own.
+const REFRESH_EXCLUDED_DIRS = new Set(["scratch", "inputs", "closeouts", "broadside", ENGINEERING_NAMESPACE]);
 const REFRESH_EXCLUDED_WORKFLOW_FILES = new Set(["status.yaml", "config.yaml", ".usage.local.yaml", ".orchestrator.local.yaml"]);
 
 /**

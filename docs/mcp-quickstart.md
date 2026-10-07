@@ -172,10 +172,16 @@ It needs an OpenRouter API key (`api_key` parameter, `OPENROUTER_API_KEY`, or `.
 
 ```
 codecarto_change {cwd: "/abs/path", action: "create", title: "Add a flag", outcome: "the flag exists"}
-codecarto_change {cwd: "/abs/path", action: "plan",   change_id: "chg_..."}
-codecarto_change {cwd: "/abs/path", action: "record_proof", change_id: "chg_...", proof: {...}}
-codecarto_change {cwd: "/abs/path", action: "gate",   change_id: "chg_...", attempt_id: "att_..."}
+codecarto_change {cwd: "/abs/path", action: "plan",   change_id: "chg_...", ...}
+codecarto_change {cwd: "/abs/path", action: "start_attempt",     change_id: "chg_..."}
+codecarto_change {cwd: "/abs/path", action: "capture_candidate", change_id: "chg_...", attempt_id: "att_..."}
+codecarto_change {cwd: "/abs/path", action: "record_proof",      change_id: "chg_...", proof: {...}}
+codecarto_change {cwd: "/abs/path", action: "record_review",     change_id: "chg_...", attempt_id: "att_...", review: {...}}
+codecarto_change {cwd: "/abs/path", action: "gate",              change_id: "chg_...", attempt_id: "att_..."}
+codecarto_change {cwd: "/abs/path", action: "request_acceptance", change_id: "chg_...", attempt_id: "att_..."}
 ```
+
+The full action set is `create`, `update`, `show`, `list`, `plan`, `start_attempt`, `capture_candidate`, `record_proof`, `record_review`, `gate`, `request_acceptance` and `ingest_observations`; the tool's input schema in `tools/list` is the authoritative argument reference. `start_attempt` and `capture_candidate` read the baseline and candidate snapshots from the workspace themselves — a caller-supplied snapshot is refused, not used. `ingest_observations` reads the inbox the [Claude Code hook](engineering/host-observations.md) writes. The lifecycle is described in [attempt-lifecycle.md](engineering/attempt-lifecycle.md).
 
 Three limits are worth stating plainly, because they are the point of the surface rather than gaps in it:
 
@@ -183,13 +189,13 @@ Three limits are worth stating plainly, because they are the point of the surfac
 
 **A proof recorded through a tool call is `claimed`, not `observed`.** Authority is derived from the collector and the attestation, never read from the payload, and a tool call cannot attest to its own execution. A proof carrying `authority: "observed"` is stored faithfully and still discharges nothing under the `verified` policy. This is not a limitation to work around; a channel that let a caller label its own evidence as observed would make the whole record worthless.
 
-**It cannot approve work.** `action: "approve"` and `action: "accept"` are refused with a reason, and `state` cannot be set directly. Acceptance needs a trusted channel and a receipt the core can evaluate — an agent marking its own work accepted through an ordinary tool argument is the exact forgery the record system exists to prevent. Accordingly, `action: "gate"` reports `needs-human-acceptance` rather than `may-accept`: this transport cannot obtain a human decision, and says so instead of implying otherwise.
+**It cannot approve work.** `action: "approve"` and `action: "accept"` are refused with a reason, and `state` cannot be set directly. Acceptance needs a trusted channel and a receipt the core can evaluate — an agent marking its own work accepted through an ordinary tool argument is the exact forgery the record system exists to prevent. Accordingly, `action: "gate"` reports `needs-human-acceptance` rather than `may-accept`. `request_acceptance` can ask a person through the client's own MCP elicitation form, but only for a host/client pair registered as verified at an exact client version; that registry ships empty, so today no client is asked and the request is only stored ([acceptance-adapter.md](engineering/acceptance-adapter.md)).
 
 Retries are safe when you pass `request_id`: a repeated create returns the original change rather than minting a second one. Updates carry the `revision` you last read and are refused if it is stale, so two writers cannot silently lose each other's work.
 
 Which hosts support which parts is procedural, not advertised: **no claim is made that every MCP client can carry a trusted human acceptance.** Most cannot.
 
-> Maintainer note: `npm run smoke` installs the **published** package, so it reports this tool as missing until a release carries it. To smoke an unreleased change, pack first and pass the tarball: `npm run build && node scripts/smoke-mcp.mjs --tarball "$(npm pack --pack-destination /tmp | tail -1)"`.
+> Maintainer note: `npm run smoke` installs the **published** package, so it cannot see a tool added since the last release. To smoke an unreleased change, pack first and pass the tarball: `npm run build && node scripts/smoke-mcp.mjs --tarball "$(npm pack --pack-destination /tmp | tail -1)"`.
 
 ## No agent? Use the drop-in template
 
