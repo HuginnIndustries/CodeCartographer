@@ -58,6 +58,186 @@ export function ensureArray(value: unknown): string[] {
 	return value.map(textOf).filter((entry): entry is string => entry !== null);
 }
 
+/**
+ * Ids from a closure list: a bare id, or a mapping that carries one
+ * (`{ id: arch-CF1, … }`), trimmed; entries with no usable id are skipped.
+ * `open_question_closures` has always taken both shapes, so a model writes
+ * `carry_forward_closures` the same way — and `ensureArray` dropped every
+ * mapping, leaving the routed item open with no error (#453). Callers that
+ * read model-written input run {@link assertIdList} first, so a skipped
+ * entry there is a refusal rather than a silent drop.
+ */
+export function ensureIdArray(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	const ids: string[] = [];
+	for (const item of value) {
+		const raw = item && typeof item === "object" && !Array.isArray(item) ? (item as Record<string, unknown>).id : item;
+		const id = trimmedText(raw);
+		if (id) ids.push(id);
+	}
+	return ids;
+}
+
+// ----------------------------------------------------------------------------
+// Shape gates for model-written input (#453)
+//
+// The normalizers above are lenient on purpose: status.yaml is the framework's
+// own file, and a reader that crashed on an odd entry there would lose real
+// state. A handoff or an amendment is written by a model, and the same leniency
+// turned a malformed entry into a silent drop — completion succeeded and the
+// entry never reached status.yaml. GUIDE.md promises the opposite ("malformed
+// collection shapes fail completion"), so these run before normalization on
+// those two inputs only. An empty item (`- ` or `null`) carries nothing and is
+// still skipped; anything that carried text and would be lost is refused, with
+// the field, the entry, and the shape that would have been accepted.
+// ----------------------------------------------------------------------------
+
+function describeShape(value: unknown): string {
+	if (Array.isArray(value)) return "a list";
+	if (value && typeof value === "object") return "a mapping";
+	return `a ${typeof value}`;
+}
+
+/**
+ * The text of one model-written list entry. A scalar reads as itself. A flat
+ * mapping reads back as the line it came from: an unquoted note containing
+ * `": "` — `- Execution strategy: inline.` — is a one-key mapping to YAML, and
+ * models write notes that way constantly, so it is rejoined (`key: value`,
+ * `; `-separated, in JavaScript key order — integer-like keys sort first)
+ * rather than dropped or refused. A
+ * mapping holding a list or another mapping has no single line to rejoin and
+ * yields null, as do null and lists.
+ */
+export function textEntryOf(value: unknown): string | null {
+	const scalar = textOf(value);
+	if (scalar !== null) return scalar;
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const parts: string[] = [];
+	for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+		if (inner === null || inner === undefined) {
+			parts.push(`${key}:`);
+			continue;
+		}
+		const text = textOf(inner);
+		if (text === null) return null;
+		parts.push(`${key}: ${text}`);
+	}
+	return parts.length > 0 ? parts.join("; ") : null;
+}
+
+/** {@link ensureArray} for model-written text lists: flat mappings are rejoined by {@link textEntryOf}. */
+export function ensureTextArray(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value.map(textEntryOf).filter((entry): entry is string => entry !== null);
+}
+
+/** Every entry has text: a scalar, or a flat mapping {@link textEntryOf} rejoins. */
+export function assertTextList(value: unknown, field: string, label: string = "handoff"): void {
+	if (!Array.isArray(value)) return;
+	value.forEach((item, index) => {
+		if (item === null || item === undefined || textEntryOf(item) !== null) return;
+		if (isEmptyMapping(item)) return; // `- {}` carries nothing, like `- `
+		throw new Error(
+			`Invalid ${label}: ${field}[${index}] is ${describeShape(item)} with nested structure, not text. `
+			+ `Each ${field} entry is one plain string (\`- "…"\`); put structured detail in the string or in the primary output.`,
+		);
+	});
+}
+
+/** Every entry is a bare id or a mapping with a non-empty string `id`. */
+export function assertIdList(value: unknown, field: string, label: string = "handoff"): void {
+	if (!Array.isArray(value)) return;
+	value.forEach((item, index) => {
+		if (item === null || item === undefined) return;
+		if (textOf(item) !== null) return;
+		if (item && typeof item === "object" && !Array.isArray(item)) {
+			const id = (item as Record<string, unknown>).id;
+			if (trimmedText(id)) return;
+			const keys = Object.keys(item as Record<string, unknown>);
+			// `- arch-CF1: closed as doc bug` reads as a one-key mapping.
+			const hint = keys.length === 1 ? ` If "${keys[0]}" is the id, write \`- id: ${keys[0]}\` and put the text in the primary output.` : "";
+			throw new Error(
+				`Invalid ${label}: ${field}[${index}] has no id. `
+				+ `Each ${field} entry is a bare id (\`- arch-CF1\`) or a mapping with one (\`- id: arch-CF1\`).${hint}`,
+			);
+		}
+		throw new Error(
+			`Invalid ${label}: ${field}[${index}] is ${describeShape(item)}. `
+			+ `Each ${field} entry is a bare id (\`- arch-CF1\`) or a mapping with one (\`- id: arch-CF1\`).`,
+		);
+	});
+}
+
+function isEmptyMapping(value: unknown): boolean {
+	return !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0;
+}
+
+/**
+ * The rationale a closure mapping carries beside its id — `{ id: arch-CF1,
+ * closure: "Closed as doc bug" }` — as owner-note text (`arch-CF1 closure:
+ * Closed as doc bug`). Only the id closes anything; this keeps the reason
+ * from vanishing with the rest of the mapping (#453 review). Keys listed in
+ * `consumed` are read elsewhere (open_question_closures' `evidence`) and are
+ * not repeated.
+ */
+export function closureRationaleNotes(value: unknown, consumed: readonly string[] = []): string[] {
+	if (!Array.isArray(value)) return [];
+	const notes: string[] = [];
+	for (const item of value) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+		const raw = item as Record<string, unknown>;
+		const id = trimmedText(raw.id);
+		if (!id) continue;
+		const rest: Record<string, unknown> = {};
+		for (const [key, inner] of Object.entries(raw)) {
+			if (key !== "id" && !consumed.includes(key)) rest[key] = inner;
+		}
+		if (Object.keys(rest).length === 0) continue;
+		const text = textEntryOf(rest);
+		if (text) notes.push(`${id} ${text}`);
+	}
+	return notes;
+}
+
+/** Fields each structured handoff collection keeps; anything else is dropped by normalization. */
+export const HANDOFF_ENTRY_FIELDS = {
+	open_questions: ["id", "kind", "description", "deferred_reason"],
+	carry_forward: ["id", "kind", "description", "deferred_reason", "target_phase", "derives_from"],
+	post_pipeline: ["id", "kind", "description", "deferred_reason", "source_phase", "status"],
+} as const satisfies Record<string, readonly string[]>;
+
+/**
+ * Every structured entry has a `description` — the text a later phase and the
+ * dashboard read. Normalization keeps only the fields in
+ * {@link HANDOFF_ENTRY_FIELDS}, so an entry written with its text under another
+ * key (`question:`, `why_source_cannot_settle:`) used to land in status.yaml as
+ * a bare id and kind. The refusal names the keys it did not recognize.
+ */
+export function assertEntryList(value: unknown, field: keyof typeof HANDOFF_ENTRY_FIELDS, label: string = "handoff"): void {
+	if (!Array.isArray(value)) return;
+	const known: readonly string[] = HANDOFF_ENTRY_FIELDS[field];
+	value.forEach((item, index) => {
+		if (item === null || item === undefined || typeof item === "string") return;
+		if (typeof item !== "object" || Array.isArray(item)) {
+			throw new Error(`Invalid ${label}: ${field}[${index}] is ${describeShape(item)}; each entry is a mapping (${known.join(", ")}).`);
+		}
+		const raw = item as Record<string, unknown>;
+		if (trimmedText(raw.description)) return;
+		const unknown = Object.keys(raw).filter((key) => !known.includes(key));
+		// An entry made only of recognized fields loses nothing, and completed
+		// before #453 — refusing it would break handoffs no document forbade.
+		// The loss case is text under a key normalization does not read.
+		if (unknown.length === 0) return;
+		const id = trimmedText(raw.id);
+		throw new Error(
+			`Invalid ${label}: ${field} entry ${id ? `"${id}"` : `[${index}]`} has no description`
+			+ ` and its text is under ${unknown.length === 1 ? "a field" : "fields"} completion does not read (${unknown.join(", ")})`
+			+ `. Recognized fields: ${known.join(", ")}. Put the entry's text under description`
+			+ (known.includes("deferred_reason") ? " and why it is deferred under deferred_reason." : "."),
+		);
+	});
+}
+
 function coerceEntry(value: unknown, allowTargetPhase: boolean): OpenQuestionEntry | CarryForwardEntry | null {
 	if (typeof value === "string") {
 		const trimmed = value.trim();
@@ -90,14 +270,14 @@ export function ensureClosureArray(value: unknown): ClosureEntry[] {
 	if (!Array.isArray(value)) return [];
 	const result: ClosureEntry[] = [];
 	for (const item of value) {
-		if (typeof item === "string") {
-			const id = item.trim();
+		if (textOf(item) !== null) {
+			const id = trimmedText(item);
 			if (id) result.push({ id });
 			continue;
 		}
 		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
 		const raw = item as Record<string, unknown>;
-		const id = typeof raw.id === "string" ? raw.id.trim() : "";
+		const id = trimmedText(raw.id);
 		if (!id) continue;
 		const evidence = typeof raw.evidence === "string" && raw.evidence.trim() ? raw.evidence.trim() : undefined;
 		result.push({ id, ...(evidence !== undefined && { evidence }) });
@@ -288,6 +468,14 @@ export function parseHandoff(value: unknown): PhaseHandoff {
 			throw new Error(`Invalid handoff: ${field} must be an array`);
 		}
 	}
+	// Refuse, rather than filter, entries normalization would drop (#453).
+	assertTextList(raw.owner_notes, "owner_notes");
+	assertTextList(raw.decisions, "decisions");
+	assertIdList(raw.carry_forward_closures, "carry_forward_closures");
+	assertIdList(raw.open_question_closures, "open_question_closures");
+	assertEntryList(raw.open_questions, "open_questions");
+	assertEntryList(raw.carry_forward, "carry_forward");
+	assertEntryList(raw.post_pipeline, "post_pipeline");
 	const openQuestions = ensureEntryArray<OpenQuestionEntry>(raw.open_questions, false);
 	const carryForward = ensureEntryArray<CarryForwardEntry>(raw.carry_forward, true);
 	autoAssignIds(openQuestions, "oq", raw.phase_id.trim());
@@ -295,13 +483,17 @@ export function parseHandoff(value: unknown): PhaseHandoff {
 	return {
 		phase_id: raw.phase_id.trim(),
 		timestamp: typeof raw.timestamp === "string" ? raw.timestamp.trim() : undefined,
-		owner_notes: ensureArray(raw.owner_notes),
+		owner_notes: [
+			...ensureTextArray(raw.owner_notes),
+			...closureRationaleNotes(raw.carry_forward_closures),
+			...closureRationaleNotes(raw.open_question_closures, ["evidence"]),
+		],
 		open_questions: openQuestions,
 		carry_forward: carryForward,
-		carry_forward_closures: ensureArray(raw.carry_forward_closures),
+		carry_forward_closures: ensureIdArray(raw.carry_forward_closures),
 		open_question_closures: ensureClosureArray(raw.open_question_closures),
 		post_pipeline: ensurePostPipelineArray(raw.post_pipeline),
-		decisions: ensureArray(raw.decisions),
+		decisions: ensureTextArray(raw.decisions),
 		proposed_conventions: ensureProposedConventionArray(raw.proposed_conventions),
 		closeout_content: typeof raw.closeout_content === "string" ? raw.closeout_content : "",
 		closeout_summary: typeof raw.closeout_summary === "string" ? raw.closeout_summary : "",

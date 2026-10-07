@@ -83,6 +83,8 @@ export interface PhaseRunCallbacks {
 	onTurnEnd?: (turnCount: number) => void;
 	onMessageEnd?: (usage: { input: number; output: number; cacheWrite: number }) => void;
 	onCompactionEnd?: (event: { reason: "manual" | "threshold" | "overflow"; successful: boolean; aborted: boolean }) => void;
+	/** The handoff check refused the handoff; a repair turn is about to run. */
+	onHandoffRefused?: (refusal: string) => void;
 }
 
 export interface PhaseRunOptions {
@@ -93,6 +95,12 @@ export interface PhaseRunOptions {
 	/** Primary output relative to `.codecarto/`; used to detect provider runs
 	 * that stop normally before writing their required artifact. */
 	primaryOutput?: string;
+	/**
+	 * Would completion accept the phase handoff as it stands? Returns the
+	 * refusal completion would give, or null when it would accept. Called
+	 * once the primary output exists; a refusal gets one repair turn (#454).
+	 */
+	checkHandoff?: () => Promise<string | null>;
 }
 
 export interface PhaseRunResult {
@@ -104,6 +112,64 @@ export interface PhaseRunResult {
 	 *  Stable across the run; useful for /codecarto-usage and any future tooling
 	 *  that wants to point at the phase's transcript. */
 	sessionFile: string | undefined;
+	/** The handoff refusal that triggered the repair turn, when one ran. */
+	handoffRefusal?: string;
+}
+
+/** The slice of an AgentSession the end-of-phase logic drives. */
+export interface PhaseFinishSession {
+	prompt(text: string): Promise<unknown>;
+	readonly messages: ReadonlyArray<{ role: string; stopReason?: string }>;
+}
+
+export interface PhaseFinishOptions {
+	cwd: string;
+	primaryOutput?: string;
+	checkHandoff?: () => Promise<string | null>;
+	onHandoffRefused?: (refusal: string) => void;
+	/** Settles true when a compaction ran during the phase prompt. */
+	compactionCompleted: Promise<boolean>;
+	isAborted: () => boolean;
+}
+
+/**
+ * What runs after the phase prompt returns, while the child session is still
+ * live: at most one continuation when the run stopped before its primary
+ * output existed, then at most one handoff repair turn. Each is a single
+ * prompt, never a loop — a model that cannot finish in one more turn is a
+ * stop for the caller to report, not something to retry indefinitely.
+ */
+export async function finishPhaseSession(session: PhaseFinishSession, options: PhaseFinishOptions): Promise<{ handoffRefusal?: string }> {
+	const outputPresent = () => (options.primaryOutput ? primaryOutputExists(options.cwd, options.primaryOutput) : Promise.resolve(true));
+	if (!options.isAborted() && shouldContinuePhase(session.messages, await outputPresent())) {
+		const compacted = await waitForCompaction(options.compactionCompleted);
+		if (!options.isAborted()) await session.prompt(buildPhaseContinuationPrompt(compacted));
+	}
+	// The handoff is judged only once the phase has its output: without one the
+	// phase failed on its own terms, and validation reports that, not this.
+	if (options.isAborted() || !options.checkHandoff || !(await outputPresent())) return {};
+	const refusal = await options.checkHandoff();
+	if (!refusal || options.isAborted()) return {};
+	options.onHandoffRefused?.(refusal);
+	await session.prompt(buildHandoffRepairPrompt(refusal));
+	return { handoffRefusal: refusal };
+}
+
+/**
+ * The one repair turn a refused handoff gets (#454). The refusal is passed
+ * verbatim: every completion refusal already names the field, the entry, and
+ * the shape it would accept, and paraphrasing it would only lose that.
+ */
+export function buildHandoffRepairPrompt(refusal: string): string {
+	return [
+		"CodeCartographer checked this phase's handoff before completion, and completion would refuse it:",
+		"",
+		refusal,
+		"",
+		"Fix the phase handoff under .codecarto/scratch/handoffs/ so completion accepts it, following the shape in .codecarto/templates/phase-handoff.yaml.",
+		"Change only what the refusal names. Do not redo the analysis, and do not edit the primary output unless the refusal requires it.",
+		"Then end the phase.",
+	].join("\n");
 }
 
 /**
@@ -260,20 +326,21 @@ export async function runPhase(
 		// idempotent, so a real compaction_end event earlier in the run
 		// keeps its `true`.
 		resolveCompaction?.(false);
-		let primaryOutputPresent = true;
-		if (options.primaryOutput) {
-			primaryOutputPresent = await primaryOutputExists(cwd, options.primaryOutput);
-		}
-		if (!aborted && shouldContinuePhase(session.messages, primaryOutputPresent)) {
-			const compacted = await waitForCompaction(compactionCompleted);
-			if (!aborted) await session.prompt(buildPhaseContinuationPrompt(compacted));
-		}
+		const { handoffRefusal } = await finishPhaseSession(session, {
+			cwd,
+			primaryOutput: options.primaryOutput,
+			checkHandoff: options.checkHandoff,
+			onHandoffRefused: callbacks.onHandoffRefused,
+			compactionCompleted,
+			isAborted: () => aborted,
+		});
 		return {
 			responseText: getLastAssistantText(session) || currentMessageText,
 			toolUses,
 			turnCount,
 			aborted,
 			sessionFile: sessionManager.getSessionFile(),
+			...(handoffRefusal !== undefined && { handoffRefusal }),
 		};
 	} finally {
 		unsubscribe();

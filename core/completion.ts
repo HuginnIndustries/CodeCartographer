@@ -350,11 +350,11 @@ function mentionsAnyId(text: string, ids: Iterable<string>): boolean {
  * (#360; the same shape as #337 for amendments). Returns the warnings the
  * version-gated D3 produces on an older scaffold.
  */
-function judgeHandoffAgainstState(state: WorkspaceState, handoff: PhaseHandoff | null, validation: ValidationResult): string[] {
+function judgeHandoffAgainstState(state: WorkspaceState, handoff: PhaseHandoff | null, phaseId: string): string[] {
 	const warnings: string[] = [];
 	if (handoff) {
 		const activePhases = new Set(state.pipeline.phase_order);
-		const sourceIndex = state.pipeline.phase_order.indexOf(validation.phaseId);
+		const sourceIndex = state.pipeline.phase_order.indexOf(phaseId);
 		for (const entry of handoff.carry_forward) {
 			const targetIndex = entry.target_phase ? state.pipeline.phase_order.indexOf(entry.target_phase) : -1;
 			if (!entry.target_phase || !activePhases.has(entry.target_phase) || targetIndex <= sourceIndex) {
@@ -392,7 +392,7 @@ function judgeHandoffAgainstState(state: WorkspaceState, handoff: PhaseHandoff |
 			if (!questionId || !questionsById.has(questionId)) continue;
 			if (closingQuestionIds.has(questionId)) continue;
 			throw new Error(
-				`Refusing to complete ${validation.phaseId}: the handoff closes carry_forward ${closureId}, which derives_from open question ${questionId} — and ${questionId} is still unresolved and is not in this handoff's open_question_closures. `
+				`Refusing to complete ${phaseId}: the handoff closes carry_forward ${closureId}, which derives_from open question ${questionId} — and ${questionId} is still unresolved and is not in this handoff's open_question_closures. `
 				+ `A routed item is one candidate answer to the question it came from; closing it does not settle the question. `
 				+ `Either close ${questionId} in this same handoff with the evidence that settles it, or leave ${closureId} routed and give the finding an unsettled action ("verify at runtime") instead.`,
 			);
@@ -416,7 +416,7 @@ function judgeHandoffAgainstState(state: WorkspaceState, handoff: PhaseHandoff |
 				`open_question_closures closes ${closure.id}, whose kind is needs-runtime-test, without evidence. `
 				+ `A runtime question closes on runtime evidence — a spike report or an observation against the running system — not on a source read. `
 				+ `Write the closure as an object: { id: ${closure.id}, evidence: <where that evidence lives> }. If you do not have it, leave the question open.`;
-			if (evidenceGateActive) throw new Error(`Refusing to complete ${validation.phaseId}: ${detail}`);
+			if (evidenceGateActive) throw new Error(`Refusing to complete ${phaseId}: ${detail}`);
 			warnings.push(
 				`${detail} Warning only: this workspace's scaffold predates the requirement — refresh it `
 				+ `(codecarto_refresh_scaffold on MCP, /codecarto-refresh-scaffold on Pi) to make this gating.`,
@@ -473,6 +473,64 @@ function addPartialRowQuestions(status: NormalizedStatus, phaseId: string, rows:
 	phase.open_questions.push(...gapEntries);
 }
 
+/**
+ * Load a phase's handoff and apply the checks that need no status read:
+ * it parses (shape gates included, #453), names the phase it is for, and
+ * exists when the phase declares handoff_requirements.
+ */
+async function loadCheckedHandoff(state: WorkspaceState, phaseId: string): Promise<PhaseHandoff | null> {
+	const handoff = await loadHandoffFile(phaseId, state.workspaceDir);
+	if (handoff && handoff.phase_id !== phaseId) {
+		throw new Error(`Invalid handoff: phase_id ${handoff.phase_id} does not match ${phaseId}`);
+	}
+	// A phase that declares handoff_requirements must not complete without its
+	// handoff: silently proceeding writes empty carry_forward/open_questions and
+	// severs the cross-phase routing channel (issue #84). Phases without the
+	// declaration keep the lenient path for custom pipelines.
+	if (!handoff) {
+		const declaringPhase = resolvePhase(state, phaseId);
+		if (declaringPhase?.handoff_requirements?.length) {
+			throw new Error(
+				`Phase ${phaseId} declares handoff_requirements, but no phase handoff exists at .codecarto/scratch/handoffs/${phaseId}.yaml. `
+				+ `Write the handoff first (see GUIDE.md and templates/phase-handoff.yaml): schema_version: 1, the exact phase_id, `
+				+ `arrays for owner_notes, open_questions, carry_forward, carry_forward_closures, open_question_closures, post_pipeline, decisions, and proposed_conventions (omitted arrays default to empty), `
+				+ `plus closeout_summary and optional closeout_content. Then re-run completion.`,
+			);
+		}
+	}
+	return handoff;
+}
+
+export type HandoffCheck = { ok: true; warnings: string[] } | { ok: false; error: string };
+
+/**
+ * Would completion accept this phase's handoff right now? Runs the same load
+ * and the same state-dependent gates completeValidatedPhase runs — parse and
+ * shape, phase_id, a required handoff that is missing, carry_forward targets,
+ * D1, D3 — on the current status, and writes nothing. It is the refusal
+ * completion would give, early enough to hand back to the session that wrote
+ * the handoff while it can still fix it (#454). Validation of the primary
+ * output is separate (validatePhaseOutput); this judges only the handoff.
+ */
+export async function checkPhaseHandoff(cwd: string, phaseId: string): Promise<HandoffCheck> {
+	// A workspace that cannot be read is not something the phase session can
+	// fix by editing its handoff, so it is not a refusal to spend the repair
+	// turn on; completion will report it on its own.
+	let state: WorkspaceState | null;
+	try {
+		state = await getWorkspaceState(cwd);
+	} catch (error) {
+		return { ok: true, warnings: [`Handoff not checked: the workspace could not be read (${error instanceof Error ? error.message : String(error)}).`] };
+	}
+	if (!state) return { ok: true, warnings: ["Handoff not checked: no CodeCartographer workspace found."] };
+	try {
+		const handoff = await loadCheckedHandoff(state, phaseId);
+		return { ok: true, warnings: judgeHandoffAgainstState(state, handoff, phaseId) };
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 export async function completeValidatedPhase(
 	cwd: string,
 	validation: ValidationResult,
@@ -480,28 +538,10 @@ export async function completeValidatedPhase(
 ): Promise<CompletionResult> {
 	const initialState = await getWorkspaceState(cwd);
 	if (!initialState) throw new Error("CodeCartographer workspace not found. Run /codecarto-init first.");
-	const handoff = await loadHandoffFile(validation.phaseId, initialState.workspaceDir);
-	if (handoff && handoff.phase_id !== validation.phaseId) {
-		throw new Error(`Invalid handoff: phase_id ${handoff.phase_id} does not match ${validation.phaseId}`);
-	}
-	// A phase that declares handoff_requirements must not complete without its
-	// handoff: silently proceeding writes empty carry_forward/open_questions and
-	// severs the cross-phase routing channel (issue #84). Phases without the
-	// declaration keep the lenient path for custom pipelines.
-	if (!handoff) {
-		const declaringPhase = resolvePhase(initialState, validation.phaseId);
-		if (declaringPhase?.handoff_requirements?.length) {
-			throw new Error(
-				`Phase ${validation.phaseId} declares handoff_requirements, but no phase handoff exists at .codecarto/scratch/handoffs/${validation.phaseId}.yaml. `
-				+ `Write the handoff first (see GUIDE.md and templates/phase-handoff.yaml): schema_version: 1, the exact phase_id, `
-				+ `arrays for owner_notes, open_questions, carry_forward, carry_forward_closures, open_question_closures, post_pipeline, decisions, and proposed_conventions (omitted arrays default to empty), `
-				+ `plus closeout_summary and optional closeout_content. Then re-run completion.`,
-			);
-		}
-	}
+	const handoff = await loadCheckedHandoff(initialState, validation.phaseId);
 	// The cheap refusal, before the lock; the verdict that counts is taken
 	// again on the locked read below.
-	let stateWarnings = judgeHandoffAgainstState(initialState, handoff, validation);
+	let stateWarnings = judgeHandoffAgainstState(initialState, handoff, validation.phaseId);
 	const warnings: string[] = [];
 
 	// Closure integrity (#122, warning only): a handoff can close a carry-forward
@@ -526,7 +566,7 @@ export async function completeValidatedPhase(
 	let orchestratorCheckpoint: string | undefined;
 	const updatedState = await updateStatusAtomically(cwd, async (lockedState) => {
 		// The verdict that counts is the one on the state about to be written.
-		stateWarnings = judgeHandoffAgainstState(lockedState, handoff, validation);
+		stateWarnings = judgeHandoffAgainstState(lockedState, handoff, validation.phaseId);
 		const phase = resolvePhase(lockedState, validation.phaseId);
 		if (!phase?.primary_output) throw new Error(`Phase ${validation.phaseId} is missing primary_output.`);
 

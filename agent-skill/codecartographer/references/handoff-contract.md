@@ -16,7 +16,7 @@ phase_id: architecture          # must match the phase exactly
 owner_notes: []                 # 2-3 durable observations; appended to the phase's notes
 open_questions: []              # genuinely unknown, no later phase will close them
 carry_forward: []               # deferred to a specific later phase in this pipeline
-carry_forward_closures: []      # ids of carry_forward entries this phase resolved
+carry_forward_closures: []      # carry_forward entries this phase resolved, removed everywhere; bare id or {id}
 open_question_closures: []      # open questions this phase resolved, removed everywhere; bare id or {id, evidence}
 post_pipeline: []               # work after the pipeline; every entry needs a stable id
 decisions: []                   # choices made beyond what the prompt specified; completion appends them to DECISIONS.md
@@ -26,7 +26,7 @@ closeout_content: |-            # optional full closeout markdown
   # Closeout — architecture
 ```
 
-Omitted arrays default to empty. A malformed collection fails completion without mutating anything.
+Omitted arrays default to empty. A malformed collection fails completion without mutating anything. So does a malformed entry, rather than being dropped: an `owner_notes` or `decisions` entry with nested structure (an unquoted `key: value` line is read back as that text), a closure with no `id`, or an `open_questions` / `carry_forward` / `post_pipeline` entry with no `description` whose text sits under some other key — the refusal names those keys, since only the fields shown below are read. Text beside a closure's `id` (other than `evidence`) is kept as an owner note.
 
 `.codecarto/templates/phase-handoff.yaml` in the workspace is a copyable skeleton.
 

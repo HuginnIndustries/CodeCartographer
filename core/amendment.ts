@@ -10,7 +10,7 @@ import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promise
 import { basename, join } from "node:path";
 
 import { describeStuckPipeline, resolvePipelineOutcome } from "./pipeline.ts";
-import { buildTerminalNextActions, ensureArray, normalizeStatus } from "./status.ts";
+import { assertIdList, assertTextList, buildTerminalNextActions, closureRationaleNotes, ensureClosureArray, ensureIdArray, ensureTextArray, normalizeStatus } from "./status.ts";
 import type { WorkspaceState } from "./types.ts";
 import { dateOnly, newlineIfUnterminated, pathExists } from "./utils.ts";
 import { getWorkspaceState, updateStatusAtomically } from "./workspace.ts";
@@ -94,11 +94,25 @@ export async function loadAmendmentFile(name: string, workspaceDir: string): Pro
 			throw new Error(`Invalid amendment: ${field} must be an array`);
 		}
 	}
+	// Refuse, rather than filter, entries normalization would drop (#453).
+	// A closure may be a bare id or `{ id, evidence }` — the shape the phase
+	// handoff's open_question_closures takes — and the evidence a mapping
+	// carries is kept as a note so the amendment closeout records it.
+	assertIdList(raw.open_question_closures, "open_question_closures", "amendment");
+	assertIdList(raw.post_pipeline_closures, "post_pipeline_closures", "amendment");
+	assertTextList(raw.notes, "notes", "amendment");
+	const evidenceNotes = [
+		...ensureClosureArray(raw.open_question_closures)
+			.filter((closure) => closure.evidence)
+			.map((closure) => `${closure.id} closed on: ${closure.evidence}`),
+		...closureRationaleNotes(raw.open_question_closures, ["evidence"]),
+		...closureRationaleNotes(raw.post_pipeline_closures),
+	];
 	const amendment: Amendment = {
 		slug,
-		open_question_closures: ensureArray(raw.open_question_closures),
-		post_pipeline_closures: ensureArray(raw.post_pipeline_closures),
-		notes: ensureArray(raw.notes),
+		open_question_closures: ensureIdArray(raw.open_question_closures),
+		post_pipeline_closures: ensureIdArray(raw.post_pipeline_closures),
+		notes: [...ensureTextArray(raw.notes), ...evidenceNotes],
 		closeout_summary: typeof raw.closeout_summary === "string" ? raw.closeout_summary : "",
 		closeout_content: typeof raw.closeout_content === "string" ? raw.closeout_content : "",
 		schema_version: schemaVersion,
@@ -201,7 +215,14 @@ export async function applyAmendment(cwd: string, name: string): Promise<Amendme
 				const closeoutFile = `${dateOnly(timestamp)}-amendment-${amendment.slug}.md`;
 				const closeoutsDir = join(lockedState.workspaceDir, "closeouts");
 				await mkdir(closeoutsDir, { recursive: true });
-				const body = amendment.closeout_content.trim() || renderAmendmentCloseout(amendment, applied, timestamp);
+				// A supplied closeout still carries the notes, the way completion
+				// appends a handoff's decisions to its supplied closeout: the
+				// template ships a non-empty closeout_content, so dropping notes
+				// whenever one is supplied lost them — closure evidence included
+				// (#453 review) — while Pi's preview promised them.
+				const supplied = amendment.closeout_content.trim();
+				const notesSection = amendment.notes.length > 0 ? `\n\n## Notes\n\n${amendment.notes.map((note) => `- ${note}`).join("\n")}` : "";
+				const body = supplied ? `${supplied}${notesSection}` : renderAmendmentCloseout(amendment, applied, timestamp);
 				await writeFile(join(closeoutsDir, closeoutFile), `${body}\n`, "utf8");
 				const summary = amendment.closeout_summary.trim()
 					|| `Amendment applied: ${applied.openQuestionsClosed.length} open question(s) and ${applied.postPipelineClosed.length} post-pipeline item(s) closed.`;
