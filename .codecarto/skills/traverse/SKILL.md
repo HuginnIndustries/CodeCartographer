@@ -35,8 +35,13 @@ solving a problem that was never there.
 
 ## Readiness
 
-Ask `codecarto_change` for the next step and it will tell you one action. Before
-you take it, check what the loop needs against what you actually have:
+The next step is decided by `planTraverseStep` in `core/engineering/`: from the
+records and the bounds and capability you declare, it names one action. **No
+`codecarto_change` action and no Pi command calls it yet.** Over MCP, read the
+records with `show` and the gate's verdict with `gate`, and take the next action
+in the order this document describes; a host that embeds the library calls the
+planner directly. Either way, before you take a step, check what the loop needs
+against what you actually have:
 
 - **Bounds.** The loop refuses to plan at all unless you declare `max_attempts`
   (a positive integer) and `max_wall_clock_ms` (a positive finite number).
@@ -59,9 +64,9 @@ The loop tells you to start or resume an attempt; then **you** do the work.
 
 The rule that matters: **an attempt already recorded as `running` is resumed,
 never restarted.** If you asked to start an attempt and never saw the response,
-ask for the next step again — if the attempt was recorded, you will be told to
-resume it, and you will not run the migration a second time. Every step carries
-an `idempotency_key` derived from the records, not the clock: the same
+read the records again (`show`, or the planner) before acting — if the attempt
+was recorded as `running`, resume it, and do not run the migration a second
+time. Every step the planner returns carries an `idempotency_key` derived from the records, not the clock: the same
 situation yields the same key, so you can recognise your own retry.
 
 Record the baseline before you change anything, and the candidate after. A
@@ -126,8 +131,8 @@ read as "nothing here" — the one case where the loop cannot tell whether work
 is already in flight is the case where it must not proceed. It stops and names
 the path.
 
-**To resume**: ask for the next step again. The answer is computed from the
-records alone, so a new session reaches the same action as the one that died,
+**To resume**: read the records again, or call the planner again. Its answer is
+computed from the records alone, so a new session reaches the same action as the one that died,
 and it will tell you what it resumed from and what failed before.
 
 ## What this document cannot do

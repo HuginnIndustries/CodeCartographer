@@ -265,7 +265,7 @@ Your environment doesn't support file access. See the Environment Setup section.
 On Pi run `/codecarto-phase <phase>` (or `codecarto_phase` on MCP) to re-run it in place — the phase re-reads its existing output and continues; delete the output first for a clean rerun. Completing it again re-applies the handoff idempotently. In drop-in mode, reset the phase's status in `status.yaml` to `pending`, set `current_phase` to it, delete the output in `findings/<phase>/`, and start a new LLM session.
 
 **The status widget (or `codecarto_status`) says the scaffold is stale.**
-Your `.codecarto/` was copied from an older release, so its GUIDE.md, templates, and pipelines may contradict the running framework. Run `/codecarto-refresh-scaffold` (Pi — it lists the exact files it will overwrite and asks first) or `codecarto_refresh_scaffold` (MCP). Only framework-owned files are rewritten; `status.yaml`, `config.yaml`, findings outputs, BACKLOG/THREAD_LOG/CONVENTIONS/DECISIONS, `scratch/`, `inputs/`, `closeouts/`, and `broadside/` are never touched. In drop-in mode, copy the packaged `.codecarto/` over yours by hand, skipping those same paths.
+Your `.codecarto/` was copied from an older release, so its GUIDE.md, templates, and pipelines may contradict the running framework. Run `/codecarto-refresh-scaffold` (Pi — it lists the exact files it will overwrite and asks first) or `codecarto_refresh_scaffold` (MCP). Only framework-owned files are rewritten; `status.yaml`, `config.yaml`, findings outputs, BACKLOG/THREAD_LOG/CONVENTIONS/DECISIONS, `scratch/`, `inputs/`, `closeouts/`, `broadside/`, and `engineering/` are never touched. In drop-in mode, copy the packaged `.codecarto/` over yours by hand, skipping those same paths.
 
 
 ## Tips

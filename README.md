@@ -376,6 +376,7 @@ Implements MCP spec revisions [`2026-07-28`](https://modelcontextprotocol.io/spe
 | `codecarto_amend` | `/codecarto-amend` (Pi previews the closures and asks first) |
 | `codecarto_refresh_scaffold` | `/codecarto-refresh-scaffold` (Pi lists the file set and asks first) |
 | `codecarto_broadside` | `/codecarto-broadside` |
+| `codecarto_change` | MCP-only, **EXPERIMENTAL**: records an engineering change, its attempts, proofs, review and acceptance gate; never executes anything ([details](docs/mcp-quickstart.md#experimental-recording-an-engineering-change)) |
 
 Each workflow tool accepts an absolute `cwd` for the target repository. `codecarto_init` requires `force: true` to overwrite an existing `.codecarto/` (instead of Pi's interactive confirmation). The library tools accept an explicit absolute `library_path` or resolve `library.path` from `.codecarto/workflow/config.yaml` / `~/.codecarto/config.yaml`. `codecarto_library_reindex` and `codecarto_library_list` also report entries whose versions disagree about `source_repo` — the shape a slug collision left behind before v0.17.0's publish guard — and leave the repair manual, since splitting an entry changes paths the library format treats as ABI. The library schema is experimental and may break before v2.
 
