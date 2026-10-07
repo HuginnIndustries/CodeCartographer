@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'codecartographer-pi version to smoke-test (default: package.json#version)'
+        description: 'codecartographer-pi version to smoke-test (default: the latest published version)'
         required: false
   schedule:
     - cron: '17 6 * * *'
@@ -15,20 +15,37 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    # A harness that hangs must not hold a runner for GitHub's six-hour
+    # default; the run takes about a minute when it works (#449).
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         node-version: ['22', '24']
     steps:
-      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
+      - name: Resolve the version under test
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION:-$(npm view codecartographer-pi version)}"
+          echo "Smoke-testing codecartographer-pi@$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      # The harness asserts the exact tool inventory, so it must be the one
+      # that shipped with the version under test. main's harness tracks tools
+      # that are not published yet and fails every published version between
+      # releases (#449); the tag's harness is the one that version passed.
+      - uses: actions/checkout@v7
+        with:
+          ref: v${{ steps.version.outputs.version }}
       - name: Install harness dependencies
-        # The smoke script imports @modelcontextprotocol/sdk at the top.
-        # The published package is installed into a temp dir by the script
+        # The smoke script imports the MCP client SDK at the top. The
+        # published package is installed into a temp dir by the script
         # itself, but the driver needs the SDK at the repo root to start.
         run: npm ci
       - name: Run smoke test
-        run: node scripts/smoke-mcp.mjs ${{ inputs.version && format('--version {0}', inputs.version) || '' }}
+        timeout-minutes: 10
+        run: node scripts/smoke-mcp.mjs --version "${{ steps.version.outputs.version }}"
