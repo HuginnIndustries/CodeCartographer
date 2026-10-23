@@ -722,6 +722,124 @@ test("#448.3: a planned change with zero slices (a plan interrupted between its 
 	});
 });
 
+test("#448.1 (receipt-expired): a stored approval whose decision came after its request's expires_at stops request_acceptance for an operator: nobody is asked, no request is issued, nothing is minted", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const { changeId, attemptId } = await planAndStart(cwd, head);
+		await finalizeCleanly(cwd, store, changeId, attemptId);
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: { action: "accept", content: { decision: "accept" } } }) }, async ({ send, elicitations }) => {
+			const reply = await send("tools/call", { name: "codecarto_change", arguments: { cwd, action: "request_acceptance", change_id: changeId, attempt_id: attemptId } });
+			assert.ok(!reply.error, JSON.stringify(reply.error));
+			assert.equal(reply.result.structuredContent.outcome, "accepted", JSON.stringify(reply.result.structuredContent));
+			assert.equal(elicitations.length, 1);
+		});
+		const [approvalId] = await approvalsOnDisk(store, changeId, attemptId);
+		assert.ok(approvalId, "the scripted client minted one genuine approval");
+		// Rewrite that one approval (same id, so it is not a replay) as decided
+		// a minute after the stored request it names expired.
+		const attemptDir = join(store.root, "changes", changeId, "attempts", attemptId);
+		const approvalPath = join(attemptDir, "approvals", `${approvalId}.json`);
+		const approval = JSON.parse(await readFile(approvalPath, "utf8"));
+		const named = JSON.parse(await readFile(join(attemptDir, "requests", `${approval.receipt.request_id}.json`), "utf8"));
+		const late = new Date(Date.parse(named.expires_at) + 60_000).toISOString();
+		await writeFile(approvalPath, `${JSON.stringify({ ...approval, decided_at: late }, null, "\t")}\n`);
+
+		const attempt = (await store.get("attempt", attemptId, { changeId })).record;
+		const candidate = (await store.get("snapshot", attempt.candidate_snapshot_id, { changeId, attemptId })).record;
+		const verdicts = await judgeApprovals(store, attempt, candidate);
+		assert.equal(verdicts.length, 1, JSON.stringify(verdicts));
+		assert.equal(verdicts[0].genuine, false, JSON.stringify(verdicts));
+		assert.ok(verdicts[0].codes.includes("receipt-expired"), JSON.stringify(verdicts));
+		assert.ok(!verdicts[0].codes.includes("receipt-replayed"), "the expired case is isolated from the replay case");
+
+		const requestsBefore = await requestsOnDisk(store, changeId, attemptId);
+		assert.deepEqual(requestsBefore, [`${named.id}.json`]);
+		const inProcess = await requestAcceptance(store, { change_id: changeId, attempt_id: attemptId, capabilities: IN_PROCESS_CAPABILITIES, presenter: { elicit: async () => { throw new Error("never presented"); } }, current_storage: { boundary: "none" }, reread: rereadFor(cwd) });
+		assert.equal(inProcess.outcome, "blocked-needs-operator", JSON.stringify(inProcess));
+		assert.equal(inProcess.request, undefined, "no request was issued");
+		assert.match(inProcess.reason, new RegExp(`approval ${approvalId} names stored request ${named.id}`));
+		assert.match(inProcess.reason, /receipt-expired/);
+		await withClient({ registry: [REGISTERED], answer: () => ({ result: { action: "accept", content: { decision: "accept" } } }) }, async ({ send, elicitations }) => {
+			const reply = await send("tools/call", { name: "codecarto_change", arguments: { cwd, action: "request_acceptance", change_id: changeId, attempt_id: attemptId } });
+			assert.ok(!reply.error, JSON.stringify(reply.error));
+			const out = reply.result.structuredContent;
+			assert.equal(out.outcome, "blocked-needs-operator", JSON.stringify(out));
+			assert.equal(elicitations.length, 0, "the person was not asked again");
+			assert.equal(out.request_id, undefined);
+			assert.match(out.reason, new RegExp(approvalId));
+			assert.match(out.reason, /receipt-expired/);
+		});
+		assert.deepEqual(await requestsOnDisk(store, changeId, attemptId), requestsBefore, "no new request was stored");
+		assert.deepEqual(await approvalsOnDisk(store, changeId, attemptId), [approvalId], "no new approval was minted");
+	});
+});
+
+test("#448.2 (dedup): a limitation line repeated across the standard, gate and re-read lists reaches the presentation once, at its first position", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const { changeId, attemptId } = await planAndStart(cwd, head);
+		await finalizeCleanly(cwd, store, changeId, attemptId);
+		const ask = (reread) => requestAcceptance(store, { change_id: changeId, attempt_id: attemptId, capabilities: IN_PROCESS_CAPABILITIES, presenter: { elicit: async () => { throw new Error("never presented"); } }, current_storage: { boundary: "none" }, reread });
+		const plainReread = rereadFor(cwd);
+		const plain = await ask(plainReread);
+		assert.equal(plain.outcome, "needs-human-acceptance", JSON.stringify(plain));
+		const shown = plain.request.presentation.limitations;
+		assert.equal(new Set(shown).size, shown.length, JSON.stringify(shown));
+		// One standard line (buildAcceptanceRequest's own) and one gate line.
+		const standardLine = shown.find((l) => /^The engineering namespace is writable by agent tools/.test(l));
+		const gateLine = shown.find((l) => /^the engineering namespace is not protected from agent tools/.test(l));
+		assert.ok(standardLine && gateLine, JSON.stringify(shown));
+		const hostLine = "the host re-read reports this caveat twice";
+		const dup = await ask(async (c) => {
+			const r = await plainReread(c);
+			return r.ok ? { ...r, limitations: [...r.limitations, standardLine, gateLine, hostLine, hostLine] } : r;
+		});
+		assert.equal(dup.outcome, "needs-human-acceptance", JSON.stringify(dup));
+		// First occurrence wins: the earlier lines keep their places and only the new distinct line is appended.
+		assert.deepEqual(dup.request.presentation.limitations, [...shown, hostLine]);
+	});
+});
+
+test("#448.3 (future updated_at): a planned change with zero slices whose updated_at is in the future is not treated as interrupted; plan refuses and writes nothing", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const created = (await handleChange({ cwd, action: "create", title: "Count widgets", outcome: "count() counts", baseline_commit: head })).structuredContent;
+		const draft = (await store.get("change", created.change_id)).record;
+		const future = new Date(Date.now() + 10 * 60_000).toISOString();
+		await store.put({ ...draft, state: "planned", revision: draft.revision + 1, acceptance_scenarios: SCENARIOS, updated_at: future }, { ifRevision: draft.revision });
+		const planned = (await store.get("change", created.change_id)).record;
+		assert.equal(planned.updated_at, future);
+		await assert.rejects(
+			() => handleChange({ cwd, action: "plan", change_id: created.change_id, acceptance_scenarios: SCENARIOS, slices: [SLICE], revision: planned.revision }),
+			(e) => e instanceof ProtocolError && /a plan may still be writing them/.test(e.message),
+		);
+		const after = (await store.get("change", created.change_id)).record;
+		assert.equal(after.revision, planned.revision, "the refused plan did not move the change");
+		assert.deepEqual(await readdir(join(store.root, "changes", created.change_id, "slices")).catch(() => []), [], "no slice was written");
+	});
+});
+
+test("#448.3 (unenumerable slices): an aged planned change whose slices path cannot be listed is refused, not counted as zero slices; nothing is written", async () => {
+	await withRepo(async ({ cwd, head, store }) => {
+		const created = (await handleChange({ cwd, action: "create", title: "Count widgets", outcome: "count() counts", baseline_commit: head })).structuredContent;
+		const draft = (await store.get("change", created.change_id)).record;
+		const old = new Date(Date.now() - 10 * 60_000).toISOString();
+		await store.put({ ...draft, state: "planned", revision: draft.revision + 1, acceptance_scenarios: SCENARIOS, created_at: old, updated_at: old }, { ifRevision: draft.revision });
+		const stuck = (await store.get("change", created.change_id)).record;
+		// A regular FILE where the slices directory belongs: readdir fails
+		// with ENOTDIR on every platform, which is not ENOENT.
+		const slicesPath = join(store.root, "changes", created.change_id, "slices");
+		await writeFile(slicesPath, "not a directory\n");
+		const planPath = join(store.root, "changes", created.change_id, "plan.md");
+		const planBefore = await readFile(planPath, "utf8").catch((e) => e.code);
+		await assert.rejects(
+			() => handleChange({ cwd, action: "plan", change_id: created.change_id, acceptance_scenarios: SCENARIOS, slices: [SLICE], revision: stuck.revision }),
+			(e) => e instanceof ProtocolError && /is planned; slices are planned once, from draft/.test(e.message) && /cannot be enumerated/.test(e.message),
+		);
+		const after = (await store.get("change", created.change_id)).record;
+		assert.equal(after.revision, stuck.revision, "the refused plan did not move the change");
+		assert.equal(await readFile(slicesPath, "utf8"), "not a directory\n", "the slices path is untouched");
+		assert.equal(await readFile(planPath, "utf8").catch((e) => e.code), planBefore, "plan.md is untouched");
+	});
+});
+
 // ---------------------------------------------------------------- scripted stdio client (as in the adapter test)
 
 async function withClient({ registry, capabilities = { elicitation: { form: {}, url: {} } }, clientInfo = { name: "claude-code", version: "2.1.277" }, answer }, fn) {
