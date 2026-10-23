@@ -53,6 +53,7 @@ import {
 	ingestProof,
 	newRecordId,
 	openStore,
+	planTraverseStep,
 	readStoredInputDigests,
 	recordReview,
 	requestAcceptance,
@@ -72,7 +73,7 @@ import { atomicWriteFile } from "../core/utils.ts";
 import { captureWorkingTree, readWorkingTree } from "./working-tree.ts";
 
 /** Every action this surface implements. Pinned so the schema and the dispatch cannot drift. */
-export const CHANGE_ACTIONS = ["create", "update", "show", "list", "plan", "start_attempt", "capture_candidate", "record_proof", "record_review", "gate", "request_acceptance", "ingest_observations"] as const;
+export const CHANGE_ACTIONS = ["create", "update", "show", "list", "plan", "start_attempt", "capture_candidate", "record_proof", "record_review", "gate", "request_acceptance", "ingest_observations", "next"] as const;
 export type ChangeAction = (typeof CHANGE_ACTIONS)[number];
 
 /**
@@ -293,6 +294,8 @@ export function createChangeHandler(deps: {
 				return await requestAcceptanceAction(store, args, deps.textResult, deps.session?.(), cwd);
 			case "ingest_observations":
 				return await ingestObservations(store, args, deps.textResult);
+			case "next":
+				return await nextStepAction(store, args, deps.textResult, deps.session?.());
 		}
 	};
 }
@@ -955,12 +958,118 @@ async function ingestObservations(store: EngineeringStore, args: ChangeArgs, tex
 	});
 }
 
+// ---------------------------------------------------------------------------
+// next (#458): the traverse planner's answer, read-only.
+// ---------------------------------------------------------------------------
+
+/**
+ * The only fields `next` reads. Anything else is refused by name: a read
+ * action that silently ignored `host`, `bounds` or `state` would let a caller
+ * believe it had shaped the answer.
+ */
+const NEXT_FIELDS = new Set(["cwd", "action", "change_id", "max_attempts", "max_wall_clock_ms", "can_execute", "can_obtain_human_decision"]);
+
+/**
+ * The planner's own bound rule (traverse.ts), restated so a bad bound is the
+ * CALLER's error (InvalidParams) rather than the planner's plain Error
+ * surfacing as an internal failure. The planner still checks; a test drives
+ * both with the same cases so the two cannot drift apart.
+ */
+function nextBounds(args: Record<string, unknown>): { max_attempts: number; max_wall_clock_ms: number } {
+	const bounded = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
+	const { max_attempts, max_wall_clock_ms } = args;
+	if (!Number.isInteger(max_attempts) || !bounded(max_attempts)) {
+		invalid(`max_attempts must be a positive integer, got ${describeBound(max_attempts)}: the loop refuses to plan without real bounds, and an unbounded loop is not a default`);
+	}
+	if (!bounded(max_wall_clock_ms)) {
+		invalid(`max_wall_clock_ms must be a positive finite number, got ${describeBound(max_wall_clock_ms)}: the loop refuses to plan without real bounds, and an unbounded loop is not a default`);
+	}
+	return { max_attempts, max_wall_clock_ms };
+}
+
+function describeBound(value: unknown): string {
+	if (value === undefined) return "nothing";
+	if (typeof value === "number") return String(value);
+	return `${typeof value} ${JSON.stringify(value) ?? String(value)}`;
+}
+
+/**
+ * Ask the planner for the next bounded step. Writes nothing.
+ *
+ * `can_execute` is the host's to declare: this server cannot see whether the
+ * caller can run a build. `can_obtain_human_decision` is not taken on the
+ * caller's word alone. The only way this surface can reach a person is the
+ * client's elicitation form, and whether the client declared it is a fact of
+ * the session, so the effective value is the caller's declaration AND the
+ * session's: a host may say it cannot reach a person when its client could
+ * (it knows its operator is away), but it can never raise the capability
+ * above what the transport supports. Without a session the server knows of
+ * no channel, exactly as `hostCapabilitiesFromSession` reads it.
+ */
+async function nextStepAction(store: EngineeringStore, args: ChangeArgs, textResult: (t: string, s?: Record<string, unknown>) => unknown, session: AcceptanceSession | undefined) {
+	for (const field of Object.keys(args)) {
+		if (!NEXT_FIELDS.has(field)) {
+			invalid(`unknown field ${field}: next reads change_id, max_attempts, max_wall_clock_ms, can_execute and can_obtain_human_decision only; host capability and record state are derived, never supplied`);
+		}
+	}
+	const changeId = requireString(args, "change_id");
+	const bounds = nextBounds(args);
+	for (const field of ["can_execute", "can_obtain_human_decision"] as const) {
+		if (typeof args[field] !== "boolean") invalid(`${field} is required and must be a boolean; a capability is declared, never assumed`);
+	}
+	const declaredHuman = args.can_obtain_human_decision === true;
+	const sessionHuman = session?.elicitation_form === true;
+	const host = {
+		can_execute: args.can_execute === true,
+		can_obtain_human_decision: declaredHuman && sessionHuman,
+		storage: { boundary: session?.storage_boundary ?? "none", protection: "unknown" },
+		bounds,
+	};
+	let step;
+	try {
+		step = await planTraverseStep(store, { change_id: changeId, host });
+	} catch (error) {
+		throw asCallerError(error);
+	}
+	const humanNote = declaredHuman && !sessionHuman ? " (declared true, but this client did not declare elicitation.form, so the server cannot reach a person: treated as false)" : "";
+	const lines = [
+		step.action === "stop" ? `Next: stop (${step.stop_reason}).` : `Next: ${step.action}.`,
+		"",
+		displayText(step.rationale),
+		"",
+		`Bounds: ${step.bounds.limits.map(displayText).join("; ")}`,
+		`Idempotency key: ${step.idempotency_key}`,
+		`can_obtain_human_decision: ${host.can_obtain_human_decision}${humanNote}`,
+		...(step.resumed_from ? [`Resumed from: attempt ${step.resumed_from.attempt_id} (${step.resumed_from.outcome})`] : []),
+		...(step.history.length > 0 ? ["", "History:", ...step.history.map((h) => `- ${displayText(h)}`)] : []),
+		"",
+		"Read-only: nothing was written. The host performs the step; this surface records what it did.",
+	];
+	return textResult(lines.join("\n"), {
+		change_id: changeId,
+		action: step.action,
+		...(step.stop_reason !== undefined ? { stop_reason: step.stop_reason } : {}),
+		rationale: step.rationale,
+		bounds: step.bounds,
+		...(step.resumed_from ? { resumed_from: step.resumed_from } : {}),
+		history: step.history,
+		idempotency_key: step.idempotency_key,
+		host: {
+			can_execute: host.can_execute,
+			can_obtain_human_decision: host.can_obtain_human_decision,
+			can_obtain_human_decision_declared: declaredHuman,
+			elicitation_form: sessionHuman,
+			bounds,
+		},
+	});
+}
+
 /** The advertised tool. One entry, one discriminator, marked experimental. */
 export const ENGINEERING_TOOLS = [
 	{
 		name: "codecarto_change",
 		description:
-			"EXPERIMENTAL. Record and inspect an engineering change: its brief, its plan, the attempt lifecycle (start_attempt captures the baseline, capture_candidate the candidate — both read from the workspace by this server, never supplied by the caller), proofs of checks a host ran, a review bound to the captured candidate (record_review), and the acceptance gate. request_acceptance ASKS the person through the client's own elicitation form; it never grants. This surface records what a host did — it never runs anything, and it cannot approve work.",
+			"EXPERIMENTAL. Record and inspect an engineering change: its brief, its plan, the attempt lifecycle (start_attempt captures the baseline, capture_candidate the candidate — both read from the workspace by this server, never supplied by the caller), proofs of checks a host ran, a review bound to the captured candidate (record_review), and the acceptance gate. request_acceptance ASKS the person through the client's own elicitation form; it never grants. next is read-only: it returns the traverse planner's next bounded step (action, stop_reason, rationale, bounds, history, idempotency_key) for change_id given max_attempts, max_wall_clock_ms, can_execute and can_obtain_human_decision, and writes nothing; can_obtain_human_decision counts only when this client declared elicitation.form. This surface records what a host did — it never runs anything, and it cannot approve work.",
 		inputSchema: {
 			type: "object" as const,
 			properties: {
@@ -982,6 +1091,10 @@ export const ENGINEERING_TOOLS = [
 				review: { type: "object", description: "{ reviewer, objections, summary } (record_review). The candidate and input digests are bound from the stored attempt, never supplied." },
 				mode: { type: "string", enum: ["fix", "feature", "refactor", "migration", "investigation"], description: "Change mode (create); defaults to feature." },
 				baseline_commit: { type: "string", description: "Full commit hash the change is based on (create). Without it the baseline is recorded as having no VCS, because HEAD alone never identifies a candidate." },
+				max_attempts: { type: "integer", description: "Attempt budget, a positive integer (next). Required: there is no default." },
+				max_wall_clock_ms: { type: "number", description: "Wall-clock bound per step in ms, positive and finite (next). Required: there is no default." },
+				can_execute: { type: "boolean", description: "Whether the host can run the work (next). Declared by the host." },
+				can_obtain_human_decision: { type: "boolean", description: "Whether the host can reach a person for a decision (next). Effective only when this client declared elicitation.form; the server's knowledge wins." },
 			},
 			required: ["cwd", "action"],
 		},

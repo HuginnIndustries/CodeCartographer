@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- **EXPERIMENTAL: `codecarto_change` action `next`, the traverse planner's answer over MCP.** `next` is read-only and writes nothing. It takes `change_id`, `max_attempts`, `max_wall_clock_ms`, `can_execute` and `can_obtain_human_decision`, and returns `planTraverseStep`'s step (`action`, `stop_reason`, `rationale`, `bounds`, `history`, `idempotency_key`) in both `content` and `structuredContent`. Bounds are refused the way the planner refuses them (missing, zero, negative, fractional attempts, `NaN`, `Infinity`, wrong type), as `-32602` rather than an internal error. Any other field is refused by name. `can_obtain_human_decision` is ANDed with whether the client declared `elicitation.form` at initialize, because that form is the only way this server can reach a person: a caller can lower the capability but not raise it. The `traverse` skill again says to ask `codecarto_change` for the next step (#458).
+
 ## [0.27.0] — 2026-10-07
 
 The handoff-robustness release, plus everything merged since 0.26.0. A real Pi run on a local 27B model finished two and a half hours of validated work and then stopped on a YAML shape mistake in its handoff. Behind that one refusal, the handoff parser was silently dropping closures and question text. Completion now refuses what it would lose, Pi gives the phase one turn to repair a refused handoff, and the smoke workflow no longer hangs for six hours when it fails. Also shipping: the MCP server on SDK v2 serving the `2026-07-28` revision, and the first, EXPERIMENTAL, engineering-record surface (`codecarto_change`).
