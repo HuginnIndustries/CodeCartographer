@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stale-lock claim re-checks its ticket before reporting a break.** A waiter can list a dead ticket that another waiter unlinks before this one claims it. The claim-marker sweep then drops the old marker, because its source is gone, and the waiter writes a fresh one. `removeIfPresent` used to let `rename` decide from there. Every real platform reports `ENOENT` for a missing source. But the lock-claim test's mock reported success, so on a slow Windows runner a waiter recorded a break of `{ pid: null, since: null }` for a ticket that was already gone. The mock now fails on a missing source, as a real rename does. The claim also stats the source once it holds the marker and returns "gone" when the source is missing, so the product does not depend on how `rename` reports this case. A deterministic test reproduces the race through the `fsOps` seam (#460).
+
 ## [0.27.0] — 2026-10-07
 
 The handoff-robustness release, plus everything merged since 0.26.0. A real Pi run on a local 27B model finished two and a half hours of validated work and then stopped on a YAML shape mistake in its handoff. Behind that one refusal, the handoff parser was silently dropping closures and question text. Completion now refuses what it would lose, Pi gives the phase one turn to repair a refused handoff, and the smoke workflow no longer hangs for six hours when it fails. Also shipping: the MCP server on SDK v2 serving the `2026-07-28` revision, and the first, EXPERIMENTAL, engineering-record surface (`codecarto_change`).

@@ -836,6 +836,19 @@ async function removeIfPresent(
 		if ((error as NodeJS.ErrnoException).code === "EEXIST") return "busy";
 		throw error;
 	}
+	// The source can vanish between the caller's listing and this claim: a
+	// sweep drops a marker whose source is gone, so a fresh marker proves
+	// nothing about the source. Re-check it now rather than trust rename to
+	// report ENOENT. A missing source can only be "gone"; any other answer
+	// leaves the decision to rename, as before (#460).
+	try {
+		await fsOps.stat(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			await rm(claimPath, { force: true }).catch(() => undefined);
+			return "gone";
+		}
+	}
 	try {
 		await fsOps.rename(path, tombstone);
 	} catch (error) {
