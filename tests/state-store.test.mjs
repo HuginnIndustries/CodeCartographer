@@ -333,6 +333,24 @@ test("Windows claim contention retries while the stale ticket still exists", asy
 	}
 });
 
+/**
+ * A rename that models Windows reporting success for `dead` while leaving the
+ * source visible. A real rename of a missing source fails with ENOENT on
+ * every platform, so the mock checks first and rethrows: reporting success
+ * unconditionally modelled a platform that does not exist, and let a waiter
+ * whose ticket was unlinked mid-scan record a false break (#460).
+ */
+function visibleAfterRename(dead, onClaim = () => undefined, { checkSource = true } = {}) {
+	return async (from, to) => {
+		if (from === dead) {
+			if (checkSource) await stat(from); // ENOENT, exactly as a real rename would report it.
+			onClaim();
+			return; // Model Windows reporting success while the source is still visible.
+		}
+		await rename(from, to);
+	};
+}
+
 test("only one waiter reports a break when Windows exposes the source after rename succeeds", async () => {
 	const { dir, cleanup } = await tempDir("cc-lock-claim-visible-");
 	try {
@@ -341,13 +359,9 @@ test("only one waiter reports a break when Windows exposes the source after rena
 		let renameCalls = 0;
 		const fsOps = {
 			stat,
-			rename: async (from, to) => {
-				if (from === dead) {
-					renameCalls += 1;
-					return; // Model Windows reporting success while the source is still visible.
-				}
-				await rename(from, to);
-			},
+			rename: visibleAfterRename(dead, () => {
+				renameCalls += 1;
+			}),
 			unlink,
 		};
 		const first = await acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
@@ -366,6 +380,105 @@ test("only one waiter reports a break when Windows exposes the source after rena
 		await cleanup();
 	}
 });
+
+// The CI flake in #460, made deterministic through the fsOps seam rather than
+// a timed sleep: the second waiter lists the directory while the dead ticket
+// and the first waiter's claim marker are both there, and the ticket is
+// unlinked at the moment the waiter stats that marker in its sweep. The sweep
+// then drops the marker (its source is gone), the waiter writes a fresh one
+// and renames a ticket that no longer exists. That must not report a break.
+// The second model is a platform that reports success even for a missing
+// source: removeIfPresent re-checks the source once it holds the marker, so
+// the product does not depend on rename's report for that case either.
+for (const { model, checkSource } of [
+	{ model: "rename reports ENOENT", checkSource: true },
+	{ model: "rename misreports success for a missing source", checkSource: false },
+]) {
+	test(`a ticket unlinked between a waiter's listing and its rename is not reported as a break (${model})`, async () => {
+		const { dir, cleanup } = await tempDir("cc-lock-claim-unlinked-");
+		try {
+			const lockPath = join(dir, "status.yaml.lock");
+			const dead = await deadTicket(dir);
+			const markerPath = `${lockPath}.claim.${basename(dead)}`;
+			let renameCalls = 0;
+			let armed = false;
+			let unlinkedMidScan = false;
+			const fsOps = {
+				stat: async (path) => {
+					if (armed && path === markerPath && !unlinkedMidScan) {
+						unlinkedMidScan = true;
+						await unlink(dead);
+					}
+					return stat(path);
+				},
+				rename: visibleAfterRename(dead, () => {
+					renameCalls += 1;
+				}, { checkSource }),
+				unlink,
+			};
+			const first = await acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
+			assert.equal(first.brokeStale?.pid, 4194303);
+			await first.release();
+			assert.ok(existsSync(dead), "the source is still visible after the first claim");
+			assert.ok(existsSync(markerPath), "the first claim's marker is kept while its source is visible");
+			armed = true;
+			const second = await acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
+			assert.ok(unlinkedMidScan, "the ticket was unlinked between the second waiter's listing and its claim");
+			assert.equal(second.brokeStale, undefined, "a ticket that was already gone is not reported as broken");
+			assert.equal(renameCalls, 1, "only the first waiter's rename succeeded");
+			await second.release();
+			assert.deepEqual(await readdir(dir), []);
+		} finally {
+			await cleanup();
+		}
+	});
+}
+
+// Only ENOENT at the claim-time stat means "gone". Any other stat error
+// (Windows reports sharing and permission contention as EPERM/EBUSY/EACCES,
+// and EIO is a plain read failure) says nothing about whether the source is
+// there, so the claim must fall through and let rename decide. Treating every
+// stat error as "gone" would drop the marker, skip a live dead ticket and
+// leave it in the queue with no break recorded (#460).
+for (const code of ["EPERM", "EBUSY", "EACCES", "EIO"]) {
+	test(`an ${code} from the claim-time stat of a dead ticket leaves the decision to rename (#460)`, async () => {
+		const { dir, cleanup } = await tempDir("cc-lock-claim-stat-");
+		try {
+			const lockPath = join(dir, "status.yaml.lock");
+			const dead = await deadTicket(dir);
+			const markerPath = `${lockPath}.claim.${basename(dead)}`;
+			const deadOps = [];
+			let injected = 0;
+			const fsOps = {
+				stat: async (path) => {
+					if (path === dead) deadOps.push(existsSync(markerPath) ? "stat-claimed" : "stat");
+					// Once: the first stat of the dead ticket after this waiter holds its claim marker.
+					if (path === dead && injected === 0 && existsSync(markerPath)) {
+						injected += 1;
+						throw Object.assign(new Error(`${code}: injected at the claim-time stat`), { code });
+					}
+					return stat(path);
+				},
+				rename: async (from, to) => {
+					if (from === dead) deadOps.push("rename");
+					return rename(from, to);
+				},
+				unlink,
+			};
+			const handle = await acquireLock(lockPath, { fsOps, timeoutMs: 1_000 });
+			assert.equal(injected, 1, `the ${code} was injected at the claim-time stat`);
+			const claimAt = deadOps.indexOf("stat-claimed");
+			assert.equal(deadOps[claimAt + 1], "rename", `rename followed the failed stat: ${deadOps.join(", ")}`);
+			assert.equal(deadOps.filter((op) => op === "rename").length, 1, "one claim, decided by one rename");
+			assert.equal(handle.brokeStale?.pid, 4194303, "the dead ticket's break is recorded");
+			assert.ok(!existsSync(dead), "the dead ticket left the queue");
+			await handle.release();
+			assert.deepEqual(await readdir(dir), []);
+		} finally {
+			await cleanup();
+		}
+	});
+}
 
 test("Windows claim errors after another waiter removed the ticket do not report a break", async () => {
 	for (const code of ["EPERM", "EBUSY", "EACCES"]) {
