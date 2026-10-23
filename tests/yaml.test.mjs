@@ -168,6 +168,81 @@ test("chomping works on sequence block scalars too", () => {
 	assert.deepEqual(parseSimpleYaml("k:\n  - >-\n    a\n").k, ["a"]);
 });
 
+// ---------- a block scalar on the first key of a sequence item (#459) ----------
+//
+// The first key of `- key: value` had its own value path, which knew nothing
+// of block scalars: `- description: >` kept the `>` as the first word of the
+// text and did not fold. A later key in the same item parsed it correctly. A
+// model-written handoff uses exactly this shape, and the indicator leaked into
+// status.yaml, the dashboard and the next phase's prompt.
+
+test("a folded block scalar on an item's first key parses like one on a later key (#459, issue examples)", () => {
+	// Both examples verbatim from the issue, header comments included.
+	const first = parseSimpleYaml(
+		"open_questions:\n  - description: >          # first key of the item\n      Does it resolve libc?\n    kind: needs-runtime-test\n",
+	);
+	assert.deepEqual(first.open_questions, [{ description: "Does it resolve libc?\n", kind: "needs-runtime-test" }]);
+	const later = parseSimpleYaml(
+		"open_questions:\n  - id: q1\n    description: >          # later key\n      Does it resolve libc?\n",
+	);
+	assert.deepEqual(later.open_questions, [{ id: "q1", description: "Does it resolve libc?\n" }]);
+	assert.equal(first.open_questions[0].description, later.open_questions[0].description);
+});
+
+test("first-key and later-key block scalars agree for every style and chomping indicator (#459)", () => {
+	const body = "      line one\n      line two\n\n      para two\n\n";
+	for (const header of [">", ">-", ">+", "|", "|-", "|+"]) {
+		const firstKey = parseSimpleYaml(`k:\n  - text: ${header}\n${body}    tail: t\n`).k;
+		const laterKey = parseSimpleYaml(`k:\n  - id: x\n    text: ${header}\n${body}    tail: t\n`).k;
+		assert.equal(firstKey[0].text, laterKey[0].text, `header ${header}`);
+		assert.equal(firstKey[0].tail, "t", `header ${header}: the next key is not swallowed`);
+		assert.ok(!firstKey[0].text.startsWith(header[0]), `header ${header}: the indicator is not kept as text`);
+	}
+});
+
+test("a literal block scalar on an item's first key keeps its line breaks (#459)", () => {
+	const parsed = parseSimpleYaml("steps:\n  - run: |\n      npm ci\n      npm test\n    name: build\n");
+	assert.deepEqual(parsed.steps, [{ run: "npm ci\nnpm test\n", name: "build" }]);
+});
+
+test("a multi-line first-key block scalar ends at the item's next key and next item (#459)", () => {
+	const parsed = parseSimpleYaml(
+		"carry_forward:\n" +
+			"  - description: >-\n" +
+			"      wrapped one\n" +
+			"      wrapped two\n" +
+			"\n" +
+			"      second paragraph\n" +
+			"    target_phase: contracts\n" +
+			"  - description: |\n" +
+			"      literal a\n" +
+			"      literal b\n" +
+			"    target_phase: build\n" +
+			"after: kept\n",
+	);
+	assert.deepEqual(parsed, {
+		carry_forward: [
+			{ description: "wrapped one wrapped two\nsecond paragraph", target_phase: "contracts" },
+			{ description: "literal a\nliteral b\n", target_phase: "build" },
+		],
+		after: "kept",
+	});
+});
+
+test("ordinary first-key values, quoted '>' and inline '>' are unchanged (#459)", () => {
+	assert.deepEqual(parseSimpleYaml("k:\n  - a: plain\n    b: 2\n").k, [{ a: "plain", b: 2 }]);
+	assert.deepEqual(parseSimpleYaml("k:\n  - a: 3\n").k, [{ a: 3 }]);
+	assert.deepEqual(parseSimpleYaml("k:\n  - a: true\n").k, [{ a: true }]);
+	assert.deepEqual(parseSimpleYaml("k:\n  - a: wrapped\n    on two lines\n").k, [{ a: "wrapped on two lines" }]);
+	assert.deepEqual(parseSimpleYaml('k:\n  - description: "> not a block"\n    kind: x\n').k, [
+		{ description: "> not a block", kind: "x" },
+	]);
+	assert.deepEqual(parseSimpleYaml("k:\n  - description: '| not a block'\n").k, [{ description: "| not a block" }]);
+	assert.deepEqual(parseSimpleYaml("k:\n  - a: b > c\n").k, [{ a: "b > c" }]);
+	assert.deepEqual(parseSimpleYaml("k:\n  - a: >b\n").k, [{ a: ">b" }]);
+	assert.deepEqual(parseSimpleYaml("k:\n  - a: x | y\n").k, [{ a: "x | y" }]);
+});
+
 // ---------- layouts the self-audit found rejected or mangled (#246) ----------
 //
 // Every expectation below was checked against a spec-compliant parser
