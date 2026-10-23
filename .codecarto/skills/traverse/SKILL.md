@@ -35,13 +35,14 @@ solving a problem that was never there.
 
 ## Readiness
 
-The next step is decided by `planTraverseStep` in `core/engineering/`: from the
-records and the bounds and capability you declare, it names one action. **No
-`codecarto_change` action and no Pi command calls it yet.** Over MCP, read the
-records with `show` and the gate's verdict with `gate`, and take the next action
-in the order this document describes; a host that embeds the library calls the
-planner directly. Either way, before you take a step, check what the loop needs
-against what you actually have:
+Ask `codecarto_change` for the next step (`action: next`). It is read-only: it
+returns the answer of `planTraverseStep` in `core/engineering/`, which, from the
+records and the bounds and capability you declare, names one action — with its
+rationale, its bounds, the history of earlier failures, an `idempotency_key`,
+and, when the action is `stop`, the stop reason. It writes nothing; you take the
+step it names. (No Pi command calls the planner yet; a host that embeds the
+library calls it directly.) Before you take a step, check what the loop needs
+against what you actually have — `next` takes exactly these:
 
 - **Bounds.** The loop refuses to plan at all unless you declare `max_attempts`
   (a positive integer) and `max_wall_clock_ms` (a positive finite number).
@@ -53,7 +54,10 @@ against what you actually have:
   the loop stops instead of asking you to attempt something you cannot do.
 - **A human.** If you have no way to reach a person for a decision, say so
   (`can_obtain_human_decision: false`). The loop will stop at the point a human
-  is required rather than proceeding without one.
+  is required rather than proceeding without one. Over MCP, saying `true` is
+  not enough: the only way this server can reach a person is the client's
+  elicitation form, so if your client did not declare `elicitation.form`, the
+  server treats your `true` as `false`. It can lower your claim, never raise it.
 
 Declaring a capability you do not have is the one thing that breaks this
 system quietly. Nothing here can check your claim.
@@ -64,7 +68,7 @@ The loop tells you to start or resume an attempt; then **you** do the work.
 
 The rule that matters: **an attempt already recorded as `running` is resumed,
 never restarted.** If you asked to start an attempt and never saw the response,
-read the records again (`show`, or the planner) before acting — if the attempt
+ask for the next step again (`next`) before acting — if the attempt
 was recorded as `running`, resume it, and do not run the migration a second
 time. Every step the planner returns carries an `idempotency_key` derived from the records, not the clock: the same
 situation yields the same key, so you can recognise your own retry.
@@ -131,7 +135,7 @@ read as "nothing here" — the one case where the loop cannot tell whether work
 is already in flight is the case where it must not proceed. It stops and names
 the path.
 
-**To resume**: read the records again, or call the planner again. Its answer is
+**To resume**: ask `codecarto_change` for the next step again (`action: next`). Its answer is
 computed from the records alone, so a new session reaches the same action as the one that died,
 and it will tell you what it resumed from and what failed before.
 
