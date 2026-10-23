@@ -2126,11 +2126,13 @@ export async function startStdioServer() {
 		},
 		{ onerror: (error) => console.error(`codecarto-mcp: ${error.message}`) },
 	);
-	// The SDK's stdio transport listens for stdin `data` and `error` only — it
-	// never sees the end of the stream — so a client that exits mid-request
-	// leaves the server polling with nobody to answer to (#322, observed: a
-	// server outlived its client by fifteen minutes and submitted two paid
-	// post-passes on its own). End of stdin is the client going away.
+	// A client that exits mid-request must not leave the server polling with
+	// nobody to answer to (#322, observed: a server outlived its client by
+	// fifteen minutes and submitted two paid post-passes on its own). End of
+	// stdin is the client going away. SDK 2.0 listened for stdin `data` and
+	// `error` only; from 2.4 its stdio transport also closes on stdin
+	// `end`/`close` and fires onclose (wired to the same abort above). These
+	// listeners stay so the guarantee does not depend on the SDK version.
 	const gone = () => lifetime.abort();
 	process.stdin.once("end", gone);
 	process.stdin.once("close", gone);
