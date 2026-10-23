@@ -3,8 +3,10 @@
 //
 // Three properties, each pinned by a test a plausible mutant fails:
 //
-//   1. It writes NOTHING. Every file under the temporary workspace's
-//      .codecarto/ (path, bytes, mtime) is the same after `next` as before.
+//   1. It writes NOTHING. Every file and directory under the temporary
+//      workspace (path, size, bytes, mtime; the whole cwd, not only
+//      .codecarto/) is the same after `next` as before, and a workspace with
+//      no engineering directory still has none afterwards.
 //   2. Bounds are refused exactly as the planner refuses them, and as the
 //      CALLER's error (InvalidParams), not an internal failure: NaN,
 //      Infinity, zero, negative, fractional attempts, missing, wrong type.
@@ -19,7 +21,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -118,10 +120,10 @@ async function treeState(root) {
 			const full = join(dir, entry.name);
 			const info = await stat(full);
 			if (entry.isDirectory()) {
-				out[`${full}/`] = String(info.mtimeMs);
+				out[`${full}/`] = `${info.mtimeMs}:${info.size}`;
 				await walk(full);
 			} else {
-				out[full] = `${info.mtimeMs}:${(await readFile(full)).toString("base64")}`;
+				out[full] = `${info.mtimeMs}:${info.size}:${(await readFile(full)).toString("base64")}`;
 			}
 		}
 	}
@@ -161,7 +163,7 @@ test("next on a freshly planned change returns start-attempt in content and stru
 	await withWorkspace(async (cwd) => {
 		await withClient({}, async ({ call }) => {
 			const { changeId } = await plannedChange(call, cwd);
-			const before = await treeState(join(cwd, ".codecarto"));
+			const before = await treeState(cwd);
 			const first = await call({ cwd, action: "next", change_id: changeId, ...GOOD });
 			assert.ok(!first.error, JSON.stringify(first.error));
 			const s = first.result.structuredContent;
@@ -187,7 +189,7 @@ test("next on a freshly planned change returns start-attempt in content and stru
 			assert.equal(direct.action, s.action);
 			assert.equal(direct.idempotency_key, s.idempotency_key);
 
-			assert.deepEqual(await treeState(join(cwd, ".codecarto")), before, "next changed a file under .codecarto/");
+			assert.deepEqual(await treeState(cwd), before, "next changed a file or directory in the workspace");
 		});
 	});
 });
@@ -208,7 +210,7 @@ test("bad bounds, capabilities and fields are refused as InvalidParams over the 
 	await withWorkspace(async (cwd) => {
 		await withClient({}, async ({ call, callRaw }) => {
 			const { changeId } = await plannedChange(call, cwd);
-			const before = await treeState(join(cwd, ".codecarto"));
+			const before = await treeState(cwd);
 			const base = { cwd, action: "next", change_id: changeId, ...GOOD };
 			const without = (field) => {
 				const copy = { ...base };
@@ -233,6 +235,19 @@ test("bad bounds, capabilities and fields are refused as InvalidParams over the 
 				"can_obtain_human_decision missing": without("can_obtain_human_decision"),
 				"can_obtain_human_decision number": { ...base, can_obtain_human_decision: 1 },
 				"change_id missing": without("change_id"),
+				// A change_id the planner would read as a record that exists
+				// but cannot be read (blocked-needs-operator) is the caller's
+				// mistake, refused before any path is built from it.
+				"change_id traversing (../../x)": { ...base, change_id: "../../x" },
+				"change_id traversing (../../../etc/passwd)": { ...base, change_id: "../../../etc/passwd" },
+				"change_id upper case": { ...base, change_id: "CHG_FFFFFFFFFFFFFFFFFFFFFFFF" },
+				"change_id of another kind (att_)": { ...base, change_id: "att_ffffffffffffffffffffffff" },
+				"change_id naming the lock file": { ...base, change_id: "chg_.lock" },
+				"change_id NUL-suffixed": { ...base, change_id: `${changeId}\u0000` },
+				"change_id a Windows path": { ...base, change_id: "C:\\x" },
+				"change_id 5000 characters": { ...base, change_id: `chg_${"f".repeat(4996)}` },
+				"change_id empty": { ...base, change_id: "" },
+				"change_id number": { ...base, change_id: 7 },
 				"bounds object instead of flat fields": { ...base, bounds: { max_attempts: 3, max_wall_clock_ms: 1 } },
 				"host supplied": { ...base, host: { can_obtain_human_decision: true } },
 				"elicitation_form supplied": { ...base, elicitation_form: true },
@@ -254,7 +269,7 @@ test("bad bounds, capabilities and fields are refused as InvalidParams over the 
 				const out = await callRaw(raw);
 				assert.equal(out.error?.code, INVALID_PARAMS, `${name}: expected InvalidParams, got ${JSON.stringify(out.error ?? out.result)}`);
 			}
-			assert.deepEqual(await treeState(join(cwd, ".codecarto")), before, "a refused next changed a file under .codecarto/");
+			assert.deepEqual(await treeState(cwd), before, "a refused next changed a file or directory in the workspace");
 		});
 	});
 });
@@ -292,9 +307,60 @@ test("NaN and Infinity bounds are refused in-process as InvalidParams, for every
 				`next accepted ${String(bounds.max_attempts)}/${String(bounds.max_wall_clock_ms)}`,
 			);
 		}
-		// And the good case is accepted by both.
-		const ok = await handleChange({ cwd, action: "next", change_id: created.change_id, can_execute: true, can_obtain_human_decision: false, max_attempts: 1, max_wall_clock_ms: 0.5 });
-		assert.equal(ok.structuredContent.action, "start-attempt");
+		// And the good cases are accepted by both, with the same step. A
+		// planner that turned stricter (a cap on attempts, a floor on the
+		// clock) must fail here rather than leave the adapter promising
+		// bounds the planner then refuses as an internal error.
+		const good = [
+			{ max_attempts: 1, max_wall_clock_ms: 0.5 },
+			{ max_attempts: 3, max_wall_clock_ms: 60_000 },
+			{ max_attempts: Number.MAX_SAFE_INTEGER, max_wall_clock_ms: 60_000 },
+			{ max_attempts: 1e308, max_wall_clock_ms: 60_000 },
+			{ max_attempts: 3, max_wall_clock_ms: Number.MAX_SAFE_INTEGER },
+			{ max_attempts: 3, max_wall_clock_ms: 1e308 },
+			{ max_attempts: 3, max_wall_clock_ms: Number.MIN_VALUE },
+			{ max_attempts: 1, max_wall_clock_ms: 1 },
+		];
+		for (const bounds of good) {
+			const label = `${String(bounds.max_attempts)}/${String(bounds.max_wall_clock_ms)}`;
+			const direct = await planTraverseStep(store, { change_id: created.change_id, host: { can_execute: true, can_obtain_human_decision: false, storage: { boundary: "none" }, bounds } });
+			const ok = await handleChange({ cwd, action: "next", change_id: created.change_id, can_execute: true, can_obtain_human_decision: false, ...bounds });
+			assert.equal(direct.action, "start-attempt", `the planner gave ${direct.action} for ${label}`);
+			assert.equal(ok.structuredContent.action, direct.action, `next and the planner disagree on ${label}`);
+			assert.equal(ok.structuredContent.idempotency_key, direct.idempotency_key, `next and the planner disagree on the key for ${label}`);
+			assert.deepEqual(ok.structuredContent.host.bounds, bounds, `next did not pass ${label} through unchanged`);
+		}
+	});
+});
+
+test("next on a workspace with no engineering directory answers unknown-change and does not create it", async () => {
+	await withWorkspace(async (cwd) => {
+		const engineeringDir = join(cwd, ".codecarto", "engineering");
+		await rm(engineeringDir, { recursive: true, force: true });
+		const before = await treeState(cwd);
+		const absent = async () => {
+			await assert.rejects(() => lstat(engineeringDir), (error) => error.code === "ENOENT", "next created .codecarto/engineering");
+		};
+		const inProcess = await handleChange({ cwd, action: "next", change_id: "chg_ffffffffffffffffffffffff", ...GOOD });
+		assert.equal(inProcess.structuredContent.action, "stop");
+		assert.equal(inProcess.structuredContent.stop_reason, "unknown-change");
+		await absent();
+		// A malformed id is still refused, not answered from the empty store.
+		await assert.rejects(
+			() => handleChange({ cwd, action: "next", change_id: "../../x", ...GOOD }),
+			(error) => error instanceof ProtocolError && error.code === ProtocolErrorCode.InvalidParams,
+		);
+		await absent();
+		await withClient({}, async ({ call }) => {
+			const out = await call({ cwd, action: "next", change_id: "chg_ffffffffffffffffffffffff", ...GOOD });
+			assert.ok(!out.error, JSON.stringify(out.error));
+			assert.equal(out.result.structuredContent.stop_reason, "unknown-change");
+		});
+		await absent();
+		assert.deepEqual(await treeState(cwd), before, "next changed a file or directory in the workspace");
+		// Every other action still opens (and creates) the namespace.
+		await handleChange({ cwd, action: "list" });
+		assert.ok((await lstat(engineeringDir)).isDirectory(), "list no longer creates the engineering directory");
 	});
 });
 
@@ -303,7 +369,7 @@ test("a client that did not declare elicitation.form cannot obtain a human decis
 		await withClient({ capabilities: {} }, async ({ call }) => {
 			const { changeId, sliceId } = await plannedChange(call, cwd);
 			const attemptId = await seedReadyForReview(cwd, changeId, sliceId);
-			const before = await treeState(join(cwd, ".codecarto"));
+			const before = await treeState(cwd);
 			const out = await call({ cwd, action: "next", change_id: changeId, ...GOOD, can_obtain_human_decision: true });
 			assert.ok(!out.error, JSON.stringify(out.error));
 			const s = out.result.structuredContent;
@@ -314,7 +380,7 @@ test("a client that did not declare elicitation.form cannot obtain a human decis
 			assert.equal(s.host.can_obtain_human_decision_declared, true);
 			assert.equal(s.host.elicitation_form, false);
 			assert.match(out.result.content[0].text, /did not declare elicitation\.form/);
-			assert.deepEqual(await treeState(join(cwd, ".codecarto")), before);
+			assert.deepEqual(await treeState(cwd), before);
 		});
 	});
 });

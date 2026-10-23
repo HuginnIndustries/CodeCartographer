@@ -37,7 +37,7 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
@@ -48,9 +48,11 @@ import {
 	captureCandidate,
 	describeGateOutcome,
 	engineeringPaths,
+	ENGINEERING_NAMESPACE,
 	evaluateAcceptanceGate,
 	ingestHostObservations,
 	ingestProof,
+	isRecordId,
 	newRecordId,
 	openStore,
 	planTraverseStep,
@@ -58,6 +60,7 @@ import {
 	recordReview,
 	requestAcceptance,
 	startAttempt,
+	StoreError,
 	validateRecordOfKind,
 	type ChangeRecord,
 	type CurrentStorage,
@@ -267,7 +270,11 @@ export function createChangeHandler(deps: {
 
 		const cwd = await deps.validateCwd(args.cwd);
 		const workspaceDir = await deps.requireWorkspaceDir(cwd);
-		const store = await openStore(workspaceDir);
+		// `next` is read-only, so it must not create the namespace either:
+		// on a workspace with no engineering directory it answers from an
+		// empty store (every change is unknown) instead of calling
+		// `openStore`, whose first act is a mkdir.
+		const store = action === "next" && !(await namespaceExists(workspaceDir)) ? emptyStore(join(workspaceDir, ENGINEERING_NAMESPACE)) : await openStore(workspaceDir);
 
 		switch (action as ChangeAction) {
 			case "create":
@@ -1013,6 +1020,15 @@ async function nextStepAction(store: EngineeringStore, args: ChangeArgs, textRes
 		}
 	}
 	const changeId = requireString(args, "change_id");
+	// The planner reads a malformed id as a record that exists but cannot be
+	// read, and stops with `blocked-needs-operator`. That sends a person to
+	// look for a record that was never there. A traversing, wrongly-cased,
+	// other-kind or oversized id is the caller's mistake, so it is refused
+	// here, before any path is built from it.
+	if (!isRecordId(changeId, "change")) {
+		const shown: string = changeId;
+		invalid(`change_id ${JSON.stringify(shown.length > 64 ? `${shown.slice(0, 64)}…` : shown)} is not a change id (chg_ followed by 24 lowercase hex characters)`);
+	}
 	const bounds = nextBounds(args);
 	for (const field of ["can_execute", "can_obtain_human_decision"] as const) {
 		if (typeof args[field] !== "boolean") invalid(`${field} is required and must be a boolean; a capability is declared, never assumed`);
@@ -1062,6 +1078,43 @@ async function nextStepAction(store: EngineeringStore, args: ChangeArgs, textRes
 			bounds,
 		},
 	});
+}
+
+/** Whether the engineering namespace exists, without creating it. */
+async function namespaceExists(workspaceDir: string): Promise<boolean> {
+	try {
+		await lstat(join(workspaceDir, ENGINEERING_NAMESPACE));
+		return true;
+	} catch (error) {
+		if ((error as { code?: string } | null)?.code === "ENOENT") return false;
+		// Anything else (a permission error, say) is left to `openStore`,
+		// which reports it the way every other action does.
+		return true;
+	}
+}
+
+/**
+ * A store with no records, for `next` on a workspace whose engineering
+ * namespace does not exist. Reads answer not-found exactly as a real empty
+ * store does, so the planner gives the same step; a write is refused, since
+ * nothing on this path may write.
+ */
+function emptyStore(root: string): EngineeringStore {
+	return {
+		root,
+		async put() {
+			throw new StoreError("invalid-path", "read-only: the engineering namespace does not exist", root);
+		},
+		async get(kind, id) {
+			throw new StoreError("not-found", `no ${kind} ${id}: the engineering namespace does not exist`, root);
+		},
+		async listChanges() {
+			return [];
+		},
+		async listIds() {
+			return [];
+		},
+	};
 }
 
 /** The advertised tool. One entry, one discriminator, marked experimental. */
