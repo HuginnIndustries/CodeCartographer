@@ -26,6 +26,7 @@ jobs:
       - name: Resolve version and tag
         id: meta
         run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
           PKG_VERSION=$(node -p "require('./package.json').version")
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             TAG="${GITHUB_REF#refs/tags/v}"
@@ -34,6 +35,7 @@ jobs:
               exit 1
             fi
           fi
+          echo "package=$PKG_NAME" >> "$GITHUB_OUTPUT"
           echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$PKG_VERSION" >> "$GITHUB_OUTPUT"
       - name: Install dependencies
@@ -77,26 +79,10 @@ jobs:
           else
             npm publish --registry https://registry.npmjs.org/ --provenance --access public
           fi
-      # The MCP Registry listing is a live discovery surface for Claude Code and
-      # Cursor users. It was previously updated by hand and drifted to 0.12.3
-      # while npm was on 0.12.11. Publishing here keeps the two in lockstep.
-      # The io.github.* namespace authenticates via GitHub OIDC, so this needs
-      # no stored secret — `id-token: write` above is sufficient.
-      - name: Publish to the MCP Registry (idempotent)
-        env:
-          MCP_PUBLISHER_VERSION: v1.8.0
-        run: |
-          VERSION="${{ steps.meta.outputs.version }}"
-          PUBLISHED=$(curl -sS "https://registry.modelcontextprotocol.io/v0/servers?search=codecartographer" \
-            | python3 -c "import json,sys; print(' '.join(s['server']['version'] for s in json.load(sys.stdin).get('servers', [])))" 2>/dev/null || echo "")
-          if printf '%s' "$PUBLISHED" | tr ' ' '\n' | grep -qx "$VERSION"; then
-            echo "codecartographer $VERSION is already in the MCP Registry; skipping publish"
-            exit 0
-          fi
-          curl -sSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
-            | tar xz mcp-publisher
-          ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
+      # The GitHub Release runs straight after npm publish and before the MCP
+      # Registry steps (#463): a registry failure must not hold it back, and
+      # default success() gating still keeps it from ever being created when
+      # npm publish (or anything before it) failed.
       - name: Extract release notes from CHANGELOG
         id: notes
         run: |
@@ -126,3 +112,33 @@ jobs:
               --title "$TAG" \
               --notes-file "${{ steps.notes.outputs.file }}"
           fi
+      # npm publish returns before the registry's read side serves the new
+      # version; the MCP Registry validates against npm, and in v0.27.0 it ran
+      # seconds after publish and got a 404 (#463). Poll until the exact version
+      # is visible (every 15 s, up to 5 min) instead of racing it.
+      - name: Wait for the npm version to be visible
+        timeout-minutes: 7
+        env:
+          PACKAGE: ${{ steps.meta.outputs.package }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: bash scripts/wait-for-npm-version.sh "$PACKAGE" "$VERSION"
+      # The MCP Registry listing is a live discovery surface for Claude Code and
+      # Cursor users. It was previously updated by hand and drifted to 0.12.3
+      # while npm was on 0.12.11. Publishing here keeps the two in lockstep.
+      # The io.github.* namespace authenticates via GitHub OIDC, so this needs
+      # no stored secret — `id-token: write` above is sufficient.
+      - name: Publish to the MCP Registry (idempotent)
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.0
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          PUBLISHED=$(curl -sS "https://registry.modelcontextprotocol.io/v0/servers?search=codecartographer" \
+            | python3 -c "import json,sys; print(' '.join(s['server']['version'] for s in json.load(sys.stdin).get('servers', [])))" 2>/dev/null || echo "")
+          if printf '%s' "$PUBLISHED" | tr ' ' '\n' | grep -qx "$VERSION"; then
+            echo "codecartographer $VERSION is already in the MCP Registry; skipping publish"
+            exit 0
+          fi
+          curl -sSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
