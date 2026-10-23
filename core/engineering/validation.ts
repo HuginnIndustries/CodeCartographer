@@ -1174,7 +1174,9 @@ export function buildAcceptanceRequest(args: {
 		assurance: args.assurance,
 		proof_summary: args.proofs.map((p) => ({ obligation_id: p.obligation_id, result: p.result, collector: p.collector, attested_by: p.provenance.attested_by, authority: proofAuthority(p) })),
 		review_summary: args.reviews.map((r) => ({ review_id: r.id, separation: r.reviewer.separation, remaining_blockers: r.remaining_blockers.length })),
-		limitations: [...standardLimitations({ proofs: args.proofs, reviews: args.reviews, candidate, assurance: args.assurance, storage_boundary: args.storage_boundary }), ...args.limitations],
+		// Exact duplicates are dropped (a gate limitation can repeat a line a
+		// caller also passes); every distinct line is kept, standard ones first.
+		limitations: [...new Set([...standardLimitations({ proofs: args.proofs, reviews: args.reviews, candidate, assurance: args.assurance, storage_boundary: args.storage_boundary }), ...args.limitations])],
 	};
 	return {
 		schema_version: ENGINEERING_SCHEMA_VERSION,
