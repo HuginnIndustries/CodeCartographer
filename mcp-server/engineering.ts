@@ -37,7 +37,7 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
@@ -520,7 +520,36 @@ async function planChange(store: EngineeringStore, args: ChangeArgs, textResult:
 	if (typeof args.revision !== "number" || args.revision !== record.revision) {
 		invalid(`plan requires the revision you last read (change ${changeId} is at revision ${record.revision}) so a concurrent planner's slices are not overwritten silently`);
 	}
-	if (record.state !== "draft") throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `change ${changeId} is ${record.state}; slices are planned once, from draft`);
+	// Recovery (#448): a crash between the change CAS and the slice writes
+	// below leaves a `planned` change with ZERO slices, which traverse sends
+	// back to `plan-slices`. Refusing every non-draft change made that a
+	// loop no action could leave, so a `planned` change with no slice on
+	// disk may be planned again — still under the same CAS on revision, so
+	// two recoverers cannot both win. Anything else stays refused: a change
+	// with even one slice (or an unreadable slices directory) was planned
+	// and slices are never replaced, and an active/blocked/concluded change
+	// is past planning.
+	if (record.state === "planned") {
+		const sliceEntries = await plannedSliceEntries(store, changeId);
+		if (sliceEntries !== 0) {
+			throw new ProtocolError(
+				ProtocolErrorCode.InvalidRequest,
+				`change ${changeId} is planned; slices are planned once, from draft (${typeof sliceEntries === "number" ? `it already has ${sliceEntries} slice entr${sliceEntries === 1 ? "y" : "ies"}` : `its slices cannot be enumerated: ${sliceEntries}`}; only a planned change with no slices, left by an interrupted plan, may be planned again)`,
+			);
+		}
+		// A plan that is still writing its slices looks exactly like a
+		// crashed one for the few milliseconds between its CAS and its
+		// slice writes; a recovery in that window would leave two slice
+		// sets. Only a planned change that has sat slice-less for longer
+		// than any plan could take is treated as interrupted.
+		const age = Date.now() - Date.parse(record.updated_at);
+		if (!(age >= PLAN_RECOVERY_GRACE_MS)) {
+			throw new ProtocolError(
+				ProtocolErrorCode.InvalidRequest,
+				`change ${changeId} is planned with no slices yet, but it was planned ${Number.isFinite(age) ? `${Math.max(0, Math.round(age / 1000))} s` : "at an unreadable time"} ago and a plan may still be writing them; retry after ${PLAN_RECOVERY_GRACE_MS / 1000} s if no slices appear`,
+			);
+		}
+	} else if (record.state !== "draft") throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `change ${changeId} is ${record.state}; slices are planned once, from draft`);
 	const now = new Date().toISOString();
 	const slices = (args.slices as Record<string, unknown>[]).map((input) => {
 		if (typeof input !== "object" || input === null) invalid("each slice must be an object");
@@ -539,9 +568,9 @@ async function planChange(store: EngineeringStore, args: ChangeArgs, textResult:
 	// lost the CAS — leaving the loser's slices on disk beside the winner's,
 	// so the store held two slice sets for one plan. With the CAS first the
 	// loser writes nothing. The cost is a crash window between the CAS and
-	// the slice writes (a `planned` change with no slices, which `plan`
-	// then refuses to re-plan); that is an operator matter and is stated in
-	// docs/engineering/attempt-lifecycle.md § Limits.
+	// the slice writes (a `planned` change with no slices); `plan` recovers
+	// it (above) once the grace period shows no plan is still writing, and
+	// docs/engineering/attempt-lifecycle.md § Limits states this.
 	try {
 		await store.put(planned as never, { ifRevision: record.revision });
 		await writeArtifact(store, changeId, "brief.md", brief.markdown);
@@ -565,6 +594,25 @@ async function planChange(store: EngineeringStore, args: ChangeArgs, textResult:
 		plan_digest: stored.plan_digest,
 		markdown: brief.markdown,
 	});
+}
+
+/** How long a `planned` change must have had no slices before `plan` treats it as an interrupted plan and plans it again. */
+const PLAN_RECOVERY_GRACE_MS = 60_000;
+
+/**
+ * Entries under the change's `slices/` directory: `0` only when the
+ * directory is absent or empty. Every entry counts, not only well-formed
+ * slice ids, and a read failure other than absence is returned as its
+ * reason — the recovery path may run only when there is certainly nothing
+ * there.
+ */
+async function plannedSliceEntries(store: EngineeringStore, changeId: string): Promise<number | string> {
+	try {
+		return (await readdir(join(store.root, "changes", changeId, "slices"))).length;
+	} catch (error) {
+		if ((error as { code?: string }).code === "ENOENT") return 0;
+		return error instanceof Error ? error.message : String(error);
+	}
 }
 
 /** `brief.md` / `plan.md` under the change, through the store's own namespace root. */

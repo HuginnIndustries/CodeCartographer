@@ -132,7 +132,7 @@ export interface RequestAcceptanceArgs {
 
 export type RequestAcceptanceResult =
 	/** The gate refused, or the tree could not be re-read: nobody was asked and NO request was issued. `gate` carries the blockers when the gate ran. */
-	| { outcome: "blocked" | "needs-human-acceptance"; assurance: "verified" | "cooperative"; request_id?: undefined; request?: undefined; reason: string; gate?: GateOutcome }
+	| { outcome: "blocked" | "needs-human-acceptance" | "blocked-needs-operator"; assurance: "verified" | "cooperative"; request_id?: undefined; request?: undefined; reason: string; gate?: GateOutcome }
 	| { outcome: "needs-human-acceptance"; assurance: "verified" | "cooperative"; request_id: string; request: AcceptanceRequest; reason: string }
 	| { outcome: "accepted"; assurance: "verified" | "cooperative"; request_id: string; request: AcceptanceRequest; approval: ApprovalRecord; classification: { class: AcceptanceClass; reasons: string[] } }
 	| { outcome: "rejected" | "declined" | "cancelled" | "timed-out" | "invalid" | "refused"; assurance: "verified" | "cooperative"; request_id: string; request: AcceptanceRequest; reason: string; elicitation: ElicitationOutcome };
@@ -315,6 +315,32 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 	if (alreadyAccepted) {
 		throw new StoreError("invalid-state", `already-accepted: approval ${alreadyAccepted.id} already binds an accepted decision to candidate ${candidate.id} (${candidate.digest}); soliciting a second approval asks a human to decide something already decided`);
 	}
+	// A non-genuine approval whose receipt names a request that IS stored
+	// under this attempt is not a stray file: the request it names was
+	// really issued, so the file is a copy or a late answer of a real
+	// receipt (receipt-replayed when a genuine approval was copied under a
+	// new id, receipt-expired when the answer came after the request's
+	// window, or any other binding failure). Asking again would let the
+	// person mint a second genuine approval beside the replayed pair, which
+	// is the ambiguity traverse already stops on; the adapter stops the
+	// same way (blocked-needs-operator), issues no request, presents
+	// nothing and mints nothing. A file whose receipt names NO stored
+	// request still does not block a real request: it is disclosed below
+	// and the person is asked, so a dropped file cannot deny a decision.
+	const operatorMatters: string[] = [];
+	for (const v of verdicts) {
+		if (v.genuine !== false || v.approval === null) continue;
+		if ((await readStoredRequest(store, change.id, attempt.id, v.approval.receipt.request_id)) === null) continue;
+		operatorMatters.push(`approval ${v.id} names stored request ${v.approval.receipt.request_id} but is not a genuine acceptance of candidate ${candidate.id} (${v.codes.join(", ")})`);
+	}
+	if (operatorMatters.length > 0) {
+		return {
+			outcome: "blocked-needs-operator",
+			assurance,
+			reason: `blocked-needs-operator: ${operatorMatters.join("; ")}. A receipt that binds to a request this attempt really issued and still fails the receipt check is a replayed or late answer; asking the person again could mint a second approval for the same candidate, so no request was issued, nothing was presented and nothing was minted. An operator must resolve the approval files under attempt ${attempt.id} first`,
+			gate,
+		};
+	}
 	const ignoredApprovals = verdicts.filter((v) => v.genuine === false).map((v) => `approval ${v.id} under this attempt is not a genuine acceptance and was not counted (${v.codes.join(", ")}): ${v.detail}`);
 
 	const request = buildAcceptanceRequest({
@@ -330,7 +356,11 @@ export async function requestAcceptance(store: EngineeringStore, args: RequestAc
 		reviews,
 		assurance,
 		storage_boundary: capabilities.storage_boundary,
-		limitations: [...rereadLimitations, ...ignoredApprovals],
+		// The gate's own limitations (e.g. "the change has no stored
+		// brief.md") reach the person deciding, not only `gate` callers.
+		// They are part of the presentation, so presentation_digest covers
+		// them and the stored request and the receipt agree on them.
+		limitations: [...gate.limitations, ...rereadLimitations, ...ignoredApprovals],
 	});
 	await persistRequest(store, request);
 	const base = { assurance, request_id: request.id, request };
