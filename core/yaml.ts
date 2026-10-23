@@ -170,7 +170,10 @@ interface BlockScalarHeader {
 }
 
 function parseBlockScalarHeader(rawValue: string): BlockScalarHeader | null {
-	const match = /^([|>])([-+]?)$/.exec(rawValue);
+	// YAML allows a comment after the header (`description: >  # note`).
+	// Matching the raw text missed it, and the value fell through to the plain
+	// path with the indicator kept as its first word (#459).
+	const match = /^([|>])([-+]?)$/.exec(stripYamlComment(rawValue).trim());
 	if (!match) return null;
 	return {
 		literal: match[1] === "|",
@@ -317,6 +320,20 @@ export function parseSimpleYaml(raw: string): unknown {
 		return blockLines;
 	};
 
+	/**
+	 * The value of a `key: value` entry, read from the text after the colon on
+	 * the key's own line: a block scalar whose body sits deeper than
+	 * `keyIndent`, or a scalar folded with any continuation lines deeper than
+	 * `continuationIndent`. Shared by every key of a mapping and the first key
+	 * of a sequence item (`- description: >`), which had its own copy that
+	 * knew nothing of block scalars and kept the `>` as text (#459).
+	 */
+	const parseEntryValue = (rawValue: string, keyIndent: number, continuationIndent: number = keyIndent): unknown => {
+		const blockHeader = parseBlockScalarHeader(rawValue);
+		if (blockHeader) return applyBlockScalar(collectBlockScalarLines(keyIndent), blockHeader);
+		return parseScalarWithContinuation(rawValue, continuationIndent);
+	};
+
 	const parseBlock = (indent: number): unknown => {
 		skipBlank();
 		if (index >= lines.length) return {};
@@ -375,14 +392,8 @@ export function parseSimpleYaml(raw: string): unknown {
 			seen.add(key);
 			index++;
 
-			const blockHeader = parseBlockScalarHeader(rawValue);
-			if (blockHeader) {
-				assign(key, applyBlockScalar(collectBlockScalarLines(indent), blockHeader));
-				continue;
-			}
-
 			if (rawValue !== "") {
-				assign(key, parseScalarWithContinuation(rawValue, indent));
+				assign(key, parseEntryValue(rawValue, indent));
 				continue;
 			}
 
@@ -482,7 +493,11 @@ export function parseSimpleYaml(raw: string): unknown {
 				const assignItem = (k: string, v: unknown): void => {
 					Object.defineProperty(item, k, { value: v, writable: true, enumerable: true, configurable: true });
 				};
-				assignItem(key, rawValue === "" ? null : parseScalarWithContinuation(rawValue, indent));
+				// The item's keys sit at `itemIndent`, so a block scalar's body
+				// ends at the next line no deeper than that, just as it does
+				// for a later key. A wrapped plain value keeps its existing,
+				// more lenient bound: anything deeper than the dash.
+				assignItem(key, rawValue === "" ? null : parseEntryValue(rawValue, itemIndent, indent));
 
 				skipBlank();
 				if (rawValue === "" && index < lines.length && countIndent(lines[index] ?? "") > indent + 1) {
