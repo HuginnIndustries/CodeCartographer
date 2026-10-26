@@ -154,7 +154,7 @@ export function parseYamlScalar(rawValue: string): unknown {
 }
 
 /**
- * Block scalar header: the `|`/`>` style plus an optional chomping indicator.
+ * Block scalar header: the `|`/`>` style plus optional chomping and indentation indicators.
  *
  * Folded (`>`) is supported because a handoff is usually written by a model,
  * and a model reaching for a wrapped prose field reaches for `>-` — the field
@@ -167,17 +167,22 @@ interface BlockScalarHeader {
 	literal: boolean;
 	/** `-` strip, `+` keep, `` clip (a single trailing newline). */
 	chomp: "strip" | "keep" | "clip";
+	/** Explicit content indentation relative to the header's column. */
+	indent: number | null;
 }
 
 function parseBlockScalarHeader(rawValue: string): BlockScalarHeader | null {
 	// YAML allows a comment after the header (`description: >  # note`).
 	// Matching the raw text missed it, and the value fell through to the plain
 	// path with the indicator kept as its first word (#459).
-	const match = /^([|>])([-+]?)$/.exec(stripYamlComment(rawValue).trim());
+	const match = /^([|>])([-+]?)([1-9]?)$|^([|>])([1-9])([-+]?)$/.exec(stripYamlComment(rawValue).trim());
 	if (!match) return null;
+	const style = match[1] ?? match[4];
+	const chomp = match[2] || match[6];
 	return {
-		literal: match[1] === "|",
-		chomp: match[2] === "-" ? "strip" : match[2] === "+" ? "keep" : "clip",
+		literal: style === "|",
+		chomp: chomp === "-" ? "strip" : chomp === "+" ? "keep" : "clip",
+		indent: match[3] || match[5] ? Number(match[3] || match[5]) : null,
 	};
 }
 
@@ -225,7 +230,7 @@ function applyBlockScalar(blockLines: readonly string[], header: BlockScalarHead
 	const content = header.literal ? blockLines.join("\n") : foldBlockLines(blockLines);
 	if (header.chomp === "keep") return content;
 	const stripped = content.replace(/\n+$/, "");
-	return header.chomp === "strip" ? stripped : `${stripped}\n`;
+	return header.chomp === "strip" || stripped === "" ? stripped : `${stripped}\n`;
 }
 
 export function parseSimpleYaml(raw: string): unknown {
@@ -301,9 +306,9 @@ export function parseSimpleYaml(raw: string): unknown {
 	 * the mapping path had it, a handoff whose `decisions:` list used `- >-`
 	 * still failed with the indentation error that #211 was supposed to end.
 	 */
-	const collectBlockScalarLines = (baseIndent: number): string[] => {
+	const collectBlockScalarLines = (baseIndent: number, header: BlockScalarHeader): string[] => {
 		const blockLines: string[] = [];
-		let contentIndent: number | null = null;
+		let contentIndent: number | null = header.indent === null ? null : baseIndent + header.indent;
 		while (index < lines.length) {
 			const blockLine = lines[index] ?? "";
 			if (blockLine.trim() === "") {
@@ -317,6 +322,10 @@ export function parseSimpleYaml(raw: string): unknown {
 			blockLines.push(blockLine.slice(Math.min(contentIndent, blockIndent)));
 			index++;
 		}
+		// A following key/item ends the body, but the preceding physical line
+		// break still belongs to the scalar. split() already supplies this empty
+		// line at EOF when the document ends with a newline.
+		if (blockLines.length > 0 && (index < lines.length || blockLines.at(-1) !== "")) blockLines.push("");
 		return blockLines;
 	};
 
@@ -330,7 +339,7 @@ export function parseSimpleYaml(raw: string): unknown {
 	 */
 	const parseEntryValue = (rawValue: string, keyIndent: number, continuationIndent: number = keyIndent): unknown => {
 		const blockHeader = parseBlockScalarHeader(rawValue);
-		if (blockHeader) return applyBlockScalar(collectBlockScalarLines(keyIndent), blockHeader);
+		if (blockHeader) return applyBlockScalar(collectBlockScalarLines(keyIndent, blockHeader), blockHeader);
 		return parseScalarWithContinuation(rawValue, continuationIndent);
 	};
 
@@ -468,7 +477,7 @@ export function parseSimpleYaml(raw: string): unknown {
 
 			const itemBlockHeader = parseBlockScalarHeader(rawItem);
 			if (itemBlockHeader) {
-				result.push(applyBlockScalar(collectBlockScalarLines(indent), itemBlockHeader));
+				result.push(applyBlockScalar(collectBlockScalarLines(indent, itemBlockHeader), itemBlockHeader));
 				continue;
 			}
 
