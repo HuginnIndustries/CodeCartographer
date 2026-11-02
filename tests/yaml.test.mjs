@@ -131,9 +131,50 @@ test("literal scalars are unchanged, and `|+` now works alongside them", () => {
 	assert.equal(parseSimpleYaml("k: |+\n  one\n\n").k, "one\n\n");
 });
 
+test("keep chomping retains trailing line breaks before sibling keys and items (#470)", () => {
+	for (const style of ["|", ">"]) {
+		for (const blanks of ["", "\n", "\n\n"]) {
+			const expected = `text${"\n".repeat(1 + blanks.length)}`;
+			assert.equal(parseSimpleYaml(`a: ${style}+\n  text\n${blanks}b: next\n`).a, expected, `mapping ${style}+ with ${blanks.length} blank lines`);
+			assert.equal(parseSimpleYaml(`items:\n  - ${style}+\n    text\n${blanks}  - next\n`).items[0], expected, `sequence ${style}+ with ${blanks.length} blank lines`);
+		}
+	}
+});
+
+test("explicit block indentation indicators remove the declared indent (#470)", () => {
+	assert.deepEqual(parseSimpleYaml("a: >2\n  one\n  two\nb: next\n"), { a: "one two\n", b: "next" });
+	assert.deepEqual(parseSimpleYaml("a: |1\n one\n two\nb: next\n"), { a: "one\ntwo\n", b: "next" });
+	assert.deepEqual(parseSimpleYaml("a: >+2\n  one\n\nb: next\n"), { a: "one\n\n", b: "next" });
+	assert.deepEqual(parseSimpleYaml("a: |2-\n  one\nb: next\n"), { a: "one", b: "next" });
+	assert.deepEqual(parseSimpleYaml("items:\n  - >2\n    one\n    two\n  - next\n"), { items: ["one two\n", "next"] });
+	assert.deepEqual(parseSimpleYaml("items:\n  - text: |1\n     one\n    next: done\n"), { items: [{ text: "one\n", next: "done" }] });
+});
+
+test("empty block bodies produce an empty string (#470)", () => {
+	for (const header of ["|", "|-", "|+", ">", ">-", ">+"]) {
+		assert.equal(parseSimpleYaml(`a: ${header}\n`).a, "", `${header} at end of input`);
+		assert.deepEqual(parseSimpleYaml(`a: ${header}\nb: next\n`), { a: "", b: "next" }, `${header} before a sibling`);
+	}
+});
+
+test("folded keep chomping preserves an all-blank body (#470 review)", () => {
+	for (const header of [">+", ">+2", ">1+"]) {
+		assert.equal(parseSimpleYaml(`a: ${header}\n\nb: next\n`).a, "\n", `${header} before a sibling`);
+		assert.equal(parseSimpleYaml(`a: ${header}\n\n\nb: next\n`).a, "\n\n", `${header} with two blank lines`);
+		assert.equal(parseSimpleYaml(`items:\n  - ${header}\n\n  - next\n`).items[0], "\n", `${header} sequence item`);
+	}
+});
+
+test("folded more-indented lines keep breaks around a blank line (#470 review)", () => {
+	assert.equal(parseSimpleYaml("a: >1+\n  one\n\n  two\n").a, " one\n\n two\n");
+	assert.equal(parseSimpleYaml("a: >1+\n  one\n\n  two\nb: next\n").a, " one\n\n two\n");
+	assert.equal(parseSimpleYaml("items:\n  - >1+\n    one\n\n    two\n  - next\n").items[0], " one\n\n two\n");
+});
+
 test("a value that merely starts with a block indicator is still a plain scalar", () => {
 	assert.equal(parseSimpleYaml("k: |x\n").k, "|x");
 	assert.equal(parseSimpleYaml("k: > not a header\n").k, "> not a header");
+	assert.equal(parseSimpleYaml("k: >#x\n").k, ">#x", "the simple parser remains lenient for a comment without separating whitespace");
 });
 
 // A block scalar can also open a sequence item. Supporting it only as a mapping
