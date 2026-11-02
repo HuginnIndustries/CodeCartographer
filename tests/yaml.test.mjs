@@ -157,6 +157,20 @@ test("empty block bodies produce an empty string (#470)", () => {
 	}
 });
 
+test("folded keep chomping preserves an all-blank body (#470 review)", () => {
+	for (const header of [">+", ">+2", ">1+"]) {
+		assert.equal(parseSimpleYaml(`a: ${header}\n\nb: next\n`).a, "\n", `${header} before a sibling`);
+		assert.equal(parseSimpleYaml(`a: ${header}\n\n\nb: next\n`).a, "\n\n", `${header} with two blank lines`);
+		assert.equal(parseSimpleYaml(`items:\n  - ${header}\n\n  - next\n`).items[0], "\n", `${header} sequence item`);
+	}
+});
+
+test("folded more-indented lines keep breaks around a blank line (#470 review)", () => {
+	assert.equal(parseSimpleYaml("a: >1+\n  one\n\n  two\n").a, " one\n\n two\n");
+	assert.equal(parseSimpleYaml("a: >1+\n  one\n\n  two\nb: next\n").a, " one\n\n two\n");
+	assert.equal(parseSimpleYaml("items:\n  - >1+\n    one\n\n    two\n  - next\n").items[0], " one\n\n two\n");
+});
+
 test("a value that merely starts with a block indicator is still a plain scalar", () => {
 	assert.equal(parseSimpleYaml("k: |x\n").k, "|x");
 	assert.equal(parseSimpleYaml("k: > not a header\n").k, "> not a header");

@@ -212,7 +212,9 @@ function foldBlockLines(blockLines: readonly string[]): string {
 			continue;
 		}
 		if (pendingBreaks > 0) {
-			result += "\n".repeat(pendingBreaks);
+			// Blank lines between more-indented content preserve the break
+			// before the blank line as well as the break after it.
+			result += "\n".repeat(pendingBreaks + (moreIndented || previousMoreIndented ? 1 : 0));
 			pendingBreaks = 0;
 		} else if (moreIndented || previousMoreIndented) {
 			result += "\n";
@@ -223,7 +225,9 @@ function foldBlockLines(blockLines: readonly string[]): string {
 		previousMoreIndented = moreIndented;
 	}
 
-	return started ? result + "\n".repeat(pendingBreaks) : "";
+	// With no nonblank content, each physical blank line after the header
+	// contributes a break except the final line terminator.
+	return started ? result + "\n".repeat(pendingBreaks) : "\n".repeat(Math.max(0, pendingBreaks - 1));
 }
 
 function applyBlockScalar(blockLines: readonly string[], header: BlockScalarHeader): string {
